@@ -14,7 +14,7 @@
     "db:migrate:local": "wrangler d1 migrations apply diet-bot-production --local",
     "db:migrate:prod": "wrangler d1 migrations apply diet-bot-production",
     "db:seed": "wrangler d1 execute diet-bot-production --local --file=./seed.sql",
-    "db:reset": "rm -rf .wrangler/state/v3/d1 && npm run db:migrate:local",
+    "db:reset": "rm -rf .wrangler/state/v3/d1 && npm run db:migrate:local && npm run db:seed",
     "db:console:local": "wrangler d1 execute diet-bot-production --local",
     "db:console:prod": "wrangler d1 execute diet-bot-production",
     "clean-port": "fuser -k 3000/tcp 2>/dev/null || true"

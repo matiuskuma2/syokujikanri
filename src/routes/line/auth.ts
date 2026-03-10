@@ -1,28 +1,30 @@
 /**
  * src/routes/line/auth.ts
- * LINE LIFF トークン検証 → JWT 発行
+ * LINE LIFF ID Token 検証 → システム JWT 発行
+ *
+ * 認証方式: LIFF ID Token（推奨・初期版）
+ *   フロント: liff.getIDToken()  で取得した ID Token を送る
+ *   バック:   LINE /oauth2/v2.1/verify で検証 → sub (LINE User ID) を取得
+ *
+ * ⚠️  Access Token との違い:
+ *   - ID Token  : ユーザー認証用。/oauth2/v2.1/verify で検証。sub = LINE User ID
+ *   - Access Token: API呼び出し用。別エンドポイントで検証。今回は使わない
  *
  * エンドポイント:
  *   POST /api/auth/line
- *     body: { idToken: string }
+ *     body: { idToken: string }   ← liff.getIDToken() の戻り値
  *     → { token: string, user: { userAccountId, lineUserId, displayName } }
  *
- * フロー:
- *   1. LINE ID Token を LINE Social API で検証（verify endpoint）
- *   2. line_users テーブルから line_user_id を引く
- *   3. user_accounts テーブルから userAccountId を取得
- *   4. JWT（role: 'user'）を発行して返す
- *
  * エラーコード:
- *   - INVALID_LINE_TOKEN  : LINE IDトークンが無効
- *   - USER_NOT_REGISTERED : システムに登録されていない（未フォロー）
- *   - ACCOUNT_NOT_FOUND   : アカウントが見つからない
+ *   - MISSING_ID_TOKEN   : body に idToken がない
+ *   - INVALID_LINE_TOKEN : LINE IDトークンが無効・期限切れ
+ *   - USER_NOT_REGISTERED: システムに未登録（BOTを未フォロー）
+ *   - ACCOUNT_NOT_FOUND  : user_accounts に紐付けなし
  */
 
 import { Hono } from 'hono'
 import type { Bindings } from '../../types/bindings'
-import { findLineUser } from '../../repositories/line-users-repo'
-import { findUserAccount } from '../../repositories/line-users-repo'
+import { findLineUser, findUserAccount } from '../../repositories/line-users-repo'
 import { signJwt } from '../../utils/jwt'
 
 type HonoEnv = { Bindings: Bindings }
@@ -46,8 +48,10 @@ lineAuthRouter.post('/', async (c) => {
 
   // ------------------------------------------------------------------
   // 1. LINE ID Token を LINE Social API で検証
+  //    client_id = LINE_LIFF_CHANNEL_ID（LINE Login の Channel ID: 数字10桁）
+  //    ※ LINE_CHANNEL_ID（内部DB UUID）とは別物
   // ------------------------------------------------------------------
-  const lineUserId = await verifyLineIdToken(idToken, c.env.LINE_CHANNEL_ID)
+  const lineUserId = await verifyLineIdToken(idToken, c.env.LINE_LIFF_CHANNEL_ID)
   if (!lineUserId) {
     return c.json(
       { success: false, error: 'INVALID_LINE_TOKEN', message: 'LINE ID Token is invalid or expired' },
@@ -113,13 +117,16 @@ lineAuthRouter.post('/', async (c) => {
 
 /**
  * LINE Social API の /oauth2/v2.1/verify エンドポイントで ID Token を検証する
- * 成功時は LINE User ID を返す、失敗時は null
+ *
+ * @param idToken  liff.getIDToken() で取得した ID Token
+ * @param liffChannelId  LINE Login の Channel ID（数字10桁）= LINE_LIFF_CHANNEL_ID
+ * @returns LINE User ID (sub) または null（検証失敗時）
  *
  * @see https://developers.line.biz/ja/reference/line-login/#verify-id-token
  */
 async function verifyLineIdToken(
   idToken: string,
-  channelId: string
+  liffChannelId: string
 ): Promise<string | null> {
   try {
     const res = await fetch('https://api.line.me/oauth2/v2.1/verify', {
@@ -127,7 +134,7 @@ async function verifyLineIdToken(
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         id_token: idToken,
-        client_id: channelId,
+        client_id: liffChannelId,  // LINE Login の Channel ID（数字10桁）
       }),
     })
 
