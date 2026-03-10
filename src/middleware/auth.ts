@@ -4,7 +4,7 @@
 
 import type { MiddlewareHandler } from 'hono'
 import type { Bindings } from '../types/bindings'
-import type { JwtPayload } from '../types/models'
+import type { JwtPayload } from '../types/db'
 import { verifyJwt, extractBearerToken } from '../utils/jwt'
 import { unauthorized, forbidden } from '../utils/response'
 

@@ -3,7 +3,7 @@
  * Cloudflare Workers環境対応
  */
 
-import type { JwtPayload } from '../types/models'
+import type { JwtPayload } from '../types/db'
 
 function base64urlEncode(str: ArrayBuffer): string {
   return btoa(String.fromCharCode(...new Uint8Array(str)))

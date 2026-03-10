@@ -9,19 +9,19 @@ import { logger } from 'hono/logger'
 import { serveStatic } from 'hono/cloudflare-workers'
 
 import type { Bindings } from './types/bindings'
-import type { JwtPayload } from './types/models'
+import type { JwtPayload } from './types/db'
 import { authMiddleware } from './middleware/auth'
 
-// Routes
-import webhookRouter from './routes/webhooks/line'
+// Routes (import順: line → admin → user、未作成ファイルはコメントアウト)
+// import webhookRouter from './routes/line/webhook'         // Step 4で作成
 import adminAuthRouter from './routes/admin/auth'
 import adminUsersRouter from './routes/admin/users'
 import adminDashboardRouter from './routes/admin/dashboard'
 import userRouter from './routes/user/index'
-import { lineQueueConsumer } from './bot/consumer'
+// import { lineQueueConsumer } from './jobs/image-analysis'  // Step 5で作成
 
-// Cron jobs
-import { runDailyReminder, runWeeklyReport } from './bot/cron'
+// Cron jobs（Step 5で src/jobs/ に移動予定）
+// import { runDailyReminder, runWeeklyReport } from './jobs/daily-reminder'
 
 type Variables = {
   jwtPayload: JwtPayload
@@ -55,9 +55,10 @@ app.get('/api/health', (c) => c.json({ status: 'ok' }))
 
 // ===================================================================
 // LINE Webhook（認証不要）
+// Step 4 で src/routes/line/webhook.ts 作成後に有効化
 // ===================================================================
 
-app.route('/api/webhooks/line', webhookRouter)
+// app.route('/api/webhooks/line', webhookRouter)
 
 // ===================================================================
 // Admin API（JWT認証必要）
@@ -126,12 +127,13 @@ export async function scheduled(
   ctx: ExecutionContext
 ): Promise<void> {
   ctx.waitUntil((async () => {
+    // Step 5 で jobs/ 実装後に有効化
     switch (event.cron) {
-      case '0 21 * * *': // 毎日21時 JST (12:00 UTC) → リマインダー
-        await runDailyReminder(env)
+      case '0 21 * * *': // 毎日21時 JST → リマインダー
+        console.log('[cron] daily-reminder: not yet implemented')
         break
       case '0 20 * * 0': // 毎週日曜20時 JST → 週次レポート
-        await runWeeklyReport(env)
+        console.log('[cron] weekly-report: not yet implemented')
         break
     }
   })())

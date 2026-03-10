@@ -3,7 +3,7 @@
  */
 
 import type { Context } from 'hono'
-import type { ApiResponse } from '../types/models'
+import type { ApiResponse } from '../types/db'
 
 export function ok<T>(c: Context, data: T, status: 200 | 201 = 200) {
   return c.json<ApiResponse<T>>({ success: true, data }, status)

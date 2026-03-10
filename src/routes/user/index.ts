@@ -1,19 +1,32 @@
 /**
- * User API
- * /api/user
+ * User API（後方互換: マジックリンク方式）
+ * /api/user/*
+ *
+ * 参照: docs/API.md §ユーザー API
+ * NOTE: JWT方式（/api/users/me/*）が正式版。
+ *       このファイルは後方互換のため維持する。
  */
 
 import { Hono } from 'hono'
 import type { Bindings } from '../../types/bindings'
-import { ProfileRepo, DailyLogRepo, MealRepo, ProgressPhotoRepo } from '../../repository'
-import { ok, badRequest } from '../../utils/response'
-import { todayJst } from '../../repository'
+import { findUserAccount } from '../../repositories/line-users-repo'
+import { ensureDailyLog, listRecentDailyLogs, findDailyLogByUserAndDate } from '../../repositories/daily-logs-repo'
+import { findMealEntriesByDailyLog } from '../../repositories/meal-entries-repo'
+import { listProgressPhotosByUser } from '../../repositories/progress-photos-repo'
+import { listWeeklyReportsByUser } from '../../repositories/weekly-reports-repo'
+import { findBodyMetricsByDailyLog } from '../../repositories/body-metrics-repo'
+import { ok, badRequest, notFound } from '../../utils/response'
+import { todayJst } from '../../utils/id'
 
 type HonoEnv = { Bindings: Bindings }
 
 const userRouter = new Hono<HonoEnv>()
 
+// ===================================================================
 // ダッシュボードデータ
+// GET /api/user/dashboard?line_user_id=xxx&account_id=xxx
+// ===================================================================
+
 userRouter.get('/dashboard', async (c) => {
   const lineUserId = c.req.query('line_user_id')
   const accountId = c.req.query('account_id')
@@ -22,73 +35,58 @@ userRouter.get('/dashboard', async (c) => {
     return badRequest(c, 'line_user_id and account_id are required')
   }
 
-  const today = todayJst()
+  const userAccount = await findUserAccount(c.env.DB, lineUserId, accountId)
+  if (!userAccount) return notFound(c, 'User not found')
 
-  const [profile, todayLog, todayMeals, recentLogs, streak, photos] = await Promise.all([
-    ProfileRepo.findByUser(c.env.DB, accountId, lineUserId),
-    DailyLogRepo.findByDate(c.env.DB, accountId, lineUserId, today),
-    MealRepo.getByDate(c.env.DB, accountId, lineUserId, today),
-    DailyLogRepo.getRecent(c.env.DB, accountId, lineUserId, 14),
-    DailyLogRepo.getStreak(c.env.DB, accountId, lineUserId),
-    ProgressPhotoRepo.getByUser(c.env.DB, accountId, lineUserId, 6)
+  const today = todayJst()
+  const dailyLog = await ensureDailyLog(c.env.DB, {
+    userAccountId: userAccount.id,
+    clientAccountId: accountId,
+    logDate: today,
+  })
+
+  const [meals, recentLogs, bodyMetrics, photos] = await Promise.all([
+    findMealEntriesByDailyLog(c.env.DB, dailyLog.id),
+    listRecentDailyLogs(c.env.DB, userAccount.id, 14),
+    findBodyMetricsByDailyLog(c.env.DB, dailyLog.id),
+    listProgressPhotosByUser(c.env.DB, userAccount.id, 3),
   ])
 
-  // 今日のカロリー計算
-  const todayCalories = todayMeals.reduce((sum, m) => sum + (m.estimated_calories || 0), 0)
-  const todayProtein = todayMeals.reduce((sum, m) => sum + (m.estimated_protein_g || 0), 0)
-  const todayFat = todayMeals.reduce((sum, m) => sum + (m.estimated_fat_g || 0), 0)
-  const todayCarbs = todayMeals.reduce((sum, m) => sum + (m.estimated_carbs_g || 0), 0)
-
-  // 体重推移（14日）
-  const weightTrend = recentLogs
-    .filter(l => l.weight_kg !== null)
-    .map(l => ({ date: l.log_date, weight: l.weight_kg }))
-
   return ok(c, {
-    profile,
-    today: {
-      date: today,
-      log: todayLog,
-      calories: todayCalories,
-      protein_g: todayProtein,
-      fat_g: todayFat,
-      carbs_g: todayCarbs,
-      meals: todayMeals
-    },
-    weightTrend,
-    streak,
-    photos: photos.map(p => ({
-      date: p.log_date,
-      url: `${c.env.R2_BUCKET_URL}/${p.r2_key}`,
-      weight: p.weight_at_photo
-    }))
+    dailyLog,
+    meals,
+    weightKg: bodyMetrics?.weight_kg ?? null,
+    recentLogs,
+    photos,
   })
 })
 
-// 記録一覧
+// ===================================================================
+// 日次ログ一覧
+// GET /api/user/records?line_user_id=xxx&account_id=xxx&limit=30
+// ===================================================================
+
 userRouter.get('/records', async (c) => {
   const lineUserId = c.req.query('line_user_id')
   const accountId = c.req.query('account_id')
   const limit = parseInt(c.req.query('limit') || '30', 10)
-  const offset = parseInt(c.req.query('offset') || '0', 10)
 
   if (!lineUserId || !accountId) {
     return badRequest(c, 'line_user_id and account_id are required')
   }
 
-  const logs = await DailyLogRepo.getRecent(c.env.DB, accountId, lineUserId, limit)
-  const logsWithMeals = await Promise.all(
-    logs.map(async (log) => {
-      const meals = await MealRepo.getByDate(c.env.DB, accountId, lineUserId, log.log_date)
-      const totalCalories = meals.reduce((sum, m) => sum + (m.estimated_calories || 0), 0)
-      return { ...log, meals_count: meals.length, total_calories: totalCalories }
-    })
-  )
+  const userAccount = await findUserAccount(c.env.DB, lineUserId, accountId)
+  if (!userAccount) return notFound(c, 'User not found')
 
-  return ok(c, { logs: logsWithMeals, limit, offset })
+  const logs = await listRecentDailyLogs(c.env.DB, userAccount.id, limit)
+  return ok(c, { logs })
 })
 
-// 特定日の記録
+// ===================================================================
+// 特定日の記録詳細
+// GET /api/user/records/:date?line_user_id=xxx&account_id=xxx
+// ===================================================================
+
 userRouter.get('/records/:date', async (c) => {
   const lineUserId = c.req.query('line_user_id')
   const accountId = c.req.query('account_id')
@@ -98,10 +96,59 @@ userRouter.get('/records/:date', async (c) => {
     return badRequest(c, 'line_user_id and account_id are required')
   }
 
-  const log = await DailyLogRepo.findByDate(c.env.DB, accountId, lineUserId, date)
-  const meals = await MealRepo.getByDate(c.env.DB, accountId, lineUserId, date)
+  const userAccount = await findUserAccount(c.env.DB, lineUserId, accountId)
+  if (!userAccount) return notFound(c, 'User not found')
 
-  return ok(c, { date, log, meals })
+  const log = await findDailyLogByUserAndDate(c.env.DB, userAccount.id, date)
+  if (!log) return notFound(c, 'Log not found')
+
+  const [meals, bodyMetrics] = await Promise.all([
+    findMealEntriesByDailyLog(c.env.DB, log.id),
+    findBodyMetricsByDailyLog(c.env.DB, log.id),
+  ])
+
+  return ok(c, { log, meals, bodyMetrics })
+})
+
+// ===================================================================
+// 進捗写真一覧
+// GET /api/user/progress-photos?line_user_id=xxx&account_id=xxx
+// ===================================================================
+
+userRouter.get('/progress-photos', async (c) => {
+  const lineUserId = c.req.query('line_user_id')
+  const accountId = c.req.query('account_id')
+  const limit = parseInt(c.req.query('limit') || '20', 10)
+
+  if (!lineUserId || !accountId) {
+    return badRequest(c, 'line_user_id and account_id are required')
+  }
+
+  const userAccount = await findUserAccount(c.env.DB, lineUserId, accountId)
+  if (!userAccount) return notFound(c, 'User not found')
+
+  const photos = await listProgressPhotosByUser(c.env.DB, userAccount.id, limit)
+  return ok(c, { photos })
+})
+
+// ===================================================================
+// 週次レポート一覧
+// GET /api/user/weekly-reports?line_user_id=xxx&account_id=xxx
+// ===================================================================
+
+userRouter.get('/weekly-reports', async (c) => {
+  const lineUserId = c.req.query('line_user_id')
+  const accountId = c.req.query('account_id')
+
+  if (!lineUserId || !accountId) {
+    return badRequest(c, 'line_user_id and account_id are required')
+  }
+
+  const userAccount = await findUserAccount(c.env.DB, lineUserId, accountId)
+  if (!userAccount) return notFound(c, 'User not found')
+
+  const reports = await listWeeklyReportsByUser(c.env.DB, userAccount.id)
+  return ok(c, { reports })
 })
 
 export default userRouter

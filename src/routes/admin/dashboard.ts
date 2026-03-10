@@ -1,80 +1,124 @@
 /**
  * Admin ダッシュボード API
  * /api/admin/dashboard
+ *
+ * 参照: docs/API.md §Admin API > ダッシュボード
  */
 
 import { Hono } from 'hono'
 import type { HonoEnv } from '../../middleware/auth'
 import { ok } from '../../utils/response'
-import { todayJst } from '../../repository'
+import { todayJst } from '../../utils/id'
 
 const dashboardRouter = new Hono<HonoEnv>()
 
+// ===================================================================
 // ダッシュボードサマリー
-dashboardRouter.get('/summary', async (c) => {
+// GET /api/admin/dashboard/stats
+// ===================================================================
+
+dashboardRouter.get('/stats', async (c) => {
   const payload = c.get('jwtPayload')
-  const accountId = c.req.query('account_id') || payload.account_id
+  const accountId = payload.accountId
   const today = todayJst()
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+    .toISOString().substring(0, 10)
 
-  const [totalUsers, todayLogs, weeklyActive, recentUsers] = await Promise.all([
-    // 総ユーザー数
-    c.env.DB.prepare('SELECT COUNT(*) as cnt FROM line_users WHERE account_id = ?')
-      .bind(accountId).first<{ cnt: number }>(),
+  const [totalUsersRow, todayLogsRow, weeklyActiveRow] = await Promise.all([
+    // 総ユーザー数（アクティブな user_accounts）
+    c.env.DB.prepare(`
+      SELECT COUNT(*) as cnt FROM user_accounts
+      WHERE client_account_id = ?1 AND status = 'active'
+    `).bind(accountId).first<{ cnt: number }>(),
 
-    // 今日の記録数
-    c.env.DB.prepare(
-      "SELECT COUNT(*) as cnt FROM daily_logs WHERE account_id = ? AND log_date = ?"
-    ).bind(accountId, today).first<{ cnt: number }>(),
+    // 今日の記録件数
+    c.env.DB.prepare(`
+      SELECT COUNT(*) as cnt FROM daily_logs
+      WHERE client_account_id = ?1 AND log_date = ?2
+    `).bind(accountId, today).first<{ cnt: number }>(),
 
     // 週間アクティブユーザー（7日以内に記録）
     c.env.DB.prepare(`
-      SELECT COUNT(DISTINCT line_user_id) as cnt FROM daily_logs
-      WHERE account_id = ? AND log_date >= date(?, '-7 days')
-    `).bind(accountId, today).first<{ cnt: number }>(),
-
-    // 最近のユーザー（アクティブ5件）
-    c.env.DB.prepare(`
-      SELECT lu.line_user_id, lu.display_name, lu.last_active_at,
-        up.nickname, up.current_weight_kg, up.target_weight_kg,
-        dl.weight_kg as today_weight
-      FROM line_users lu
-      LEFT JOIN user_profiles up ON up.account_id = lu.account_id AND up.line_user_id = lu.line_user_id
-      LEFT JOIN daily_logs dl ON dl.account_id = lu.account_id AND dl.line_user_id = lu.line_user_id
-        AND dl.log_date = ?
-      WHERE lu.account_id = ?
-      ORDER BY lu.last_active_at DESC
-      LIMIT 5
-    `).bind(today, accountId).all()
+      SELECT COUNT(DISTINCT user_account_id) as cnt FROM daily_logs
+      WHERE client_account_id = ?1 AND log_date >= ?2
+    `).bind(accountId, sevenDaysAgo).first<{ cnt: number }>(),
   ])
 
+  // 最近アクティブなユーザー5件
+  const recentUsers = await c.env.DB.prepare(`
+    SELECT
+      ua.id       AS userAccountId,
+      ua.line_user_id AS lineUserId,
+      lu.display_name AS displayName,
+      bm.weight_kg    AS latestWeight,
+      dl.log_date     AS lastLogDate
+    FROM user_accounts ua
+    LEFT JOIN line_users lu ON lu.line_user_id = ua.line_user_id
+    LEFT JOIN daily_logs dl ON dl.user_account_id = ua.id
+      AND dl.log_date = (
+        SELECT MAX(log_date) FROM daily_logs
+        WHERE user_account_id = ua.id
+      )
+    LEFT JOIN body_metrics bm ON bm.daily_log_id = dl.id
+    WHERE ua.client_account_id = ?1 AND ua.status = 'active'
+    ORDER BY dl.log_date DESC
+    LIMIT 5
+  `).bind(accountId).all<{
+    userAccountId: string
+    lineUserId: string
+    displayName: string | null
+    latestWeight: number | null
+    lastLogDate: string | null
+  }>()
+
   return ok(c, {
-    summary: {
-      total_users: totalUsers?.cnt || 0,
-      today_logs: todayLogs?.cnt || 0,
-      weekly_active: weeklyActive?.cnt || 0
+    stats: {
+      totalActiveUsers: totalUsersRow?.cnt ?? 0,
+      todayLogCount: todayLogsRow?.cnt ?? 0,
+      weeklyActiveUsers: weeklyActiveRow?.cnt ?? 0,
     },
-    recent_users: recentUsers.results
+    recentUsers: recentUsers.results,
   })
 })
 
-// 体重推移グラフデータ（全ユーザー平均）
-dashboardRouter.get('/weight-trend', async (c) => {
-  const payload = c.get('jwtPayload')
-  const accountId = c.req.query('account_id') || payload.account_id
-  const days = parseInt(c.req.query('days') || '30', 10)
-  const today = todayJst()
+// ===================================================================
+// 最近の会話
+// GET /api/admin/dashboard/conversations
+// ===================================================================
 
-  const trend = await c.env.DB.prepare(`
-    SELECT log_date, AVG(weight_kg) as avg_weight, COUNT(DISTINCT line_user_id) as user_count
-    FROM daily_logs
-    WHERE account_id = ? AND log_date >= date(?, ?) AND weight_kg IS NOT NULL
-    GROUP BY log_date
-    ORDER BY log_date ASC
-  `).bind(accountId, today, `-${days} days`).all<{
-    log_date: string; avg_weight: number; user_count: number
+dashboardRouter.get('/conversations', async (c) => {
+  const payload = c.get('jwtPayload')
+  const accountId = payload.accountId
+  const limit = parseInt(c.req.query('limit') || '10', 10)
+
+  const conversations = await c.env.DB.prepare(`
+    SELECT
+      ct.id           AS threadId,
+      ct.line_user_id AS lineUserId,
+      lu.display_name AS displayName,
+      ct.current_mode AS mode,
+      ct.last_message_at AS lastMessageAt,
+      cm.raw_text     AS lastMessage
+    FROM conversation_threads ct
+    LEFT JOIN line_users lu ON lu.line_user_id = ct.line_user_id
+    LEFT JOIN conversation_messages cm ON cm.id = (
+      SELECT id FROM conversation_messages
+      WHERE thread_id = ct.id
+      ORDER BY sent_at DESC LIMIT 1
+    )
+    WHERE ct.client_account_id = ?1 AND ct.status = 'open'
+    ORDER BY ct.last_message_at DESC
+    LIMIT ?2
+  `).bind(accountId, limit).all<{
+    threadId: string
+    lineUserId: string
+    displayName: string | null
+    mode: string
+    lastMessageAt: string | null
+    lastMessage: string | null
   }>()
 
-  return ok(c, { trend: trend.results })
+  return ok(c, { conversations: conversations.results })
 })
 
 export default dashboardRouter
