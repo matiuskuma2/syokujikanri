@@ -1,0 +1,41 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "diet-bot",
+  "compatibility_date": "2026-03-10",
+  "pages_build_output_dir": "./dist",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // D1 Database
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "diet-bot-production",
+      "database_id": "placeholder-replace-after-create"
+    }
+  ],
+
+  // R2 Storage (media files)
+  "r2_buckets": [
+    {
+      "binding": "R2",
+      "bucket_name": "diet-bot-media"
+    }
+  ],
+
+  // Queue for LINE events
+  "queues": {
+    "producers": [
+      {
+        "binding": "LINE_EVENTS_QUEUE",
+        "queue": "diet-bot-line-events"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "diet-bot-line-events",
+        "max_batch_size": 10,
+        "max_retries": 3
+      }
+    ]
+  }
+}
