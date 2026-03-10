@@ -543,7 +543,7 @@ async function handleImageMessageEvent(
       threadId: thread.id,
       r2Key,
       lineUserId,
-    } as unknown as import('../../types/bindings').LineQueueMessage)
+    })
   } catch (err) {
     console.error('[LINE] Queue send error:', err)
     // Queue 失敗は致命的ではない（ジョブは DB に残っている）

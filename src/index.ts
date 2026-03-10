@@ -18,7 +18,7 @@ import adminAuthRouter from './routes/admin/auth'
 import adminUsersRouter from './routes/admin/users'
 import adminDashboardRouter from './routes/admin/dashboard'
 import userRouter from './routes/user/index'
-// import { lineQueueConsumer } from './jobs/image-analysis'  // Step 5: image analysis job
+import { lineQueueConsumer } from './jobs/image-analysis'
 import { lineQueueConsumer } from './jobs/image-analysis'
 
 // Cron jobs（Step 5で src/jobs/ に移動予定）
