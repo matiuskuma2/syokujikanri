@@ -3,7 +3,7 @@
 > **このドキュメントの目的**  
 > 実装フェーズで使用するコード雛形・サービス層実装仕様をまとめる。  
 > **実装はしない。このドキュメントを読んで実装者が正規ファイルを作成する。**  
-> 最終更新: 2026-03-10（セクション 17〜20 追加：コードスニペット詳細・次フェーズ仕様）
+> 最終更新: 2026-03-10（セクション 20 を正式仕様に昇格：users/me 認証ルーティング & 画像配信 API）
 
 ---
 
@@ -30,7 +30,7 @@
 | [17. コードスニペット詳細: response-parser.ts](#17-コードスニペット詳細-response-parserts) | `extractTextOutput` / `safeParseJsonText` / `parseResponseJson` 完全実装雛形 |
 | [18. コードスニペット詳細: schemas.ts](#18-コードスニペット詳細-schemats) | 全 Zod スキーマ完全実装雛形 |
 | [19. コードスニペット詳細: classify-input.ts](#19-コードスニペット詳細-classify-inputts) | `classifyRecordText` 完全実装雛形 |
-| [20. 次フェーズ仕様: users/me 認証ルーティング & 画像配信 API](#20-次フェーズ仕様-usersme-認証ルーティング--画像配信-api) | `/api/users/me` 認証フロー・`/api/files/progress/:id` 設計 |
+| [20. users/me 認証ルーティング & 画像配信 API 実装仕様](#20-usersme-認証ルーティング--画像配信-api-実装仕様) | `POST /api/auth/line` フロー・`/api/users/me/*` ルート・`/api/files/*` プロキシ設計 |
 
 ---
 
@@ -1025,14 +1025,24 @@ export function tplMissingField(
 | 18 | `src/routes/user/dashboard.ts` | dashboard-repo |
 | 19 | `src/routes/admin/dashboard.ts` | dashboard-repo |
 
+### 優先度 ★（users/me & ファイル配信）
+
+| # | ファイル | 依存 |
+|---|---|---|
+| 20 | `src/routes/line/auth.ts` | LINE Profile API / jwt.ts |
+| 21 | `src/middleware/auth.ts`（JWT 検証に差し替え） | jwt.ts |
+| 22 | `src/middleware/rbac.ts` | auth.ts |
+| 23 | `src/routes/user/me.ts` | auth / rbac / 各 repo |
+| 24 | `src/repositories/attachments-repo.ts` | types/db.ts |
+| 25 | `src/routes/user/files.ts` | attachments-repo / R2 |
+
 ### 次フェーズ（本ドキュメント範囲外）
 
 | 機能 | 説明 |
 |---|---|
-| `/api/users/me` 系 認証付きルーティング | LINE ユーザー ID を識別子とした認証フロー |
-| `/api/files/progress/:id` 配信 API | R2 からの画像配信（署名付き URL or プロキシ） |
 | `src/services/line/media.ts` 詳細 | LINE Content API → R2 保存 + アクセス URL 生成 |
 | Intake フロー完全実装 | `src/bot/intake-flow.ts` |
+| `/api/files/progress/:id/signed-url` | R2 署名付き URL（Phase 2） |
 
 ---
 
@@ -1305,17 +1315,20 @@ function detectMealType(
 
 ---
 
-## 20. 次フェーズ仕様: users/me 認証ルーティング & 画像配信 API
+## 20. users/me 認証ルーティング & 画像配信 API 実装仕様
 
-> **ステータス**: 未実装。次のドキュメント化・実装フェーズで扱う。  
-> 本セクションは設計メモとして記録する。実装はここに記載のとおり進めること。
+> **ステータス**: 正式仕様。Phase 1d として実装対象。  
+> エンドポイント仕様の詳細は `docs/API.md` の「LINE ユーザー認証 API」「ユーザー認証付き API」「ファイル配信 API」セクションを参照。  
+> 本セクションは実装者向けのファイル構成・コード雛形・依存関係を記載する。
 
-### 20-A. `/api/users/me` 系 認証付きルーティング
+---
+
+### 20-A. `/api/auth/line` — LINE Access Token 認証 & JWT 発行
 
 **課題**: LINE ユーザー向けの REST API は、LINE の `userId`（`Uxxxxxxxx`）を識別子とした認証が必要。  
-JWT（管理者向け）と異なり、LINE ユーザー向けには **LINE Login** または **LIFF トークン**を用いた認証フローを設計する。
+管理者 JWT（`/api/admin/auth/login`）とは独立した、LINE ユーザー専用フローで発行する。
 
-#### 認証フロー設計
+#### 認証フロー概要
 
 ```
 [フロントエンド（LIFF）]
@@ -1323,10 +1336,12 @@ JWT（管理者向け）と異なり、LINE ユーザー向けには **LINE Logi
   ↓ POST /api/auth/line { lineAccessToken }
                          ↓
 [Workers: src/routes/line/auth.ts]
-  ↓ LINE Profile API 呼び出し: GET https://api.line.me/v2/profile
-  ↓ { userId, displayName, pictureUrl } 取得
-  ↓ findLineUser(db, userId) → user_accounts.id (= userAccountId) を取得
-  ↓ signJwt({ sub: userAccountId, role: 'user', exp: 24h }) → JWT 発行
+  ↓ LINE Profile API: GET https://api.line.me/v2/profile
+    Authorization: Bearer <lineAccessToken>
+  ↓ { userId, displayName, pictureUrl } を取得
+  ↓ findLineUser(db, userId) → line_users レコード取得
+  ↓ user_accounts から userAccountId + clientAccountId を逆引き
+  ↓ signJwt({ sub: userAccountId, role: 'user', accountId: clientAccountId, exp: 24h })
   ↓ レスポンス: { token: "<JWT>", userAccountId }
                          ↓
 [フロントエンド]
@@ -1336,144 +1351,233 @@ JWT（管理者向け）と異なり、LINE ユーザー向けには **LINE Logi
 
 #### 実装ファイル
 
-| ファイル | 役割 |
-|---|---|
-| `src/routes/line/auth.ts` | `/api/auth/line` エンドポイント。LINE Access Token 検証 → JWT 発行 |
-| `src/middleware/auth.ts` | `requireAuth()` を JWT 検証に差し替え（現在はデバッグヘッダー認証） |
-| `src/middleware/rbac.ts` | role = 'user' の場合 `userAccountId` がリクエストパスと一致するか確認 |
-
-#### `/api/auth/line` リクエスト/レスポンス
-
-```typescript
-// POST /api/auth/line
-// Request Body:
-// { lineAccessToken: string }
-
-// Response:
-// {
-//   token: string,        // JWT (24h 有効)
-//   userAccountId: string // user_accounts.id
-// }
-
-// エラー:
-// 401 { code: 'INVALID_LINE_TOKEN', message: '...' }
-// 404 { code: 'USER_NOT_REGISTERED', message: '未登録ユーザー。LINE 友達追加後に再試行してください。' }
-```
+| ファイル | 役割 | ステータス |
+|---|---|---|
+| `src/routes/line/auth.ts` | `POST /api/auth/line` エンドポイント | ❌ 未作成 |
+| `src/middleware/auth.ts` | `requireAuth()` を JWT 検証に差し替え | ⚠️ 要修正（現在はデバッグヘッダー認証） |
+| `src/middleware/rbac.ts` | `role = 'user'` の場合 `userAccountId` の一致確認 | ❌ 未作成 |
+| `src/routes/user/me.ts` | `/api/users/me/*` 全ルート | ❌ 未作成 |
 
 #### JWT ペイロード設計
 
 ```typescript
 type JwtPayload = {
-  sub:           string   // userAccountId (user_accounts.id)
-  role:          'superadmin' | 'admin' | 'staff' | 'user'
-  accountId:     string   // 管理者の場合: account_memberships.account_id
-                          // ユーザーの場合: user_accounts.client_account_id
-  iat:           number
-  exp:           number
+  sub:       string  // user_accounts.id（userAccountId）
+  role:      'superadmin' | 'admin' | 'staff' | 'user'
+  accountId: string  // user の場合: user_accounts.client_account_id
+                     // admin の場合: account_memberships.account_id
+  iat:       number
+  exp:       number  // 24h
 }
 ```
 
-#### `GET /api/users/me` ルート例
+#### `src/routes/line/auth.ts` 実装方針
 
 ```typescript
-// src/routes/user/me.ts（新規作成予定）
-// GET /api/users/me
-// → auth middleware → JWT 検証 → userAccountId 取得
-// → getUserDashboard(env, userAccountId) を呼ぶ
+// POST /api/auth/line
+// 1. Request Body から lineAccessToken を取得
+// 2. fetch('https://api.line.me/v2/profile', { headers: { Authorization: `Bearer ${lineAccessToken}` } })
+// 3. 200 以外 → jsonError('INVALID_LINE_TOKEN', ..., 401)
+// 4. { userId } を取得 → findLineUserByLineUserId(db, userId)
+// 5. 未登録（null）→ jsonError('USER_NOT_REGISTERED', '...LINE 友達追加後に再試行してください。', 404)
+// 6. user_accounts から { id: userAccountId, client_account_id: accountId } を取得
+// 7. signJwt({ sub: userAccountId, role: 'user', accountId, iat, exp }) → token
+// 8. jsonOk({ token, userAccountId })
+```
 
-// GET /api/users/me/dashboard   → getUserDashboard
-// GET /api/users/me/progress    → getUserProgress（進捗写真一覧）
-// GET /api/users/me/records     → ユーザー日次記録一覧（直近 N 日）
-// GET /api/users/me/weekly-reports → 週次レポート一覧
+#### `src/routes/user/me.ts` ルート一覧
+
+```typescript
+// src/routes/user/me.ts（新規作成）
+
+// GET /api/users/me
+//   → requireAuth(request, env) → { sub: userAccountId, role: 'user' }
+//   → findUserProfileByUserAccountId(db, userAccountId)
+//   → findLineUserByUserAccountId(db, userAccountId)（表示名・アイコン用）
+//   → jsonOk({ userAccountId, displayName, pictureUrl, profile })
+
+// GET /api/users/me/dashboard
+//   → requireAuth → userAccountId
+//   → getUserDashboard(env, userAccountId)（src/routes/user/dashboard.ts の関数を流用）
+
+// GET /api/users/me/progress?limit&offset
+//   → requireAuth → userAccountId
+//   → getUserProgress(env, userAccountId, limit, offset)
+
+// GET /api/users/me/records?limit&offset
+//   → requireAuth → userAccountId
+//   → listRecentDailyLogsSummary(db, userAccountId, limit)
+
+// GET /api/users/me/records/:date
+//   → requireAuth → userAccountId
+//   → findDailyLogByUserAndDate(db, userAccountId, date)
+//   → findMealEntriesByDailyLog(db, dailyLogId)（meals 含む）
+//   → meal に image_key があれば fileUrl = `/api/files/meals/${ma.id}` を付与
+
+// GET /api/users/me/weekly-reports?limit
+//   → requireAuth → userAccountId
+//   → listWeeklyReportsByUser(db, userAccountId, limit)
+```
+
+#### RBAC ルール（`src/middleware/rbac.ts`）
+
+```typescript
+// role = 'user' の場合
+// → jwt.sub（userAccountId）が操作対象リソースの user_account_id と一致すること
+// → 一致しない場合は 403 を返す
+
+// role = 'admin' の場合
+// → jwt.accountId（clientAccountId）が操作対象リソースの client_account_id と一致すること
+
+// role = 'superadmin' の場合
+// → 全リソースにアクセス可
+```
+
+#### `src/middleware/auth.ts` 差し替え方針
+
+```
+現行（開発用）: x-debug-account-id / x-debug-role ヘッダーで認証をバイパス
+       ↓ 差し替え（本番用）
+本番: Authorization: Bearer <JWT>
+      → src/utils/jwt.ts の verifyJwt(token, env.JWT_SECRET) を呼ぶ
+      → ペイロードから { sub, role, accountId } を取り出す
+      → role = 'admin' の場合: findAccountMembership(db, sub) で DB 確認（任意）
+      → AuthContext = { userAccountId: sub, role, accountId } を返す
 ```
 
 ---
 
-### 20-B. `/api/files/progress/:id` 画像配信 API
+### 20-B. `/api/files/*` — 画像配信 API（Workers プロキシ方式）
 
-**課題**: R2 に保存された進捗写真・食事画像を、認証済みユーザーのみに配信する。  
-直接 R2 パブリック URL を使わず、Workers 経由でプロキシする（アクセス制御のため）。
-
-#### 設計方針
-
-```
-方針 A: Workers プロキシ（推奨・MVP 向け）
-  GET /api/files/progress/:attachmentId
-    → auth middleware（JWT 検証）
-    → getMessageAttachmentById(db, attachmentId) → storage_key 取得
-    → attachment.user_account_id === jwt.sub か確認（所有者チェック）
-    → env.R2.get(storage_key) → R2Object
-    → return new Response(r2Object.body, { headers: { Content-Type: ... } })
-
-方針 B: 署名付き URL（将来対応）
-  GET /api/files/progress/:attachmentId/signed-url
-    → R2 署名付き URL 生成（TTL: 60秒）
-    → { url: "https://..." } を返す
-    → フロントがリダイレクト or <img src={url}> で表示
-```
+**課題**: R2 に保存された進捗写真・食事画像を認証済みユーザーのみに配信する。  
+R2 パブリック URL を直接公開せず、Workers 経由でプロキシする（所有者チェックのため）。
 
 #### 実装ファイル
 
-| ファイル | 役割 |
-|---|---|
-| `src/routes/user/files.ts`（新規） | `/api/files/progress/:id` エンドポイント |
-| `src/repositories/attachments-repo.ts` | `getMessageAttachmentById` / `getThreadByAttachmentId` |
+| ファイル | 役割 | ステータス |
+|---|---|---|
+| `src/routes/user/files.ts` | `/api/files/progress/:id` / `/api/files/meals/:id` | ❌ 未作成 |
+| `src/repositories/attachments-repo.ts` | `getMessageAttachmentById` / `getThreadByAttachmentId` | ❌ 未作成 |
 
-#### `src/routes/user/files.ts` 雛形
+#### `src/routes/user/files.ts` 実装方針
 
 ```typescript
 // GET /api/files/progress/:attachmentId
-export async function getProgressFile(
+// GET /api/files/meals/:attachmentId
+// （両者は同一の実装。パスのみ異なる）
+export async function getAttachmentFile(
   request: Request,
   env: Env,
   attachmentId: string,
   jwtSub: string  // auth middleware から渡す userAccountId
 ): Promise<Response> {
-  const db = getDb(env)
+  // 1. getMessageAttachmentById(db, attachmentId) → MessageAttachment | null
+  //    null → jsonError('NOT_FOUND', 'attachment not found', 404)
 
-  // 1. 添付ファイル取得
-  const attachment = await getMessageAttachmentById(db, attachmentId)
-  if (!attachment) {
-    return jsonError('NOT_FOUND', 'attachment not found', 404)
-  }
+  // 2. getThreadByAttachmentId(db, attachmentId) → ConversationThread | null
+  //    null または thread.user_account_id !== jwtSub
+  //    → jsonError('FORBIDDEN', 'access denied', 403)
 
-  // 2. 所有者チェック（thread の user_account_id と JWT sub が一致するか）
-  const thread = await getThreadByAttachmentId(db, attachmentId)
-  if (!thread || thread.user_account_id !== jwtSub) {
-    return jsonError('FORBIDDEN', 'access denied', 403)
-  }
+  // 3. env.R2.get(attachment.storage_key) → R2ObjectBody | null
+  //    null → jsonError('NOT_FOUND', 'file not found in storage', 404)
 
-  // 3. R2 から取得
-  const object = await env.R2.get(attachment.storage_key)
-  if (!object) {
-    return jsonError('NOT_FOUND', 'file not found in storage', 404)
-  }
-
-  return new Response(object.body, {
-    headers: {
-      'Content-Type': attachment.content_type || 'image/jpeg',
-      'Cache-Control': 'private, max-age=300',
-    },
-  })
+  // 4. return new Response(object.body, {
+  //      headers: {
+  //        'Content-Type': attachment.content_type ?? 'image/jpeg',
+  //        'Cache-Control': 'private, max-age=300',
+  //      },
+  //    })
 }
 ```
 
-#### `attachments-repo.ts` クエリ
+#### `src/repositories/attachments-repo.ts` SQL
 
 ```sql
 -- getMessageAttachmentById
-SELECT * FROM message_attachments WHERE id = ?1 LIMIT 1
+SELECT id, message_id, file_type, storage_key, content_type, file_size, created_at
+FROM message_attachments
+WHERE id = ?1
+LIMIT 1
 
 -- getThreadByAttachmentId
-SELECT ct.* FROM conversation_threads ct
+-- conversation_messages → message_attachments → conversation_threads の JOIN
+SELECT ct.id, ct.user_account_id, ct.client_account_id, ct.status
+FROM conversation_threads ct
 JOIN conversation_messages cm ON cm.thread_id = ct.id
-JOIN message_attachments ma ON ma.message_id = cm.id
+JOIN message_attachments   ma ON ma.message_id = cm.id
 WHERE ma.id = ?1
 LIMIT 1
 ```
 
-> ⚠️ `conversation_threads` に `user_account_id` カラムが存在することを DATABASE.md DDL で確認すること。  
-> 存在しない場合は `0008_` マイグレーションで追加する。
+> ⚠️ **事前確認**: `conversation_threads` テーブルに `user_account_id` カラムが存在することを  
+> `docs/DATABASE.md` の DDL で確認すること。存在しない場合は `0008_` マイグレーションで追加する。
+
+#### フロントエンドでの画像表示
+
+Bearer トークンは `<img src>` に直接付与できないため、Fetch API + Object URL に変換して使用する:
+
+```javascript
+// src/pages/UserProgressPage.tsx（または同等の実装）
+async function loadAttachmentImage(attachmentId, token) {
+  const res = await fetch(`/api/files/progress/${attachmentId}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  })
+  if (!res.ok) throw new Error(`file load failed: ${res.status}`)
+  const blob = await res.blob()
+  return URL.createObjectURL(blob)  // <img src={blobUrl}> に設定
+  // ※ コンポーネントのアンマウント時に URL.revokeObjectURL(blobUrl) を呼ぶこと
+}
+```
+
+#### R2 ストレージキー命名規則
+
+| 種別 | キーパターン | 例 |
+|---|---|---|
+| 進捗写真 | `progress/{userAccountId}/{YYYY-MM-DD}-{uuid}.jpg` | `progress/ua-xxxx/2026-03-08-abcd1234.jpg` |
+| 食事写真 | `meals/{userAccountId}/{YYYY-MM-DD}-{mealType}-{uuid}.jpg` | `meals/ua-xxxx/2026-03-10-breakfast-efgh5678.jpg` |
+| 画像解析入力 | `intake/{userAccountId}/{attachmentId}.jpg` | `intake/ua-xxxx/ma-ijkl9012.jpg` |
+
+#### 将来対応: 署名付き URL（Phase 2）
+
+```
+GET /api/files/progress/:attachmentId/signed-url
+  → R2.createSignedUrl(storage_key, { expiresIn: 60 })（R2 署名付き URL は未対応の場合 AWS S3 互換 API で代替）
+  → { url: "https://...", expiresAt: "..." } を返す
+```
+
+> 現時点（Phase 1）では Workers プロキシ方式を採用する。  
+> 大量アクセス時はプロキシのコストが増大するため、Phase 2 以降で署名付き URL に移行を検討する。
+
+---
+
+### 20-C. 依存関係グラフ（users/me & files）
+
+```
+POST /api/auth/line
+  └── src/routes/line/auth.ts
+        ├── LINE Profile API (fetch)
+        ├── src/repositories/line-users-repo.ts (findLineUserByLineUserId)
+        ├── [user_accounts テーブル直接クエリ or 専用 repo]
+        └── src/utils/jwt.ts (signJwt)
+
+GET /api/users/me/*
+  └── src/routes/user/me.ts
+        ├── src/middleware/auth.ts (requireAuth → JWT 検証)
+        ├── src/middleware/rbac.ts (requireRole)
+        ├── src/repositories/daily-logs-repo.ts
+        ├── src/repositories/weekly-reports-repo.ts
+        ├── src/repositories/progress-photos-repo.ts
+        ├── src/repositories/dashboard-repo.ts
+        └── src/routes/user/dashboard.ts (getUserDashboard / getUserProgress を流用)
+
+GET /api/files/progress/:id  /  GET /api/files/meals/:id
+  └── src/routes/user/files.ts
+        ├── src/middleware/auth.ts (requireAuth → JWT 検証)
+        ├── src/repositories/attachments-repo.ts
+        │     ├── getMessageAttachmentById
+        │     └── getThreadByAttachmentId
+        └── env.R2.get(storage_key)
+```
 
 ---
 

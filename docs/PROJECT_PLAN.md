@@ -3,7 +3,7 @@
 > **このドキュメントの目的**  
 > ドキュメント整備状況・現在のコード状態・実装フェーズのロードマップを管理する。  
 > 各タスクには「依存関係」「実装ファイル」「完了条件」を明記する。  
-> **最終更新: 2026-03-10（実装雛形追加・ディレクトリ構造更新）**
+> **最終更新: 2026-03-10（users/me 認証ルーティング & 画像配信 API を正式仕様に昇格・PROJECT_PLAN 反映）**
 
 ---
 
@@ -15,12 +15,12 @@
 | `docs/ARCHITECTURE.md` | ✅ 完了 | システム全体図・データフロー・セキュリティ |
 | `docs/DATABASE.md` | ✅ 完了 | テーブル定義・マイグレーション対応表・ID 体系・`user_account_id` 概念説明 |
 | `docs/REPOSITORY.md` | ✅ 完了 | Repository 層 SQL 実装仕様（正規型定義含む） |
-| `docs/API.md` | ✅ 完了 | エンドポイント定義・リクエスト/レスポンス形式 |
+| `docs/API.md` | ✅ 完了 | エンドポイント定義・リクエスト/レスポンス形式（`/api/auth/line` / `/api/users/me/*` / `/api/files/*` 追加済み） |
 | `docs/PROMPTS.md` | ✅ 完了 | 全プロンプト定義（TypeScript 仕様） |
 | `docs/BOT_FLOW.md` | ✅ 完了 | モード・ステップコード・キーワード定義 |
 | `docs/DEPLOYMENT.md` | ✅ 完了 | ローカル・本番デプロイ手順 |
 | `docs/PROJECT_PLAN.md` | ✅ 完了（本ファイル） | フェーズ別実装計画 |
-| `docs/IMPLEMENTATION_GUIDE.md` | ✅ 完了 | 実装雛形・ロジック仕様・ユーティリティ集 |
+| `docs/IMPLEMENTATION_GUIDE.md` | ✅ 完了 | 実装雛形・ロジック仕様・ユーティリティ集（セクション 20: users/me 認証フロー & 画像配信 API を正式仕様に昇格） |
 
 ---
 
@@ -82,6 +82,10 @@
 | `src/jobs/weekly-report.ts` | Phase 1e | 中 |
 | `src/jobs/image-analysis.ts` | Phase 1e | 中 |
 | `src/middleware/rbac.ts` | Phase 1d | 中 |
+| `src/routes/line/auth.ts` | Phase 1d | 中（LINE Access Token 認証 → JWT 発行） |
+| `src/routes/user/me.ts` | Phase 1d | 中（`/api/users/me/*` 全ルート） |
+| `src/routes/user/files.ts` | Phase 1d | 中（画像配信プロキシ） |
+| `src/repositories/attachments-repo.ts` | Phase 1d | 中（`getMessageAttachmentById` / `getThreadByAttachmentId`） |
 
 ---
 
@@ -106,7 +110,9 @@ src/
 │   ├── accounts-repo.ts
 │   ├── line-users-repo.ts
 │   ├── bot-sessions-repo.ts
-│   └── weekly-reports-repo.ts
+│   ├── weekly-reports-repo.ts
+│   ├── subscriptions-repo.ts  ← 【未作成】新規（checkServiceAccess）
+│   └── attachments-repo.ts    ← 【未作成】新規（getMessageAttachmentById / getThreadByAttachmentId）
 │
 ├── services/
 │   └── ai/
@@ -125,7 +131,8 @@ src/
 │
 ├── routes/
 │   ├── line/
-│   │   └── webhook.ts ← 【未作成】src/routes/webhooks/line.ts の内容を移動
+│   │   ├── webhook.ts ← 【未作成】src/routes/webhooks/line.ts の内容を移動
+│   │   └── auth.ts    ← 【未作成】新規（LINE Access Token → JWT 発行）
 │   ├── admin/
 │   │   ├── auth.ts      ← 【要修正】誤 import 除去
 │   │   ├── accounts.ts  ← 【未作成】新規
@@ -137,11 +144,13 @@ src/
 │       ├── dashboard.ts       ← 【未作成】新規（index.ts は削除対象か要確認）
 │       ├── records.ts         ← 【未作成】新規
 │       ├── progress-photos.ts ← 【未作成】新規
-│       └── weekly-reports.ts  ← 【未作成】新規
+│       ├── weekly-reports.ts  ← 【未作成】新規
+│       ├── me.ts              ← 【未作成】新規（/api/users/me/* 全ルート）
+│       └── files.ts           ← 【未作成】新規（/api/files/* 画像配信プロキシ）
 │
 ├── middleware/
-│   ├── auth.ts   ← 【要確認】仕様整合確認
-│   └── rbac.ts   ← 【未作成】新規
+│   ├── auth.ts   ← 【要確認/修正】JWT 検証に差し替え（現在はデバッグヘッダー認証）
+│   └── rbac.ts   ← 【未作成】新規（user ロールの userAccountId 一致チェック）
 │
 ├── utils/
 │   ├── jwt.ts        ← 【要確認】仕様整合確認

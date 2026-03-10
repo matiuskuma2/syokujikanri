@@ -529,3 +529,417 @@ BOT 削除。
 | `GET /api/admin/users/:lineUserId/weekly-reports` | ユーザー週次レポート一覧 |
 | `POST /api/user/records/:date/meals` | 食事記録の手動追加 |
 | `PATCH /api/user/records/:date/meals/:id` | 食事記録の手動修正 |
+
+---
+
+## LINE ユーザー認証 API
+
+LINE ユーザー向けの認証フロー。LIFF (LINE Front-end Framework) 上で動作する PWA/Web アプリから呼び出す。  
+管理者 JWT とは独立した、LINE ユーザー専用の JWT を発行する。
+
+### POST /api/auth/line
+
+LIFF の `liff.getAccessToken()` で取得した LINE Access Token を検証し、ユーザー専用 JWT を発行する。
+
+**Request**
+```json
+{ "lineAccessToken": "eyJ..." }
+```
+
+**処理フロー**
+1. `lineAccessToken` を LINE Profile API (`GET https://api.line.me/v2/profile`) で検証
+2. `{ userId, displayName, pictureUrl }` を取得
+3. `line_users` テーブルから `userId` で `user_account_id` を逆引き
+4. ユーザーが未登録（`line_users` に存在しない）の場合は `404` を返す
+5. `signJwt({ sub: userAccountId, role: 'user', accountId: clientAccountId, exp: 24h })` で JWT を発行
+
+**Response 200**
+```json
+{
+  "success": true,
+  "data": {
+    "token": "eyJ...",
+    "userAccountId": "ua-xxxx"
+  }
+}
+```
+
+**エラーレスポンス**
+
+| コード | HTTP | 説明 |
+|---|---|---|
+| `INVALID_LINE_TOKEN` | 401 | LINE Access Token が無効または期限切れ |
+| `USER_NOT_REGISTERED` | 404 | LINE 友達追加済みだが `line_users` に存在しない |
+
+---
+
+## ユーザー認証付き API（`/api/users/me`）
+
+> **認証方式**: `Authorization: Bearer <JWT>`  
+> JWT は `POST /api/auth/line` で発行したユーザー専用トークン。  
+> `jwt.sub` = `user_account_id`（`user_accounts.id`）。  
+> `jwt.role` = `'user'`。
+
+### JWT ペイロード構造
+
+```typescript
+type JwtPayload = {
+  sub:       string  // user_accounts.id（userAccountId）
+  role:      'superadmin' | 'admin' | 'staff' | 'user'
+  accountId: string  // user の場合: user_accounts.client_account_id
+                     // admin の場合: account_memberships.account_id
+  iat:       number
+  exp:       number
+}
+```
+
+### ルーティング概要
+
+| メソッド | パス | 説明 | 実装ファイル |
+|---|---|---|---|
+| `GET` | `/api/users/me` | 自分の基本情報 | `src/routes/user/me.ts` |
+| `GET` | `/api/users/me/dashboard` | ダッシュボードデータ | `src/routes/user/me.ts` |
+| `GET` | `/api/users/me/progress` | 進捗写真一覧 | `src/routes/user/me.ts` |
+| `GET` | `/api/users/me/records` | 日次記録一覧 | `src/routes/user/me.ts` |
+| `GET` | `/api/users/me/records/:date` | 特定日の詳細 | `src/routes/user/me.ts` |
+| `GET` | `/api/users/me/weekly-reports` | 週次レポート一覧 | `src/routes/user/me.ts` |
+
+---
+
+### GET /api/users/me
+
+ログイン中ユーザーの基本情報を返す。`Authorization: Bearer <JWT>` 必須。
+
+**Response 200**
+```json
+{
+  "success": true,
+  "data": {
+    "userAccountId": "ua-xxxx",
+    "displayName": "山田花子",
+    "pictureUrl": "https://profile.line-scdn.net/...",
+    "profile": {
+      "nickname": "はなちゃん",
+      "gender": "female",
+      "ageRange": "30s",
+      "heightCm": 162,
+      "currentWeightKg": 58.2,
+      "targetWeightKg": 55.0,
+      "goalSummary": "3ヶ月で-3kg",
+      "activityLevel": "light"
+    }
+  }
+}
+```
+
+**RBAC**: `role = 'user'` かつ `jwt.sub === userAccountId` のみ許可（他人の情報は取得不可）。
+
+---
+
+### GET /api/users/me/dashboard
+
+ユーザーダッシュボード表示に必要なデータを一括返却する。
+
+**Response 200**
+```json
+{
+  "success": true,
+  "data": {
+    "profile": {
+      "nickname": "はなちゃん",
+      "currentWeightKg": 58.2,
+      "targetWeightKg": 55.0,
+      "goalSummary": "3ヶ月で-3kg"
+    },
+    "recentDailyLogs": [
+      {
+        "id": "dl-xxxx",
+        "logDate": "2026-03-10",
+        "completionStatus": "complete",
+        "weightKg": 58.2,
+        "waistCm": null,
+        "stepsCount": 8500,
+        "sleepHours": 7.5,
+        "waterBucketLabel": "1l",
+        "bowelStatus": "normal"
+      }
+    ],
+    "weeklyReports": [
+      {
+        "id": "wr-xxxx",
+        "weekStart": "2026-03-03",
+        "weekEnd": "2026-03-09",
+        "summaryText": "今週は全体的に体重が安定していました...",
+        "totalCalories": 11200,
+        "avgWeight": 58.5
+      }
+    ],
+    "latestProgressPhoto": {
+      "id": "ma-xxxx",
+      "photoDate": "2026-03-08",
+      "photoType": "progress",
+      "poseLabel": "front",
+      "bodyPartLabel": "full_body",
+      "fileUrl": "/api/files/progress/ma-xxxx"
+    }
+  }
+}
+```
+
+**依存 Repository**
+- `listRecentDailyLogsSummary(db, userAccountId, 7)` — `dashboard-repo.ts`
+- `listWeeklyReportsByUser(db, userAccountId, 4)` — `weekly-reports-repo.ts`
+- `getLatestProgressPhotoByUser(db, userAccountId)` — `dashboard-repo.ts`
+
+---
+
+### GET /api/users/me/progress
+
+進捗写真の一覧を返す（最新順）。
+
+**Query Params**
+
+| パラメータ | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `limit` | number | 20 | 件数（最大 50） |
+| `offset` | number | 0 | オフセット |
+
+**Response 200**
+```json
+{
+  "success": true,
+  "data": {
+    "photos": [
+      {
+        "id": "ma-xxxx",
+        "photoDate": "2026-03-08",
+        "photoType": "progress",
+        "poseLabel": "front",
+        "bodyPartLabel": "full_body",
+        "note": null,
+        "fileUrl": "/api/files/progress/ma-xxxx"
+      }
+    ],
+    "total": 5
+  }
+}
+```
+
+> **注意**: `fileUrl` は Workers プロキシ経由の URL。クライアントは `Authorization: Bearer <JWT>` を付与してアクセスする（`<img>` タグでは Fetch API + Object URL に変換して使用）。
+
+---
+
+### GET /api/users/me/records
+
+日次記録の一覧を返す（最新順）。
+
+**Query Params**
+
+| パラメータ | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `limit` | number | 20 | 件数（最大 50） |
+| `offset` | number | 0 | オフセット |
+
+**Response 200**
+```json
+{
+  "success": true,
+  "data": {
+    "records": [
+      {
+        "logDate": "2026-03-10",
+        "completionStatus": "complete",
+        "weightKg": 58.2,
+        "stepsCount": 8500,
+        "sleepHours": 7.5,
+        "waterBucketLabel": "1l",
+        "mealCount": 3
+      }
+    ],
+    "total": 30
+  }
+}
+```
+
+---
+
+### GET /api/users/me/records/:date
+
+特定日の詳細（食事含む）。
+
+**Path Params**: `date`（YYYY-MM-DD）
+
+**Response 200**
+```json
+{
+  "success": true,
+  "data": {
+    "logDate": "2026-03-10",
+    "completionStatus": "complete",
+    "weightKg": 58.2,
+    "stepsCount": 8500,
+    "sleepHours": 7.5,
+    "waterBucketLabel": "1l",
+    "bowelStatus": "normal",
+    "aiFeedback": "今日の記録を確認しました。たんぱく質が少し不足しています...",
+    "meals": [
+      {
+        "id": "me-xxxx",
+        "mealType": "breakfast",
+        "mealText": "ご飯・味噌汁・卵焼き",
+        "caloriesKcal": 480,
+        "proteinG": 20,
+        "fatG": 12,
+        "carbsG": 65,
+        "confirmationStatus": "confirmed",
+        "imageFileUrl": "/api/files/meals/ma-yyyy"
+      }
+    ]
+  }
+}
+```
+
+---
+
+### GET /api/users/me/weekly-reports
+
+週次レポート一覧（最新順）。
+
+**Query Params**: `limit`（デフォルト 10）
+
+**Response 200**
+```json
+{
+  "success": true,
+  "data": {
+    "reports": [
+      {
+        "id": "wr-xxxx",
+        "weekStart": "2026-03-03",
+        "weekEnd": "2026-03-09",
+        "summaryText": "今週は全体的に体重が安定していました...",
+        "totalCalories": 11200,
+        "avgWeight": 58.5,
+        "avgSteps": 7800,
+        "recordDays": 6
+      }
+    ]
+  }
+}
+```
+
+---
+
+## ファイル配信 API（`/api/files`）
+
+R2 に保存された画像ファイルを認証済みユーザーに配信する。  
+R2 のパブリック URL を直接公開せず、Workers 経由でプロキシすることでアクセス制御を行う。
+
+> **認証方式**: `Authorization: Bearer <JWT>`（ユーザー専用トークン）  
+> 所有者チェック: `conversation_threads.user_account_id === jwt.sub`  
+> ファイルは `message_attachments` テーブルで管理し、`storage_key` で R2 オブジェクトを参照する。
+
+### エンドポイント一覧
+
+| メソッド | パス | 説明 | 実装ファイル |
+|---|---|---|---|
+| `GET` | `/api/files/progress/:attachmentId` | 進捗写真を配信 | `src/routes/user/files.ts` |
+| `GET` | `/api/files/meals/:attachmentId` | 食事写真を配信 | `src/routes/user/files.ts` |
+| `GET` | `/api/files/progress/:attachmentId/signed-url` | 署名付き URL を取得（将来対応） | `src/routes/user/files.ts` |
+
+---
+
+### GET /api/files/progress/:attachmentId
+
+進捗写真（`progress_photos` 紐付き）を R2 から取得してレスポンスボディで返す。
+
+**Path Params**: `attachmentId`（`message_attachments.id`）  
+**Headers**: `Authorization: Bearer <JWT>`
+
+**処理フロー**
+1. `getMessageAttachmentById(db, attachmentId)` → `message_attachments` レコード取得
+2. `getThreadByAttachmentId(db, attachmentId)` → `conversation_threads` レコード取得
+3. 所有者チェック: `thread.user_account_id !== jwt.sub` の場合 `403` を返す
+4. `env.R2.get(attachment.storage_key)` → R2 オブジェクト取得
+5. `Content-Type: attachment.content_type`（デフォルト: `image/jpeg`）でレスポンス
+6. `Cache-Control: private, max-age=300` を設定
+
+**Response 200**  
+`Content-Type: image/jpeg`（または `image/png`、`image/webp`）  
+Body: バイナリ画像データ
+
+**エラーレスポンス**
+
+| コード | HTTP | 説明 |
+|---|---|---|
+| `UNAUTHORIZED` | 401 | JWT なし・無効 |
+| `FORBIDDEN` | 403 | 他人のファイルへのアクセス |
+| `NOT_FOUND` | 404 | `message_attachments` に存在しない / R2 にファイルなし |
+
+---
+
+### GET /api/files/meals/:attachmentId
+
+食事写真（`meal_entries.image_key` 紐付き）を R2 から取得してレスポンスボディで返す。
+
+**Path Params**: `attachmentId`（`message_attachments.id`）  
+**Headers**: `Authorization: Bearer <JWT>`
+
+処理フローは `GET /api/files/progress/:attachmentId` と同一。  
+`meal_entries.image_key` = `message_attachments.storage_key` として紐付く。
+
+---
+
+### GET /api/files/progress/:attachmentId/signed-url
+
+> **ステータス**: Phase 2 対応予定（現時点では未実装）
+
+R2 署名付き URL（TTL: 60 秒）を生成して返す。フロントエンドが `<img src>` に直接使用できる。
+
+**Response 200**
+```json
+{
+  "success": true,
+  "data": {
+    "url": "https://r2.your-bucket.example.com/progress/ua-xxxx/2026-03-08.jpg?X-Amz-Expires=60&...",
+    "expiresAt": "2026-03-10T10:01:00Z"
+  }
+}
+```
+
+---
+
+### ファイル配信に関する設計メモ
+
+#### R2 ストレージキーの命名規則
+
+| 種別 | R2 キーパターン | 例 |
+|---|---|---|
+| 進捗写真 | `progress/{userAccountId}/{YYYY-MM-DD}-{uuid}.jpg` | `progress/ua-xxxx/2026-03-08-abcd.jpg` |
+| 食事写真 | `meals/{userAccountId}/{YYYY-MM-DD}-{mealType}-{uuid}.jpg` | `meals/ua-xxxx/2026-03-10-breakfast-efgh.jpg` |
+| 画像解析ジョブ入力 | `intake/{userAccountId}/{attachmentId}.jpg` | `intake/ua-xxxx/ma-ijkl.jpg` |
+
+#### フロントエンドでの画像表示方法
+
+Bearer トークンを `<img src>` タグで使用できないため、Fetch API + Object URL に変換して使用する:
+
+```javascript
+// /api/files/progress/:id を Fetch して Blob URL に変換
+async function loadImage(attachmentId, token) {
+  const res = await fetch(`/api/files/progress/${attachmentId}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  })
+  if (!res.ok) throw new Error('file load failed')
+  const blob = await res.blob()
+  return URL.createObjectURL(blob)  // <img src> に設定
+}
+```
+
+#### 依存 Repository
+
+| Repository 関数 | テーブル | 説明 |
+|---|---|---|
+| `getMessageAttachmentById(db, id)` | `message_attachments` | `storage_key`, `content_type` を取得 |
+| `getThreadByAttachmentId(db, attachmentId)` | `conversation_threads` | `user_account_id` を取得（所有者チェック用） |
+
+SQL は `IMPLEMENTATION_GUIDE.md` セクション 20-B を参照。
