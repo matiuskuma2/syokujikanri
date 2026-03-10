@@ -221,7 +221,7 @@ Phase 1e: Cron ジョブ・テスト・デプロイ（9 タスク）
 | 1a-6 | body-metrics-repo 実装 | `src/repositories/body-metrics-repo.ts` | ❌ 未作成 | `upsertBodyMetrics` / `upsertWeight` が REPOSITORY.md SQL 仕様通りに動作 |
 | 1a-7 | conversations-repo 実装 | `src/repositories/conversations-repo.ts` | ❌ 未作成 | `findOpenThread` / `createThread` / `createMessage` が REPOSITORY.md SQL 仕様通りに動作 |
 | 1a-8 | image-intake-repo 実装 | `src/repositories/image-intake-repo.ts` | ❌ 未作成 | `createImageAnalysisJob` / `saveImageIntakeResult` が REPOSITORY.md SQL 仕様通りに動作 |
-| 1a-9 | progress-photos-repo 実装 | `src/repositories/progress-photos-repo.ts` | ❌ 未作成 | `createProgressPhoto` / `listProgressPhotos` が REPOSITORY.md SQL 仕様通りに動作 |
+| 1a-9 | progress-photos-repo 実装 | `src/repositories/progress-photos-repo.ts` | ❌ 未作成 | `createProgressPhoto` / `listProgressPhotos` が REPOSITORY.md SQL 仕様通りに動作（**Phase 1**） |
 | 1a-10 | knowledge-repo 実装 | `src/repositories/knowledge-repo.ts` | ❌ 未作成 | `getKnowledgeChunksByIds` が REPOSITORY.md SQL 仕様通りに動作（動的 IN 句実装済み） |
 | 1a-11 | accounts-repo 実装 | `src/repositories/accounts-repo.ts` | ❌ 未作成 | `findAccountById` / `findAccountMembership` / `createAccount` / `updateAccountStatus` |
 | 1a-12 | line-users-repo 実装 | `src/repositories/line-users-repo.ts` | ❌ 未作成 | `findLineUser` / `upsertLineUser` / `findUserAccount` / `ensureUserAccount` / `findUserServiceStatus` / `upsertUserServiceStatus` / `listActiveLineUsers` |
@@ -351,7 +351,7 @@ export function buildMissingQuestionPrompt(input: MissingQuestionInput)
 |---|---|---|---|---|
 | 1d-9 | ユーザーダッシュボード API（マジックリンク） | `src/routes/user/dashboard.ts` | ❌ 未作成（`user/index.ts` は要確認・整理） | GET /api/user/dashboard（後方互換） |
 | 1d-10 | 日次ログ API（マジックリンク） | `src/routes/user/records.ts` | ❌ 未作成 | GET 一覧 / GET 日別詳細 |
-| 1d-11 | 進捗写真 API（マジックリンク） | `src/routes/user/progress-photos.ts` | ❌ 未作成 | GET 一覧 |
+| 1d-11 | 進捗写真 API（マジックリンク） | `src/routes/user/progress-photos.ts` | ❌ 未作成 | GET 一覧（**Phase 1 スコープ**: 保存・一覧閲覧まで。比較 UI は Phase 2） |
 | 1d-12 | 週次レポート API（マジックリンク） | `src/routes/user/weekly-reports.ts` | ❌ 未作成 | GET 一覧 |
 | 1d-13a | LINE LIFF トークン認証 & JWT 発行 | `src/routes/line/auth.ts` | ❌ 未作成 | POST /api/auth/line が LINE Profile API 検証 → JWT 発行。`INVALID_LINE_TOKEN` / `USER_NOT_REGISTERED` エラーハンドリング済み |
 | 1d-13b | ユーザー認証付き API（JWT 方式） | `src/routes/user/me.ts` | ❌ 未作成 | GET /api/users/me 全 6 エンドポイントが requireAuth + RBAC 経由で動作。`jwt.sub = userAccountId` で絞り込み |
@@ -503,12 +503,12 @@ env.R2.get(attachment.storage_key) → Response(body)
 
 ## スコープ外（Phase 2 以降）
 
-> **食事解析の方針（重要）**: Phase 1 は **OpenAI Vision のみ**で実装。  
-> 外部食品 DB 連携は Phase 2 以降で検討する。FatSecret は採用しない（OpenAI → 日本食品辞書 → 必要なら外部 DB の順で段階的に強化）。
+> **食事解析の方針（重要）**: Phase 1 は **OpenAI Vision のみ**で実装（外部食品 DB 不使用）。  
+> Phase 2 以降で日本食品辞書（日本食品標準成分表等）との連携を検討し、段階的に精度を高める。
 
 | 機能 | Phase |
 |---|---|
-| 高精度食事画像 API（日本食品辞書・FoodData Central 等） | Phase 2 |
+| 高精度食事解析（日本食品辞書・標準成分表との連携） | Phase 2 |
 | バーコード読み取り連携 | Phase 3 |
 | 体重計・歩数計デバイス連携 | Phase 3+ |
 | 自動課金・多店舗管理 | Phase 3+ |
@@ -516,4 +516,5 @@ env.R2.get(attachment.storage_key) → Response(body)
 | 音声入力フロー | Phase 3+ |
 | 医療診断機能 | スコープ外 |
 | R2 署名付き URL（`/api/files/*/signed-url`） | Phase 2 |
-| 進捗写真 比較 UI 強化・週次との紐付け | Phase 2 |
+| 進捗写真 保存・一覧表示 | **Phase 1**（MVP スコープ内） |
+| 進捗写真 比較 UI 強化・週次との紐付け・素材化 | Phase 2 |
