@@ -22,6 +22,14 @@
     }
   ],
 
+  // Cron Triggers
+  "triggers": {
+    "crons": [
+      "0 12 * * *",    // UTC 12:00 = JST 21:00 毎日リマインダー
+      "0 11 * * 0"     // UTC 11:00 日曜 = JST 20:00 日曜 週次レポート
+    ]
+  },
+
   // Queue for LINE events
   "queues": {
     "producers": [

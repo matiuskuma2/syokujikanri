@@ -14,16 +14,20 @@ import { authMiddleware } from './middleware/auth'
 
 // Routes (import順: line → admin → user)
 import webhookRouter from './routes/line/webhook'
+import lineAuthRouter from './routes/line/auth'
 import adminAuthRouter from './routes/admin/auth'
 import adminUsersRouter from './routes/admin/users'
 import adminDashboardRouter from './routes/admin/dashboard'
 import userRouter from './routes/user/index'
+import meRouter from './routes/user/me'
+import filesRouter from './routes/user/files'
 
 // Queue Consumer（Cloudflare Workers の queue export として使用）
 import { lineQueueConsumer } from './jobs/image-analysis'
 
-// Cron jobs（Step 5で src/jobs/ に移動予定）
-// import { runDailyReminder, runWeeklyReport } from './jobs/daily-reminder'
+// Cron ジョブ
+import { runDailyReminder } from './jobs/daily-reminder'
+import { runWeeklyReport } from './jobs/weekly-report'
 
 type Variables = {
   jwtPayload: JwtPayload
@@ -62,6 +66,12 @@ app.get('/api/health', (c) => c.json({ status: 'ok' }))
 app.route('/api/webhooks/line', webhookRouter)
 
 // ===================================================================
+// LINE Auth（認証不要: LIFF トークン → JWT 発行）
+// ===================================================================
+
+app.route('/api/auth/line', lineAuthRouter)
+
+// ===================================================================
 // Admin API（JWT認証必要）
 // ===================================================================
 
@@ -73,10 +83,17 @@ app.route('/api/admin/users', adminUsersRouter)
 app.route('/api/admin/dashboard', adminDashboardRouter)
 
 // ===================================================================
-// User API
+// User API（後方互換: マジックリンク方式 /api/user/*）
 // ===================================================================
 
 app.route('/api/user', userRouter)
+
+// ===================================================================
+// User API（JWT認証: /api/users/me/* および /api/files/*）
+// ===================================================================
+
+app.route('/api/users/me', meRouter)
+app.route('/api/files', filesRouter)
 
 // ===================================================================
 // 静的ファイル配信
@@ -128,14 +145,15 @@ export async function scheduled(
   ctx: ExecutionContext
 ): Promise<void> {
   ctx.waitUntil((async () => {
-    // Step 5 で jobs/ 実装後に有効化
     switch (event.cron) {
-      case '0 21 * * *': // 毎日21時 JST → リマインダー
-        console.log('[cron] daily-reminder: not yet implemented')
+      case '0 12 * * *': // UTC 12:00 = JST 21:00 毎日リマインダー
+        await runDailyReminder(env)
         break
-      case '0 20 * * 0': // 毎週日曜20時 JST → 週次レポート
-        console.log('[cron] weekly-report: not yet implemented')
+      case '0 11 * * 0': // UTC 11:00 日曜 = JST 20:00 日曜 週次レポート
+        await runWeeklyReport(env)
         break
+      default:
+        console.log(`[cron] unknown cron expression: ${event.cron}`)
     }
   })())
 }
