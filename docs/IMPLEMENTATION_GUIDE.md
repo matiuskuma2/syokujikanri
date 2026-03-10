@@ -3,7 +3,7 @@
 > **このドキュメントの目的**  
 > 実装フェーズで使用するコード雛形・サービス層実装仕様をまとめる。  
 > **実装はしない。このドキュメントを読んで実装者が正規ファイルを作成する。**  
-> 最終更新: 2026-03-10
+> 最終更新: 2026-03-10（セクション 17〜20 追加：コードスニペット詳細・次フェーズ仕様）
 
 ---
 
@@ -27,6 +27,10 @@
 | [14. LINE 返信テンプレート](#14-line-返信テンプレート) | `src/services/line/reply-templates.ts` 雛形 |
 | [15. フロントエンド 雛形](#15-フロントエンド-雛形) | ユーザーダッシュボード・進捗写真 画面 |
 | [16. 次の実装優先順](#16-次の実装優先順) | 残タスクの順序とポイント |
+| [17. コードスニペット詳細: response-parser.ts](#17-コードスニペット詳細-response-parserts) | `extractTextOutput` / `safeParseJsonText` / `parseResponseJson` 完全実装雛形 |
+| [18. コードスニペット詳細: schemas.ts](#18-コードスニペット詳細-schemats) | 全 Zod スキーマ完全実装雛形 |
+| [19. コードスニペット詳細: classify-input.ts](#19-コードスニペット詳細-classify-inputts) | `classifyRecordText` 完全実装雛形 |
+| [20. 次フェーズ仕様: users/me 認証ルーティング & 画像配信 API](#20-次フェーズ仕様-usersme-認証ルーティング--画像配信-api) | `/api/users/me` 認証フロー・`/api/files/progress/:id` 設計 |
 
 ---
 
@@ -1029,6 +1033,447 @@ export function tplMissingField(
 | `/api/files/progress/:id` 配信 API | R2 からの画像配信（署名付き URL or プロキシ） |
 | `src/services/line/media.ts` 詳細 | LINE Content API → R2 保存 + アクセス URL 生成 |
 | Intake フロー完全実装 | `src/bot/intake-flow.ts` |
+
+---
+
+## 17. コードスニペット詳細: response-parser.ts
+
+**ファイル**: `src/services/ai/response-parser.ts`  
+**依存**: `zod`
+
+```typescript
+import { z } from 'zod'
+
+/**
+ * OpenAI Responses API レスポンスからテキスト出力を抽出する
+ * 優先順: response.output_text → response.output[].content[].text
+ */
+export function extractTextOutput(response: any): string {
+  // Responses API: output_text フィールド（最新 SDK）
+  if (typeof response?.output_text === 'string') {
+    return response.output_text
+  }
+  // Responses API: output[] 配列内の content[].text
+  if (Array.isArray(response?.output)) {
+    for (const item of response.output) {
+      if (Array.isArray(item?.content)) {
+        for (const c of item.content) {
+          if (c?.type === 'output_text' && typeof c?.text === 'string') {
+            return c.text
+          }
+        }
+      }
+    }
+  }
+  // Chat Completions API 互換: choices[0].message.content
+  const legacyContent = response?.choices?.[0]?.message?.content
+  if (typeof legacyContent === 'string') {
+    return legacyContent
+  }
+  throw new Error('MODEL_OUTPUT_NOT_FOUND: no text output in response')
+}
+
+/**
+ * テキストを JSON としてパースする
+ * ```json ... ``` フェンス記法にも対応
+ */
+export function safeParseJsonText<T = any>(text: string): T | null {
+  // コードフェンスを除去
+  const cleaned = text
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim()
+  try {
+    return JSON.parse(cleaned) as T
+  } catch {
+    return null
+  }
+}
+
+/**
+ * レスポンスを Zod スキーマで検証して返す
+ */
+export function parseResponseJson<T>(
+  response: any,
+  schema: z.ZodSchema<T>
+): { ok: true; data: T } | { ok: false; error: string; rawText: string } {
+  let rawText: string
+  try {
+    rawText = extractTextOutput(response)
+  } catch (e: any) {
+    return { ok: false, error: e.message, rawText: '' }
+  }
+  const parsed = safeParseJsonText<unknown>(rawText)
+  if (parsed === null) {
+    return { ok: false, error: 'MODEL_OUTPUT_NOT_JSON', rawText }
+  }
+  const result = schema.safeParse(parsed)
+  if (!result.success) {
+    return {
+      ok: false,
+      error: `MODEL_OUTPUT_SCHEMA_INVALID: ${result.error.message}`,
+      rawText,
+    }
+  }
+  return { ok: true, data: result.data }
+}
+```
+
+---
+
+## 18. コードスニペット詳細: schemas.ts
+
+**ファイル**: `src/services/ai/schemas.ts`  
+**依存**: `zod`
+
+```typescript
+import { z } from 'zod'
+
+// ─── 相談モード応答 ───────────────────────────────────────────────────────────
+export const consultResponseSchema = z.object({
+  summary:      z.string(),
+  encouragement: z.string(),
+  advice:       z.array(z.string()),
+  warning:      z.string().nullable().optional(),
+})
+export type ConsultResponse = z.infer<typeof consultResponseSchema>
+
+// ─── 日次フィードバック ───────────────────────────────────────────────────────
+export const dailyFeedbackSchema = z.object({
+  score:         z.number().int().min(0).max(100),
+  goodPoints:    z.array(z.string()),
+  improvePoints: z.array(z.string()),
+  comment:       z.string(),
+})
+export type DailyFeedback = z.infer<typeof dailyFeedbackSchema>
+
+// ─── 週次レポート ─────────────────────────────────────────────────────────────
+export const weeklyReportSchema = z.object({
+  summary:    z.string(),
+  trend:      z.array(z.string()),
+  nextFocus:  z.array(z.string()),
+  warning:    z.string().nullable().optional(),
+})
+export type WeeklyReport = z.infer<typeof weeklyReportSchema>
+
+// ─── 画像カテゴリ分類 ─────────────────────────────────────────────────────────
+const IMAGE_CATEGORY_VALUES = [
+  'meal_photo', 'nutrition_label', 'body_scale',
+  'food_package', 'progress_body_photo', 'other', 'unknown',
+] as const
+
+export const imageCategorySchema = z.object({
+  category:   z.enum(IMAGE_CATEGORY_VALUES),
+  confidence: z.number().min(0).max(1),
+  reason:     z.string(),
+})
+export type ImageCategory = z.infer<typeof imageCategorySchema>
+
+// ─── 食事画像推定 ─────────────────────────────────────────────────────────────
+const foodItemSchema = z.object({
+  name:              z.string(),
+  amountLabel:       z.enum(['small', 'normal', 'large']).default('normal'),
+  estimatedCalories: z.number().nullable().optional(),
+  proteinG:          z.number().nullable().optional(),
+  fatG:              z.number().nullable().optional(),
+  carbsG:            z.number().nullable().optional(),
+})
+
+export const mealImageEstimationSchema = z.object({
+  foods: z.array(foodItemSchema),
+  mealBalance: z.object({
+    carbRatio:    z.number(),
+    proteinRatio: z.number(),
+    fatRatio:     z.number(),
+  }),
+  estimatedTotals: z.object({
+    calories: z.number().nullable().optional(),
+    proteinG: z.number().nullable().optional(),
+    fatG:     z.number().nullable().optional(),
+    carbsG:   z.number().nullable().optional(),
+  }),
+  score:   z.number().int().min(0).max(100),
+  comment: z.string(),
+})
+export type MealImageEstimation = z.infer<typeof mealImageEstimationSchema>
+
+// ─── 栄養成分表示 ─────────────────────────────────────────────────────────────
+export const nutritionLabelSchema = z.object({
+  isNutritionLabel: z.boolean(),
+  calories:  z.number().nullable().optional(),
+  proteinG:  z.number().nullable().optional(),
+  fatG:      z.number().nullable().optional(),
+  carbsG:    z.number().nullable().optional(),
+  confidence: z.number().min(0).max(1),
+})
+export type NutritionLabel = z.infer<typeof nutritionLabelSchema>
+
+// ─── 体重計 ──────────────────────────────────────────────────────────────────
+export const bodyScaleSchema = z.object({
+  isBodyScale: z.boolean(),
+  weightKg:    z.number().nullable().optional(),
+  confidence:  z.number().min(0).max(1),
+})
+export type BodyScale = z.infer<typeof bodyScaleSchema>
+
+// ─── 進捗写真 ─────────────────────────────────────────────────────────────────
+export const progressPhotoSchema = z.object({
+  isProgressBodyPhoto: z.boolean(),
+  confidence:          z.number().min(0).max(1),
+  poseLabel:           z.string().nullable().optional(),
+  bodyPartLabel:       z.string().nullable().optional(),
+})
+export type ProgressPhoto = z.infer<typeof progressPhotoSchema>
+```
+
+---
+
+## 19. コードスニペット詳細: classify-input.ts
+
+**ファイル**: `src/services/daily-logs/classify-input.ts`  
+**依存**: なし（純粋な同期処理）
+
+```typescript
+export type RecordClassification =
+  | { kind: 'weight'; value: number }
+  | { kind: 'water'; value: '500ml' | '1l' | '1_5l' | '2l_plus' }
+  | { kind: 'sleep'; value: number }
+  | { kind: 'bowel'; value: 'hard' | 'normal' | 'soft' | 'none' }
+  | { kind: 'steps'; value: number }
+  | { kind: 'meal'; mealType: 'breakfast' | 'lunch' | 'snack' | 'dinner' | 'other'; text: string }
+  | { kind: 'unknown' }
+
+export function classifyRecordText(text: string): RecordClassification {
+  const t = text.trim()
+
+  // ── 体重 ──
+  const weightMatch = t.match(/([\d.]+)\s*(?:体重|kg|キロ)/i)
+    || (/(?:体重|今日の体重)/.test(t) ? t.match(/([\d.]+)/) : null)
+  if (weightMatch) {
+    const v = parseFloat(weightMatch[1])
+    if (v >= 20 && v <= 300) return { kind: 'weight', value: v }
+  }
+
+  // ── 歩数 ──
+  const stepsMatch = t.match(/([\d,]+)\s*歩/)
+  if (stepsMatch) {
+    const v = parseInt(stepsMatch[1].replace(',', ''), 10)
+    if (v >= 0 && v <= 100000) return { kind: 'steps', value: v }
+  }
+
+  // ── 睡眠 ──
+  const sleepMatch = t.match(/([\d.]+)\s*(?:時間|h|H)/)
+  if (sleepMatch && /(?:睡眠|寝た|起きた|就寝|睡眠時間|時間寝)/.test(t)) {
+    const v = parseFloat(sleepMatch[1])
+    if (v >= 0 && v <= 24) return { kind: 'sleep', value: v }
+  }
+
+  // ── 水分 ──
+  if (/2\s*[lLリ]以上|2000\s*ml/.test(t))  return { kind: 'water', value: '2l_plus' }
+  if (/1\.?5\s*[lLリ]|1500\s*ml/.test(t)) return { kind: 'water', value: '1_5l' }
+  if (/1\s*[lLリ]|1000\s*ml/.test(t))     return { kind: 'water', value: '1l' }
+  if (/500\s*ml/.test(t))                 return { kind: 'water', value: '500ml' }
+
+  // ── 便 ──
+  if (/固め|硬め/.test(t))          return { kind: 'bowel', value: 'hard' }
+  if (/普通|通常|ふつう/.test(t))    return { kind: 'bowel', value: 'normal' }
+  if (/柔らか|軟便|やわらか/.test(t)) return { kind: 'bowel', value: 'soft' }
+  if (/なし|出てない|出ない/.test(t) && /便|お通じ/.test(t)) {
+    return { kind: 'bowel', value: 'none' }
+  }
+
+  // ── 食事 ──
+  const MEAL_KEYWORDS = /食べ|ごはん|パン|米|麺|肉|魚|野菜|サラダ|ラーメン|弁当|定食|おにぎり|カフェ|ランチ|ディナー|朝食|昼食|夕食|夕飯|朝ごはん|昼ごはん|夜ごはん/
+  if (MEAL_KEYWORDS.test(t) && t.length >= 4) {
+    return { kind: 'meal', mealType: detectMealType(t), text: t }
+  }
+
+  return { kind: 'unknown' }
+}
+
+function detectMealType(
+  text: string
+): 'breakfast' | 'lunch' | 'snack' | 'dinner' | 'other' {
+  if (/朝食|朝ごはん|朝は/.test(text))               return 'breakfast'
+  if (/昼食|昼ごはん|昼は|ランチ/.test(text))        return 'lunch'
+  if (/間食|おやつ/.test(text))                     return 'snack'
+  if (/夕食|夜ごはん|晩ごはん|夜は|夕飯|ディナー/.test(text)) return 'dinner'
+  return 'other'
+}
+```
+
+---
+
+## 20. 次フェーズ仕様: users/me 認証ルーティング & 画像配信 API
+
+> **ステータス**: 未実装。次のドキュメント化・実装フェーズで扱う。  
+> 本セクションは設計メモとして記録する。実装はここに記載のとおり進めること。
+
+### 20-A. `/api/users/me` 系 認証付きルーティング
+
+**課題**: LINE ユーザー向けの REST API は、LINE の `userId`（`Uxxxxxxxx`）を識別子とした認証が必要。  
+JWT（管理者向け）と異なり、LINE ユーザー向けには **LINE Login** または **LIFF トークン**を用いた認証フローを設計する。
+
+#### 認証フロー設計
+
+```
+[フロントエンド（LIFF）]
+  ↓ liff.getAccessToken() → LINE Access Token 取得
+  ↓ POST /api/auth/line { lineAccessToken }
+                         ↓
+[Workers: src/routes/line/auth.ts]
+  ↓ LINE Profile API 呼び出し: GET https://api.line.me/v2/profile
+  ↓ { userId, displayName, pictureUrl } 取得
+  ↓ findLineUser(db, userId) → user_accounts.id (= userAccountId) を取得
+  ↓ signJwt({ sub: userAccountId, role: 'user', exp: 24h }) → JWT 発行
+  ↓ レスポンス: { token: "<JWT>", userAccountId }
+                         ↓
+[フロントエンド]
+  ↓ localStorage に token 保存
+  ↓ 以降のリクエストに Authorization: Bearer <JWT> を付与
+```
+
+#### 実装ファイル
+
+| ファイル | 役割 |
+|---|---|
+| `src/routes/line/auth.ts` | `/api/auth/line` エンドポイント。LINE Access Token 検証 → JWT 発行 |
+| `src/middleware/auth.ts` | `requireAuth()` を JWT 検証に差し替え（現在はデバッグヘッダー認証） |
+| `src/middleware/rbac.ts` | role = 'user' の場合 `userAccountId` がリクエストパスと一致するか確認 |
+
+#### `/api/auth/line` リクエスト/レスポンス
+
+```typescript
+// POST /api/auth/line
+// Request Body:
+// { lineAccessToken: string }
+
+// Response:
+// {
+//   token: string,        // JWT (24h 有効)
+//   userAccountId: string // user_accounts.id
+// }
+
+// エラー:
+// 401 { code: 'INVALID_LINE_TOKEN', message: '...' }
+// 404 { code: 'USER_NOT_REGISTERED', message: '未登録ユーザー。LINE 友達追加後に再試行してください。' }
+```
+
+#### JWT ペイロード設計
+
+```typescript
+type JwtPayload = {
+  sub:           string   // userAccountId (user_accounts.id)
+  role:          'superadmin' | 'admin' | 'staff' | 'user'
+  accountId:     string   // 管理者の場合: account_memberships.account_id
+                          // ユーザーの場合: user_accounts.client_account_id
+  iat:           number
+  exp:           number
+}
+```
+
+#### `GET /api/users/me` ルート例
+
+```typescript
+// src/routes/user/me.ts（新規作成予定）
+// GET /api/users/me
+// → auth middleware → JWT 検証 → userAccountId 取得
+// → getUserDashboard(env, userAccountId) を呼ぶ
+
+// GET /api/users/me/dashboard   → getUserDashboard
+// GET /api/users/me/progress    → getUserProgress（進捗写真一覧）
+// GET /api/users/me/records     → ユーザー日次記録一覧（直近 N 日）
+// GET /api/users/me/weekly-reports → 週次レポート一覧
+```
+
+---
+
+### 20-B. `/api/files/progress/:id` 画像配信 API
+
+**課題**: R2 に保存された進捗写真・食事画像を、認証済みユーザーのみに配信する。  
+直接 R2 パブリック URL を使わず、Workers 経由でプロキシする（アクセス制御のため）。
+
+#### 設計方針
+
+```
+方針 A: Workers プロキシ（推奨・MVP 向け）
+  GET /api/files/progress/:attachmentId
+    → auth middleware（JWT 検証）
+    → getMessageAttachmentById(db, attachmentId) → storage_key 取得
+    → attachment.user_account_id === jwt.sub か確認（所有者チェック）
+    → env.R2.get(storage_key) → R2Object
+    → return new Response(r2Object.body, { headers: { Content-Type: ... } })
+
+方針 B: 署名付き URL（将来対応）
+  GET /api/files/progress/:attachmentId/signed-url
+    → R2 署名付き URL 生成（TTL: 60秒）
+    → { url: "https://..." } を返す
+    → フロントがリダイレクト or <img src={url}> で表示
+```
+
+#### 実装ファイル
+
+| ファイル | 役割 |
+|---|---|
+| `src/routes/user/files.ts`（新規） | `/api/files/progress/:id` エンドポイント |
+| `src/repositories/attachments-repo.ts` | `getMessageAttachmentById` / `getThreadByAttachmentId` |
+
+#### `src/routes/user/files.ts` 雛形
+
+```typescript
+// GET /api/files/progress/:attachmentId
+export async function getProgressFile(
+  request: Request,
+  env: Env,
+  attachmentId: string,
+  jwtSub: string  // auth middleware から渡す userAccountId
+): Promise<Response> {
+  const db = getDb(env)
+
+  // 1. 添付ファイル取得
+  const attachment = await getMessageAttachmentById(db, attachmentId)
+  if (!attachment) {
+    return jsonError('NOT_FOUND', 'attachment not found', 404)
+  }
+
+  // 2. 所有者チェック（thread の user_account_id と JWT sub が一致するか）
+  const thread = await getThreadByAttachmentId(db, attachmentId)
+  if (!thread || thread.user_account_id !== jwtSub) {
+    return jsonError('FORBIDDEN', 'access denied', 403)
+  }
+
+  // 3. R2 から取得
+  const object = await env.R2.get(attachment.storage_key)
+  if (!object) {
+    return jsonError('NOT_FOUND', 'file not found in storage', 404)
+  }
+
+  return new Response(object.body, {
+    headers: {
+      'Content-Type': attachment.content_type || 'image/jpeg',
+      'Cache-Control': 'private, max-age=300',
+    },
+  })
+}
+```
+
+#### `attachments-repo.ts` クエリ
+
+```sql
+-- getMessageAttachmentById
+SELECT * FROM message_attachments WHERE id = ?1 LIMIT 1
+
+-- getThreadByAttachmentId
+SELECT ct.* FROM conversation_threads ct
+JOIN conversation_messages cm ON cm.thread_id = ct.id
+JOIN message_attachments ma ON ma.message_id = cm.id
+WHERE ma.id = ?1
+LIMIT 1
+```
+
+> ⚠️ `conversation_threads` に `user_account_id` カラムが存在することを DATABASE.md DDL で確認すること。  
+> 存在しない場合は `0008_` マイグレーションで追加する。
 
 ---
 

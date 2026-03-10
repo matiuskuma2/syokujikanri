@@ -3,7 +3,7 @@
 > **このドキュメントの目的**  
 > ドキュメント整備状況・現在のコード状態・実装フェーズのロードマップを管理する。  
 > 各タスクには「依存関係」「実装ファイル」「完了条件」を明記する。  
-> **最終更新: 2026-03-10**
+> **最終更新: 2026-03-10（実装雛形追加・ディレクトリ構造更新）**
 
 ---
 
@@ -20,6 +20,7 @@
 | `docs/BOT_FLOW.md` | ✅ 完了 | モード・ステップコード・キーワード定義 |
 | `docs/DEPLOYMENT.md` | ✅ 完了 | ローカル・本番デプロイ手順 |
 | `docs/PROJECT_PLAN.md` | ✅ 完了（本ファイル） | フェーズ別実装計画 |
+| `docs/IMPLEMENTATION_GUIDE.md` | ✅ 完了 | 実装雛形・ロジック仕様・ユーティリティ集 |
 
 ---
 
@@ -420,6 +421,55 @@ export function buildMissingQuestionPrompt(input: MissingQuestionInput)
 - `curl` / Postman での手動テストで動作確認
 - ローカルの `wrangler pages dev --local` 環境で検証
 - D1 動作確認: `npx wrangler d1 execute diet-bot-production --local --command="SELECT ..."`
+
+---
+
+## 次フェーズ優先タスク（Phase 1d 後半〜1e）
+
+> **最終更新: 2026-03-10**  
+> `docs/IMPLEMENTATION_GUIDE.md` セクション 17〜20 の追加を受けて更新。
+
+### 最優先: users/me 認証ルーティング
+
+| タスク | 実装ファイル | 依存 | 状態 |
+|---|---|---|---|
+| LINE LIFF トークン検証エンドポイント | `src/routes/line/auth.ts` | `src/utils/jwt.ts` / line-users-repo | ❌ 未作成 |
+| auth middleware を JWT 検証に差し替え | `src/middleware/auth.ts` | `src/utils/jwt.ts` | ⚠️ デバッグヘッダー実装中 |
+| RBAC middleware 作成 | `src/middleware/rbac.ts` | auth.ts | ❌ 未作成 |
+| `/api/users/me` ルート定義 | `src/routes/user/me.ts` | auth.ts / dashboard-repo | ❌ 未作成 |
+| `/api/users/me/dashboard` | `src/routes/user/dashboard.ts` | dashboard-repo | ❌ 未作成 |
+| `/api/users/me/progress` | `src/routes/user/dashboard.ts` | progress-photos-repo | ❌ 未作成 |
+| `/api/users/me/records` | `src/routes/user/records.ts` | daily-logs-repo | ❌ 未作成 |
+| `/api/users/me/weekly-reports` | `src/routes/user/weekly-reports.ts` | weekly-reports-repo | ❌ 未作成 |
+
+**設計メモ**: `IMPLEMENTATION_GUIDE.md` セクション 20-A 参照。  
+JWT ペイロードは `{ sub: userAccountId, role: 'user', accountId: clientAccountId }` とする。
+
+---
+
+### 次優先: 添付・進捗画像配信 API
+
+| タスク | 実装ファイル | 依存 | 状態 |
+|---|---|---|---|
+| 添付ファイル Repository | `src/repositories/attachments-repo.ts` | types/db.ts | ❌ 未作成 |
+| 画像プロキシエンドポイント | `src/routes/user/files.ts` | attachments-repo / R2 | ❌ 未作成 |
+| conversation_threads に user_account_id カラム確認 | `migrations/0008_*.sql` | DATABASE.md DDL | 🔍 要確認 |
+
+**設計メモ**: `IMPLEMENTATION_GUIDE.md` セクション 20-B 参照。  
+MVP は Workers プロキシ方式（方針 A）で実装する。R2 署名付き URL は将来対応。
+
+---
+
+### コードスニペット追加（2026-03-10）
+
+以下のコードスニペットを `IMPLEMENTATION_GUIDE.md` に追記済み:
+
+| セクション | 内容 |
+|---|---|
+| セクション 17 | `src/services/ai/response-parser.ts` 完全実装雛形 |
+| セクション 18 | `src/services/ai/schemas.ts` 全 Zod スキーマ完全実装雛形 |
+| セクション 19 | `src/services/daily-logs/classify-input.ts` 完全実装雛形 |
+| セクション 20 | `/api/users/me` 認証フロー設計・`/api/files/progress/:id` 設計 |
 
 ---
 
