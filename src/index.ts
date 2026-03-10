@@ -12,13 +12,14 @@ import type { Bindings } from './types/bindings'
 import type { JwtPayload } from './types/db'
 import { authMiddleware } from './middleware/auth'
 
-// Routes (import順: line → admin → user、未作成ファイルはコメントアウト)
-// import webhookRouter from './routes/line/webhook'         // Step 4で作成
+// Routes (import順: line → admin → user)
+import webhookRouter from './routes/line/webhook'
 import adminAuthRouter from './routes/admin/auth'
 import adminUsersRouter from './routes/admin/users'
 import adminDashboardRouter from './routes/admin/dashboard'
 import userRouter from './routes/user/index'
-// import { lineQueueConsumer } from './jobs/image-analysis'  // Step 5で作成
+// import { lineQueueConsumer } from './jobs/image-analysis'  // Step 5: image analysis job
+import { lineQueueConsumer } from './jobs/image-analysis'
 
 // Cron jobs（Step 5で src/jobs/ に移動予定）
 // import { runDailyReminder, runWeeklyReport } from './jobs/daily-reminder'
@@ -54,11 +55,10 @@ app.get('/health', (c) => c.json({ status: 'ok', service: 'diet-bot', version: '
 app.get('/api/health', (c) => c.json({ status: 'ok' }))
 
 // ===================================================================
-// LINE Webhook（認証不要）
-// Step 4 で src/routes/line/webhook.ts 作成後に有効化
+// LINE Webhook（認証不要・署名検証は webhook.ts 内で実施）
 // ===================================================================
 
-// app.route('/api/webhooks/line', webhookRouter)
+app.route('/api/webhooks/line', webhookRouter)
 
 // ===================================================================
 // Admin API（JWT認証必要）

@@ -14,6 +14,11 @@ export type Bindings = {
   LINE_CHANNEL_ACCESS_TOKEN: string
   LINE_WEBHOOK_PATH: string
 
+  // === Single-channel resolution (Phase 1) ===
+  // マルチチャンネル化後は line_channels テーブルで解決する
+  LINE_CHANNEL_ID: string        // D1 line_channels.id に対応するシステム内部 ID
+  CLIENT_ACCOUNT_ID: string      // D1 accounts.id に対応するクライアントアカウント ID
+
   // === OpenAI ===
   OPENAI_API_KEY: string
   OPENAI_MODEL: string
@@ -44,11 +49,34 @@ export type Bindings = {
 }
 
 // === LINE Queue Message ===
-export type LineQueueMessage = {
+/**
+ * LINE_EVENTS_QUEUE に投入するメッセージの Union 型
+ *
+ * - 'webhook_event'  : LINE Webhook イベントをそのまま Queue 経由で処理（将来の非同期化用）
+ * - 'image_analysis' : 画像添付ファイルの解析ジョブ
+ */
+export type LineQueueMessage =
+  | LineWebhookQueueMessage
+  | ImageAnalysisQueueMessage
+
+/** LINE Webhook イベントをそのまま非同期処理する場合 */
+export type LineWebhookQueueMessage = {
+  type: 'webhook_event'
   accountId: string
   channelId: string
   event: LineWebhookEvent
   receivedAt: string
+}
+
+/** 画像解析ジョブ */
+export type ImageAnalysisQueueMessage = {
+  type: 'image_analysis'
+  attachmentId: string
+  userAccountId: string
+  clientAccountId: string
+  threadId: string
+  r2Key: string
+  lineUserId: string
 }
 
 // === LINE Webhook Event Types ===
