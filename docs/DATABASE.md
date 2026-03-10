@@ -642,3 +642,66 @@ npx wrangler d1 migrations apply diet-bot-production --local
 | `image_intake_results` | `image-intake-repo.ts` | saveImageIntakeResult |
 | `progress_photos` | `progress-photos-repo.ts` | createProgressPhoto, listProgressPhotos |
 | `knowledge_chunks` | `knowledge-repo.ts` | getKnowledgeChunksByIds |
+
+---
+
+## `user_account_id` の概念・使い方
+
+### 概要
+
+`user_account_id` とは `user_accounts.id` の値のこと。  
+**「LINE ユーザー × 契約アカウント（クリニック/サロン）」の組み合わせを識別する内部 ID** として機能する。
+
+### なぜこの ID が必要か
+
+- LINE ユーザー（`line_user_id = "U1234..."` 等）は複数の契約アカウントと紐付く可能性がある
+- そのため、LINE ユーザー ID 単体では「どの契約アカウントの顧客か」が特定できない
+- `user_accounts` テーブルが `(line_user_id, client_account_id)` の組み合わせを持ち、その主キーが `user_account_id` となる
+
+### テーブル関連図（ID の流れ）
+
+```
+line_users
+  id: "LU_abc..."               ← 内部管理ID（通常は使わない）
+  line_user_id: "Uxxx..."       ← LINE プラットフォームの外部ID
+  line_channel_id: "LC_abc..."
+
+user_accounts
+  id: "UA_xyz..."               ← ★ これが user_account_id
+  line_user_id: "Uxxx..."       ← LINE の外部ID
+  client_account_id: "AC_001..."  ← クリニックAのID
+
+user_profiles
+  id: "UP_xxx..."
+  user_account_id: "UA_xyz..."  ← user_accounts.id を参照
+
+daily_logs
+  id: "DL_xxx..."
+  user_account_id: "UA_xyz..."  ← user_accounts.id を参照
+  client_account_id: "AC_001..."
+```
+
+### ⚠️ 注意：`src/types/models.ts` は誤実装
+
+旧ファイル `src/types/models.ts`（削除対象）では `user_profiles` や `daily_logs` の
+参照キーが `account_id + line_user_id` の複合形式になっているが、これは**誤り**。
+
+正しくは `user_account_id` 単体で参照する。  
+`src/types/db.ts` を新規作成する際は本ドキュメントの DDL を正とすること。
+
+### Repository 層での使用パターン
+
+```typescript
+// 正しい使い方（user_account_id を主キーとして検索）
+async function findDailyLog(
+  db: D1Database,
+  params: { userAccountId: string; logDate: string }
+): Promise<DailyLog | null> {
+  return db.prepare(
+    'SELECT * FROM daily_logs WHERE user_account_id = ?1 AND log_date = ?2'
+  ).bind(params.userAccountId, params.logDate).first<DailyLog>()
+}
+
+// 間違った使い方（line_user_id + account_id での検索は非推奨）
+// ← src/repository/index.ts の現行コードがこのパターンを使っているが誤り
+```

@@ -8,6 +8,64 @@ Repository 層の設計・SQL 実装仕様書。
 
 ---
 
+## ⚠️ 現在のコード状態と修正方針（2026-03-10）
+
+### 誤実装ファイルの存在
+
+現在のリポジトリには以下の**仕様外ファイル**が存在する。実装フェーズ開始前に削除すること。
+
+| ファイル | 問題 |
+|---|---|
+| `src/repository/index.ts` | 単一ファイルに全 Repository が混在。DB キー名が仕様と異なる（例: `account_id + line_user_id` 複合キー vs 正規 `user_account_id`）。`RETURNING *` 未使用・TTL 計算方法も独自実装 |
+| `src/types/models.ts` | `DATABASE.md` スキーマとカラム定義が乖離。`user_profiles` の主キーが `user_account_id` ではなく `account_id + line_user_id` になっている。`daily_logs` も同様 |
+
+### 正規の型定義ファイル
+
+本ドキュメントの仕様は **`src/types/db.ts`** を参照先とする。  
+`src/types/models.ts` は削除し、`src/types/db.ts` に置き換える。
+
+```typescript
+// src/types/db.ts に定義する型の命名規則
+// DATABASE.md のカラム名をそのまま snake_case で TypeScript interface に変換する
+
+// NG: src/types/models.ts の誤った定義例
+interface DailyLog {
+  line_user_id: string   // ← 誤：direct FK でなく user_account_id を使う
+  account_id: string     // ← 誤：同上
+  weight_kg: number      // ← 誤：daily_logs テーブルに weight_kg カラムは存在しない
+}                        //         weight_kg は body_metrics テーブルにある
+
+// OK: src/types/db.ts の正しい定義
+interface DailyLog {
+  id: string
+  user_account_id: string    // ← user_accounts.id を参照
+  client_account_id: string  // ← accounts.id を参照（顧客側）
+  log_date: string           // YYYY-MM-DD
+  source: string             // 'line' | 'web' | 'import' | 'staff'
+  completion_status: string  // 'partial' | 'complete' | 'reviewed'
+  notes: string | null
+  ai_feedback: string | null
+  created_at: string
+  updated_at: string
+}
+```
+
+### `user_account_id` の概念説明
+
+`user_account_id` = `user_accounts.id` の値であり、「LINE ユーザー × 契約アカウント」の組み合わせを識別する内部 ID。
+
+```
+LINE ユーザー (U1234...) が
+  → クリニックA (accounts.id = abc...) の顧客として
+  → user_accounts テーブルに登録される
+  → その user_accounts.id = "xyz..." を user_account_id と呼ぶ
+
+daily_logs.user_account_id = "xyz..."  ← このユーザーの日次ログ
+meal_entries は daily_logs 経由なので直接 user_account_id を持たない
+```
+
+---
+
 ## 設計方針
 
 | 項目 | 方針 |

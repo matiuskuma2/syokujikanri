@@ -269,3 +269,89 @@ user:
 PM2 起動設定: ecosystem.config.cjs
   args: 'wrangler pages dev dist --d1=diet-bot-production --local --ip 0.0.0.0 --port 3000'
 ```
+
+---
+
+## ⚠️ 現在のコード状態と修正方針（2026-03-10）
+
+### 誤実装ファイル
+
+以下のファイルが**本アーキテクチャ仕様と乖離した状態**で存在している。  
+実装フェーズ開始前に必ず削除し、正しい構造で再作成すること。
+
+| ファイル | 問題 | 対処 |
+|---|---|---|
+| `src/repository/index.ts` | 単一ファイルに全 Repository が混在。`user_account_id` ではなく `account_id + line_user_id` の複合キーを使用しており `DATABASE.md` 仕様と乖離 | 削除 → `src/repositories/` 配下に分割再実装 |
+| `src/types/models.ts` | `daily_logs`・`user_profiles` 等の型定義が DB スキーマと異なる。`weight_kg` が `daily_logs` に直接紐付いているが実際は `body_metrics` テーブルに存在 | 削除 → `src/types/db.ts` に置き換え |
+| `src/ai/prompts.ts` | 配置パスが誤り。`src/services/ai/prompts.ts` が正規パス | 移動 or 削除して再作成 |
+| `src/ai/client.ts` | 同上 | 移動 or 削除して再作成 |
+
+### 正規のディレクトリ構造
+
+```
+src/
+├── types/
+│   ├── db.ts          ← 新規作成（DATABASE.md DDL に対応した全型定義）
+│   ├── line.ts        ← 新規作成（LINE Webhook イベント型）
+│   ├── api.ts         ← 新規作成（ApiResponse<T> / エラーコード型）
+│   ├── bindings.ts    ← 既存（Cloudflare Bindings 型）
+│   └── index.ts       ← 既存（re-export）
+│
+├── repositories/      ← 新規作成（11 ファイル分割）
+│   ├── daily-logs-repo.ts
+│   ├── meal-entries-repo.ts
+│   ├── body-metrics-repo.ts
+│   ├── conversations-repo.ts
+│   ├── image-intake-repo.ts
+│   ├── progress-photos-repo.ts
+│   ├── knowledge-repo.ts
+│   ├── accounts-repo.ts
+│   ├── line-users-repo.ts
+│   ├── bot-sessions-repo.ts
+│   └── weekly-reports-repo.ts
+│
+├── services/
+│   └── ai/
+│       ├── prompts.ts     ← 正規パス（src/ai/prompts.ts は誤配置）
+│       ├── client.ts      ← 正規パス（src/ai/client.ts は誤配置）
+│       ├── rag.ts         ← 新規作成
+│       └── embeddings.ts  ← 新規作成
+│
+├── bot/
+│   ├── dispatcher.ts
+│   ├── intake-flow.ts
+│   ├── record-mode.ts
+│   └── consult-mode.ts
+│
+├── routes/
+│   ├── line/
+│   │   ├── webhook.ts
+│   │   └── consumer.ts
+│   ├── admin/
+│   │   ├── auth.ts
+│   │   ├── accounts.ts
+│   │   ├── users.ts
+│   │   ├── bots.ts
+│   │   ├── knowledge.ts
+│   │   └── dashboard.ts
+│   └── user/
+│       ├── dashboard.ts
+│       ├── records.ts
+│       ├── progress-photos.ts
+│       └── weekly-reports.ts
+│
+├── middleware/
+│   ├── auth.ts
+│   └── rbac.ts
+│
+├── utils/
+│   ├── line-api.ts
+│   └── response.ts
+│
+├── jobs/
+│   ├── daily-reminder.ts
+│   ├── weekly-report.ts
+│   └── image-analysis.ts
+│
+└── index.ts           ← メインエントリポイント（Hono app）
+```
