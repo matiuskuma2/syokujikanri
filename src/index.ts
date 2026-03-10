@@ -18,7 +18,8 @@ import adminAuthRouter from './routes/admin/auth'
 import adminUsersRouter from './routes/admin/users'
 import adminDashboardRouter from './routes/admin/dashboard'
 import userRouter from './routes/user/index'
-import { lineQueueConsumer } from './jobs/image-analysis'
+
+// Queue Consumer（Cloudflare Workers の queue export として使用）
 import { lineQueueConsumer } from './jobs/image-analysis'
 
 // Cron jobs（Step 5で src/jobs/ に移動予定）

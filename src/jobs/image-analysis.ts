@@ -1,90 +1,146 @@
 /**
  * src/jobs/image-analysis.ts
- * Cloudflare Queue Consumer — 画像解析ジョブ処理
+ * Cloudflare Queue Consumer — 画像解析ジョブ
  *
- * Queue から受け取るメッセージ型:
- *   ImageAnalysisQueueMessage { type: 'image_analysis', attachmentId, userAccountId,
- *                                clientAccountId, threadId, r2Key, lineUserId }
+ * Queue から受け取った ImageAnalysisQueueMessage を処理し:
+ *   1. R2 から画像バイナリを取得 → data URL に変換
+ *   2. OpenAI Vision で画像カテゴリ判定
+ *   3. カテゴリごとに詳細解析（食事 / 栄養ラベル / 体重計 / 体型写真 等）
+ *   4. 解析結果を image_intake_results に保存
+ *   5. カテゴリに応じてレコードを DB に反映（meal_entries / body_metrics / progress_photos）
+ *   6. LINE push で結果をユーザーに通知
  *
- * 処理フロー:
- *   1. image_analysis_jobs を 'processing' に更新
- *   2. R2 から画像を取得 → base64 Data URL に変換
- *   3. OpenAI Vision で画像カテゴリ・内容を解析
- *   4. カテゴリに応じたアクションを実行（meal / scale / label / progress / other）
- *   5. image_intake_results を保存
- *   6. image_analysis_jobs を 'done' / 'failed' に更新
- *   7. LINE push で結果をユーザーに通知
- *
- * エラーポリシー:
- *   - 各メッセージ単位で try/catch → 失敗は job を 'failed' に更新してログ出力
- *   - Queue 全体はクラッシュさせない
+ * エラー方針:
+ *   - 1メッセージ単位で try/catch し、ジョブは 'failed' にしてリトライさせない
+ *   - 致命的でないエラー（LINE通知失敗など）は警告ログのみ
  */
 
 import type { Bindings, LineQueueMessage, ImageAnalysisQueueMessage } from '../types/bindings'
-import { getMessageAttachmentById } from '../repositories/attachments-repo'
-import { findJobByAttachmentId, updateJobStatus, saveImageIntakeResult } from '../repositories/image-intake-repo'
-import { ensureDailyLog } from '../repositories/daily-logs-repo'
-import { createMealEntry, updateMealEntryFromEstimate } from '../repositories/meal-entries-repo'
-import { upsertWeight } from '../repositories/body-metrics-repo'
-import { createConversationMessage } from '../repositories/conversations-repo'
-import { createOpenAIClient } from '../services/ai/openai-client'
-import { pushText } from '../services/line/reply'
-import { nowIso, todayJst } from '../utils/id'
 import type { ImageCategory } from '../types/db'
+import { createOpenAIClient } from '../services/ai/openai-client'
+import { getMessageAttachmentById } from '../repositories/attachments-repo'
+import {
+  findJobByAttachmentId,
+  updateJobStatus,
+  saveImageIntakeResult,
+} from '../repositories/image-intake-repo'
+import { ensureDailyLog } from '../repositories/daily-logs-repo'
+import {
+  createMealEntry,
+  findMealEntryByDailyLogAndType,
+  updateMealEntryFromEstimate,
+  incrementMealPhotoCount,
+} from '../repositories/meal-entries-repo'
+import { upsertBodyMetrics } from '../repositories/body-metrics-repo'
+import { createProgressPhoto } from '../repositories/progress-photos-repo'
+import { createConversationMessage } from '../repositories/conversations-repo'
+import { pushText } from '../services/line/reply'
+import { todayJst, nowIso } from '../utils/id'
 
 // ===================================================================
-// Queue Consumer エクスポート
-// Cloudflare Workers の queue ハンドラとして index.ts から
-//   export { lineQueueConsumer as queue }
-// する形で使う
+// プロンプト定義（Phase 1 – OpenAI Vision のみ）
 // ===================================================================
 
+const CLASSIFY_PROMPT = `あなたは画像分類AIです。送られた画像を以下のカテゴリのうち最も適切なものに分類してください。
+
+カテゴリ:
+- meal_photo        : 食事・食べ物の写真（皿・弁当・料理など）
+- nutrition_label   : 食品の栄養成分表示ラベル
+- body_scale        : 体重計の表示（数値が写っている）
+- food_package      : 食品パッケージ・袋・箱（成分表でなくパッケージ全体）
+- progress_body_photo : 体型・身体の進捗写真（全身・部分問わず）
+- other             : 上記以外の画像
+- unknown           : 判断できない
+
+必ず以下のJSON形式のみで返答してください（説明文は不要）:
+{"category": "<カテゴリ名>", "confidence": <0.0〜1.0の数値>}`
+
+const MEAL_ANALYSIS_PROMPT = `あなたは栄養士AIです。食事の写真を分析して栄養情報を推定してください。
+
+以下のJSON形式のみで返答してください（説明文は不要）:
+{
+  "meal_description": "料理名・食材の説明（日本語、100文字以内）",
+  "estimated_calories_kcal": <整数またはnull>,
+  "estimated_protein_g": <数値またはnull>,
+  "estimated_fat_g": <数値またはnull>,
+  "estimated_carbs_g": <数値またはnull>,
+  "meal_type_guess": "breakfast|lunch|dinner|snack|other",
+  "confidence_note": "推定精度の補足（任意）"
+}`
+
+const NUTRITION_LABEL_PROMPT = `栄養成分表示ラベルの画像から数値を正確に読み取ってください。
+
+以下のJSON形式のみで返答してください（読み取れない項目はnull）:
+{
+  "product_name": "商品名またはnull",
+  "serving_size_g": <数値またはnull>,
+  "calories_kcal": <数値またはnull>,
+  "protein_g": <数値またはnull>,
+  "fat_g": <数値またはnull>,
+  "carbs_g": <数値またはnull>,
+  "sodium_mg": <数値またはnull>,
+  "raw_text_hint": "ラベルの主要テキスト抜粋（任意）"
+}`
+
+const SCALE_PROMPT = `体重計の表示を読み取ってください。
+
+以下のJSON形式のみで返答してください（読み取れない場合はnull）:
+{
+  "weight_kg": <数値またはnull>,
+  "unit": "kg|lb|null",
+  "display_text": "表示されている数値のテキスト"
+}`
+
+// ===================================================================
+// Queue Consumer エントリーポイント
+// ===================================================================
+
+/**
+ * Cloudflare Workers の queue handler として export する
+ * wrangler.jsonc の [[queues.consumers]] に対応
+ */
 export async function lineQueueConsumer(
   batch: MessageBatch<LineQueueMessage>,
   env: Bindings
 ): Promise<void> {
-  for (const msg of batch.messages) {
-    try {
-      const payload = msg.body
+  for (const message of batch.messages) {
+    const payload = message.body
 
-      if (payload.type === 'image_analysis') {
-        await processImageAnalysis(payload, env)
-      } else {
-        console.log(`[Queue] Unhandled message type: ${(payload as { type: string }).type}`)
-      }
-
-      msg.ack()
-    } catch (err) {
-      console.error('[Queue] Message processing failed:', err)
-      msg.retry()
+    if (payload.type === 'image_analysis') {
+      await processImageAnalysis(payload, env)
+        .then(() => message.ack())
+        .catch((err) => {
+          console.error('[Queue] image_analysis fatal error, nacking:', err)
+          message.retry()
+        })
+    } else {
+      // webhook_event など現時点では未実装
+      console.log(`[Queue] Unsupported message type: ${(payload as { type: string }).type}`)
+      message.ack()
     }
   }
 }
 
 // ===================================================================
-// 画像解析メインロジック
+// 画像解析メインフロー
 // ===================================================================
 
 async function processImageAnalysis(
-  payload: ImageAnalysisQueueMessage,
+  msg: ImageAnalysisQueueMessage,
   env: Bindings
 ): Promise<void> {
-  const { attachmentId, userAccountId, clientAccountId, threadId, r2Key, lineUserId } = payload
+  const { attachmentId, userAccountId, clientAccountId, threadId, r2Key, lineUserId } = msg
 
-  // ------------------------------------------------------------------
-  // 1. ジョブを 'processing' に更新
-  // ------------------------------------------------------------------
+  // 1. ジョブを processing に更新
   const job = await findJobByAttachmentId(env.DB, attachmentId)
   if (!job) {
-    console.error(`[ImageAnalysis] Job not found for attachment=${attachmentId}`)
+    console.warn(`[Queue] job not found for attachment: ${attachmentId}`)
     return
   }
   await updateJobStatus(env.DB, job.id, 'processing')
 
   try {
-    // ------------------------------------------------------------------
-    // 2. R2 から画像バイナリ取得
-    // ------------------------------------------------------------------
+    // 2. R2 から画像バイナリを取得
     const r2Object = await env.R2.get(r2Key)
     if (!r2Object) {
       throw new Error(`R2 object not found: ${r2Key}`)
@@ -92,175 +148,116 @@ async function processImageAnalysis(
     const imageBuffer = await r2Object.arrayBuffer()
     const contentType = r2Object.httpMetadata?.contentType ?? 'image/jpeg'
 
-    // base64 Data URL に変換（OpenAI Vision に渡すため）
+    // 3. base64 data URL に変換（OpenAI Vision に渡す）
     const base64 = arrayBufferToBase64(imageBuffer)
     const dataUrl = `data:${contentType};base64,${base64}`
 
-    // ------------------------------------------------------------------
-    // 3. OpenAI Vision で画像分類
-    // ------------------------------------------------------------------
+    // 4. カテゴリ分類
     const ai = createOpenAIClient(env)
-
-    const classifyPrompt = `あなたは食事・健康管理アプリの画像分類AIです。
-送られてきた画像を以下のカテゴリのいずれか1つに分類し、JSONで回答してください。
-
-カテゴリ:
-- meal_photo        : 食事・料理の写真
-- nutrition_label   : 栄養成分表示ラベル
-- body_scale        : 体重計の数値が写った画像
-- food_package      : 食品パッケージ（原材料・栄養情報含む）
-- progress_body_photo : 体型・体の変化を記録する写真
-- other             : 上記以外
-
-回答形式（JSON）:
-{
-  "category": "<上記カテゴリのいずれか>",
-  "confidence": <0.0〜1.0の確信度>,
-  "description": "<画像の内容を1〜2文で説明（日本語）>"
-}`
-
-    const classifyResult = await ai.createVisionResponse(
-      classifyPrompt,
-      '添付画像を分類してください。',
+    const classifyRaw = await ai.createVisionResponse(
+      CLASSIFY_PROMPT,
+      '画像を分類してください。',
       dataUrl,
-      { responseFormat: 'json_object', imageDetail: 'low', maxTokens: 256 }
+      { responseFormat: 'json_object', imageDetail: 'low', maxTokens: 128 }
     )
 
     let category: ImageCategory = 'unknown'
-    let confidence = 0.5
-    let description = ''
-
+    let confidence = 0
     try {
-      const parsed = JSON.parse(classifyResult) as {
-        category?: string
-        confidence?: number
-        description?: string
-      }
+      const parsed = JSON.parse(classifyRaw) as { category?: string; confidence?: number }
       const validCategories: ImageCategory[] = [
         'meal_photo', 'nutrition_label', 'body_scale',
-        'food_package', 'progress_body_photo', 'other', 'unknown'
+        'food_package', 'progress_body_photo', 'other', 'unknown',
       ]
       if (parsed.category && validCategories.includes(parsed.category as ImageCategory)) {
         category = parsed.category as ImageCategory
       }
-      confidence = typeof parsed.confidence === 'number' ? parsed.confidence : 0.5
-      description = parsed.description ?? ''
+      confidence = typeof parsed.confidence === 'number' ? parsed.confidence : 0
     } catch {
-      console.warn('[ImageAnalysis] Category parse failed, defaulting to unknown')
+      console.warn('[Queue] classify JSON parse failed, using unknown')
     }
 
-    // ------------------------------------------------------------------
-    // 4. カテゴリ別アクション実行
-    // ------------------------------------------------------------------
-    const today = todayJst()
-    const dailyLog = await ensureDailyLog(env.DB, {
-      userAccountId,
-      clientAccountId,
-      logDate: today,
-    })
+    console.log(`[Queue] classified: ${category} (${confidence}) attachment=${attachmentId}`)
 
-    let proposedAction: Record<string, unknown> = {}
-    let extractedData: Record<string, unknown> = { description }
+    // 5. カテゴリ別詳細解析
+    let extractedJson: Record<string, unknown> | null = null
+    let proposedActionJson: Record<string, unknown> | null = null
     let replyMessage = ''
 
     switch (category) {
-      case 'meal_photo': {
-        const result = await analyzeMealPhoto(ai, dataUrl, dailyLog.id, userAccountId, env)
-        extractedData = { ...extractedData, ...result.extracted }
-        proposedAction = result.proposed
-        replyMessage = result.message
+      case 'meal_photo':
+        ;({ extractedJson, proposedActionJson, replyMessage } = await analyzeMealPhoto(
+          ai, dataUrl, userAccountId, clientAccountId, threadId, env
+        ))
         break
-      }
 
-      case 'body_scale': {
-        const result = await analyzeBodyScale(ai, dataUrl, dailyLog.id, env)
-        extractedData = { ...extractedData, ...result.extracted }
-        proposedAction = result.proposed
-        replyMessage = result.message
+      case 'nutrition_label':
+        ;({ extractedJson, proposedActionJson, replyMessage } = await analyzeNutritionLabel(
+          ai, dataUrl, userAccountId, clientAccountId, threadId, env
+        ))
         break
-      }
 
-      case 'nutrition_label': {
-        const result = await analyzeNutritionLabel(ai, dataUrl)
-        extractedData = { ...extractedData, ...result.extracted }
-        proposedAction = result.proposed
-        replyMessage = result.message
+      case 'body_scale':
+        ;({ extractedJson, proposedActionJson, replyMessage } = await analyzeBodyScale(
+          ai, dataUrl, userAccountId, clientAccountId, threadId, env
+        ))
         break
-      }
 
-      case 'food_package': {
-        const result = await analyzeNutritionLabel(ai, dataUrl)
-        extractedData = { ...extractedData, ...result.extracted }
-        proposedAction = result.proposed
-        replyMessage = result.message
+      case 'progress_body_photo':
+        ;({ extractedJson, proposedActionJson, replyMessage } = await analyzeProgressPhoto(
+          r2Key, userAccountId, clientAccountId, threadId, env
+        ))
         break
-      }
 
-      case 'progress_body_photo': {
-        // Phase 1: 受け取り確認のみ（比較UIは Phase 2）
-        replyMessage = `📸 体型写真を保存しました！\n継続して記録することで変化を確認できます。\n\n記録日: ${today}`
-        proposedAction = { action: 'store_progress_photo' }
+      default:
+        replyMessage = `📷 画像を受け取りました（${category}）。\n現時点では自動処理に対応していない種類の画像です。`
         break
-      }
-
-      default: {
-        replyMessage = `📷 画像を受け取りました。\n\n食事・体重計・栄養ラベルの写真を送ると自動で記録できます！`
-        proposedAction = { action: 'none' }
-        break
-      }
     }
 
-    // ------------------------------------------------------------------
-    // 5. image_intake_results を保存
-    // ------------------------------------------------------------------
+    // 6. image_intake_results を保存
     await saveImageIntakeResult(env.DB, {
       messageAttachmentId: attachmentId,
       userAccountId,
-      dailyLogId: dailyLog.id,
       imageCategory: category,
       confidenceScore: confidence,
-      extractedJson: extractedData,
-      proposedActionJson: proposedAction,
+      extractedJson,
+      proposedActionJson,
     })
 
-    // ------------------------------------------------------------------
-    // 6. BOT の発言として conversation_messages に保存
-    // ------------------------------------------------------------------
-    await createConversationMessage(env.DB, {
-      threadId,
-      senderType: 'bot',
-      messageType: 'text',
-      rawText: replyMessage,
-      modeAtSend: 'record',
-      sentAt: nowIso(),
-    })
-
-    // ------------------------------------------------------------------
-    // 7. ジョブを 'done' に更新
-    // ------------------------------------------------------------------
+    // 7. ジョブを done に更新
     await updateJobStatus(env.DB, job.id, 'done')
 
-    // ------------------------------------------------------------------
     // 8. LINE push で結果通知
-    // ------------------------------------------------------------------
-    await pushText(lineUserId, replyMessage, env.LINE_CHANNEL_ACCESS_TOKEN)
+    if (replyMessage && lineUserId) {
+      await pushText(lineUserId, replyMessage, env.LINE_CHANNEL_ACCESS_TOKEN).catch((err) => {
+        console.warn('[Queue] LINE push failed (non-fatal):', err)
+      })
 
-    console.log(`[ImageAnalysis] Done: attachment=${attachmentId} category=${category}`)
+      // bot 発言をスレッドに保存
+      await createConversationMessage(env.DB, {
+        threadId,
+        senderType: 'bot',
+        messageType: 'text',
+        rawText: replyMessage,
+        modeAtSend: 'record',
+        sentAt: nowIso(),
+      }).catch((err) => {
+        console.warn('[Queue] saveMessage failed (non-fatal):', err)
+      })
+    }
   } catch (err) {
-    console.error(`[ImageAnalysis] Failed: attachment=${attachmentId}`, err)
-    await updateJobStatus(env.DB, job.id, 'failed', String(err))
+    console.error(`[Queue] processImageAnalysis failed attachment=${attachmentId}:`, err)
+    await updateJobStatus(env.DB, job.id, 'failed', String(err)).catch(() => {})
 
-    // エラー時もユーザーに通知
-    try {
+    // ユーザーにエラーを通知
+    if (lineUserId) {
       await pushText(
         lineUserId,
-        '画像の解析に失敗しました。もう一度お試しいただくか、テキストで記録してください。',
+        '画像の解析に失敗しました。お手数ですが、もう一度お試しください。',
         env.LINE_CHANNEL_ACCESS_TOKEN
-      )
-    } catch (notifyErr) {
-      console.error('[ImageAnalysis] Push notification failed:', notifyErr)
+      ).catch(() => {})
     }
-    throw err
+    throw err // Queue に retry させる
   }
 }
 
@@ -268,226 +265,261 @@ async function processImageAnalysis(
 // カテゴリ別解析関数
 // ===================================================================
 
-/** 食事写真解析 */
 async function analyzeMealPhoto(
   ai: ReturnType<typeof createOpenAIClient>,
   dataUrl: string,
-  dailyLogId: string,
   userAccountId: string,
+  clientAccountId: string,
+  threadId: string,
   env: Bindings
-): Promise<{ extracted: Record<string, unknown>; proposed: Record<string, unknown>; message: string }> {
-  const prompt = `あなたは食事記録AIです。添付の食事写真を分析し、以下のJSON形式で回答してください。
-
-{
-  "meal_type": "breakfast" | "lunch" | "dinner" | "snack" | "other",
-  "food_items": ["食品名1", "食品名2", ...],
-  "estimated_calories": <推定カロリー（kcal）、不明な場合はnull>,
-  "estimated_protein_g": <推定タンパク質（g）、不明な場合はnull>,
-  "estimated_fat_g": <推定脂質（g）、不明な場合はnull>,
-  "estimated_carbs_g": <推定炭水化物（g）、不明な場合はnull>,
-  "confidence": <0.0〜1.0>,
-  "notes": "<特記事項（日本語）、なければ空文字>"
-}`
-
+): Promise<{
+  extractedJson: Record<string, unknown>
+  proposedActionJson: Record<string, unknown>
+  replyMessage: string
+}> {
   const raw = await ai.createVisionResponse(
-    prompt,
-    '添付の食事写真を分析してください。',
+    MEAL_ANALYSIS_PROMPT,
+    '食事の栄養情報を推定してください。',
     dataUrl,
     { responseFormat: 'json_object', imageDetail: 'high', maxTokens: 512 }
   )
 
-  let extracted: Record<string, unknown> = {}
-  let mealType: 'breakfast' | 'lunch' | 'dinner' | 'snack' | 'other' = 'other'
-  let calories: number | null = null
-  let foodItems: string[] = []
-
+  let parsed: Record<string, unknown> = {}
   try {
-    const parsed = JSON.parse(raw) as {
-      meal_type?: string
-      food_items?: string[]
-      estimated_calories?: number | null
-      estimated_protein_g?: number | null
-      estimated_fat_g?: number | null
-      estimated_carbs_g?: number | null
-      confidence?: number
-      notes?: string
-    }
+    parsed = JSON.parse(raw)
+  } catch {
+    parsed = { raw_response: raw }
+  }
 
-    const validMealTypes = ['breakfast', 'lunch', 'dinner', 'snack', 'other'] as const
-    if (parsed.meal_type && validMealTypes.includes(parsed.meal_type as typeof validMealTypes[number])) {
-      mealType = parsed.meal_type as typeof mealType
-    }
-    foodItems = parsed.food_items ?? []
-    calories = parsed.estimated_calories ?? null
-    extracted = {
-      meal_type: mealType,
-      food_items: foodItems,
-      estimated_calories: calories,
-      estimated_protein_g: parsed.estimated_protein_g ?? null,
-      estimated_fat_g: parsed.estimated_fat_g ?? null,
-      estimated_carbs_g: parsed.estimated_carbs_g ?? null,
-      confidence: parsed.confidence ?? 0.5,
-      notes: parsed.notes ?? '',
-    }
+  const today = todayJst()
+  const dailyLog = await ensureDailyLog(env.DB, {
+    userAccountId,
+    clientAccountId,
+    logDate: today,
+  })
 
-    // meal_entries に保存
-    await createMealEntry(env.DB, {
-      dailyLogId,
-      mealType,
-      mealText: foodItems.join('、'),
-      confirmationStatus: 'estimated',
+  // meal_type の判定
+  const guessedType = (parsed.meal_type_guess as string) ?? 'other'
+  const mealType =
+    ['breakfast', 'lunch', 'dinner', 'snack', 'other'].includes(guessedType)
+      ? (guessedType as 'breakfast' | 'lunch' | 'dinner' | 'snack' | 'other')
+      : 'other'
+
+  // 既存エントリを確認して更新または新規作成
+  const existing = await findMealEntryByDailyLogAndType(env.DB, dailyLog.id, mealType)
+  if (existing) {
+    await updateMealEntryFromEstimate(env.DB, existing.id, {
+      mealText: (parsed.meal_description as string) ?? null,
+      caloriesKcal: (parsed.estimated_calories_kcal as number) ?? null,
+      proteinG: (parsed.estimated_protein_g as number) ?? null,
+      fatG: (parsed.estimated_fat_g as number) ?? null,
+      carbsG: (parsed.estimated_carbs_g as number) ?? null,
+      confirmationStatus: 'ai_estimated',
     })
-
-    // 栄養推定値を更新
-    if (calories !== null) {
-      const { findMealEntryByDailyLogAndType } = await import('../repositories/meal-entries-repo')
-      const entry = await findMealEntryByDailyLogAndType(env.DB, dailyLogId, mealType)
-      if (entry) {
-        await updateMealEntryFromEstimate(env.DB, entry.id, {
-          estimatedCaloriesKcal: calories ?? undefined,
-          estimatedProteinG: (parsed.estimated_protein_g ?? undefined) as number | undefined,
-          estimatedFatG: (parsed.estimated_fat_g ?? undefined) as number | undefined,
-          estimatedCarbsG: (parsed.estimated_carbs_g ?? undefined) as number | undefined,
-        })
-      }
-    }
-  } catch (e) {
-    console.warn('[ImageAnalysis] Meal parse failed:', e)
-    extracted = { raw }
+    await incrementMealPhotoCount(env.DB, existing.id)
+  } else {
+    await createMealEntry(env.DB, {
+      dailyLogId: dailyLog.id,
+      mealType,
+      mealText: (parsed.meal_description as string) ?? null,
+      caloriesKcal: (parsed.estimated_calories_kcal as number) ?? null,
+      proteinG: (parsed.estimated_protein_g as number) ?? null,
+      fatG: (parsed.estimated_fat_g as number) ?? null,
+      carbsG: (parsed.estimated_carbs_g as number) ?? null,
+      confirmationStatus: 'ai_estimated',
+    })
   }
 
-  const mealLabel = mealType === 'breakfast' ? '朝食' : mealType === 'lunch' ? '昼食' : mealType === 'dinner' ? '夕食' : mealType === 'snack' ? '間食' : '食事'
-  const caloriesText = calories !== null ? `\n推定カロリー: 約${calories}kcal` : ''
-  const itemsText = foodItems.length > 0 ? `\n${foodItems.join('・')}` : ''
+  const cal = parsed.estimated_calories_kcal
+  const desc = (parsed.meal_description as string) ?? '食事'
+  const mealTypeJa =
+    mealType === 'breakfast' ? '朝食' :
+    mealType === 'lunch' ? '昼食' :
+    mealType === 'dinner' ? '夕食' :
+    mealType === 'snack' ? '間食' : '食事'
 
-  const message = `🍽 ${mealLabel}を記録しました ✅${itemsText}${caloriesText}\n\n内容が違う場合はテキストで修正できます。`
+  const replyMessage =
+    `🍽 ${mealTypeJa}の解析が完了しました！\n\n` +
+    `📝 ${desc}\n` +
+    (cal ? `🔥 推定カロリー: ${cal} kcal\n` : '') +
+    (parsed.estimated_protein_g ? `💪 タンパク質: ${parsed.estimated_protein_g}g\n` : '') +
+    `\n※ AIによる推定値です。正確な値は食品ラベルをご確認ください。`
 
   return {
-    extracted,
-    proposed: { action: 'meal_recorded', meal_type: mealType },
-    message,
+    extractedJson: parsed,
+    proposedActionJson: { action: 'update_meal_entry', meal_type: mealType, daily_log_id: dailyLog.id },
+    replyMessage,
   }
 }
 
-/** 体重計写真解析 */
-async function analyzeBodyScale(
-  ai: ReturnType<typeof createOpenAIClient>,
-  dataUrl: string,
-  dailyLogId: string,
-  env: Bindings
-): Promise<{ extracted: Record<string, unknown>; proposed: Record<string, unknown>; message: string }> {
-  const prompt = `体重計の画像から数値を読み取り、以下のJSON形式で回答してください。
-
-{
-  "weight_kg": <体重（kg、小数点第1位まで）、読み取れない場合はnull>,
-  "body_fat_percent": <体脂肪率（%）、表示がない場合はnull>,
-  "confidence": <0.0〜1.0>,
-  "notes": "<特記事項>"
-}`
-
-  const raw = await ai.createVisionResponse(
-    prompt,
-    '体重計の数値を読み取ってください。',
-    dataUrl,
-    { responseFormat: 'json_object', imageDetail: 'high', maxTokens: 256 }
-  )
-
-  let weightKg: number | null = null
-  let bodyFatPercent: number | null = null
-  let extracted: Record<string, unknown> = {}
-
-  try {
-    const parsed = JSON.parse(raw) as {
-      weight_kg?: number | null
-      body_fat_percent?: number | null
-      confidence?: number
-      notes?: string
-    }
-    weightKg = parsed.weight_kg ?? null
-    bodyFatPercent = parsed.body_fat_percent ?? null
-    extracted = { weight_kg: weightKg, body_fat_percent: bodyFatPercent, confidence: parsed.confidence ?? 0.5 }
-
-    if (weightKg !== null && weightKg > 20 && weightKg < 300) {
-      await upsertWeight(env.DB, { dailyLogId, weightKg, bodyFatPercent: bodyFatPercent ?? undefined })
-    }
-  } catch (e) {
-    console.warn('[ImageAnalysis] Scale parse failed:', e)
-    extracted = { raw }
-  }
-
-  if (weightKg !== null) {
-    const fatText = bodyFatPercent !== null ? `　体脂肪率: ${bodyFatPercent}%` : ''
-    return {
-      extracted,
-      proposed: { action: 'weight_recorded', weight_kg: weightKg },
-      message: `⚖️ 体重を記録しました ✅\n${weightKg}kg${fatText}\n\n継続して記録することで変化が分かります！`,
-    }
-  }
-
-  return {
-    extracted,
-    proposed: { action: 'none' },
-    message: '⚖️ 体重計の数値が読み取れませんでした。\nテキストで「体重○○kg」と入力してください。',
-  }
-}
-
-/** 栄養ラベル / 食品パッケージ解析 */
 async function analyzeNutritionLabel(
   ai: ReturnType<typeof createOpenAIClient>,
-  dataUrl: string
-): Promise<{ extracted: Record<string, unknown>; proposed: Record<string, unknown>; message: string }> {
-  const prompt = `栄養成分表示ラベルまたは食品パッケージの画像から情報を読み取り、以下のJSON形式で回答してください。
-
-{
-  "product_name": "<商品名、不明の場合はnull>",
-  "serving_size_g": <1食分の量（g）、不明の場合はnull>,
-  "calories_kcal": <カロリー（kcal）、不明の場合はnull>,
-  "protein_g": <タンパク質（g）、不明の場合はnull>,
-  "fat_g": <脂質（g）、不明の場合はnull>,
-  "carbs_g": <炭水化物（g）、不明の場合はnull>,
-  "sodium_mg": <ナトリウム（mg）、不明の場合はnull>,
-  "confidence": <0.0〜1.0>,
-  "notes": "<特記事項>"
-}`
-
+  dataUrl: string,
+  userAccountId: string,
+  clientAccountId: string,
+  threadId: string,
+  env: Bindings
+): Promise<{
+  extractedJson: Record<string, unknown>
+  proposedActionJson: Record<string, unknown>
+  replyMessage: string
+}> {
   const raw = await ai.createVisionResponse(
-    prompt,
+    NUTRITION_LABEL_PROMPT,
     '栄養成分表示を読み取ってください。',
     dataUrl,
     { responseFormat: 'json_object', imageDetail: 'high', maxTokens: 512 }
   )
 
-  let extracted: Record<string, unknown> = {}
-  let productName: string | null = null
-  let calories: number | null = null
-
+  let parsed: Record<string, unknown> = {}
   try {
-    const parsed = JSON.parse(raw) as {
-      product_name?: string | null
-      serving_size_g?: number | null
-      calories_kcal?: number | null
-      protein_g?: number | null
-      fat_g?: number | null
-      carbs_g?: number | null
-      sodium_mg?: number | null
-      confidence?: number
-      notes?: string
-    }
-    productName = parsed.product_name ?? null
-    calories = parsed.calories_kcal ?? null
-    extracted = { ...parsed }
-  } catch (e) {
-    console.warn('[ImageAnalysis] Nutrition label parse failed:', e)
-    extracted = { raw }
+    parsed = JSON.parse(raw)
+  } catch {
+    parsed = { raw_response: raw }
   }
 
-  const nameText = productName ? `「${productName}」` : '商品'
-  const calText = calories !== null ? `\nカロリー: ${calories}kcal/食` : ''
+  const today = todayJst()
+  const dailyLog = await ensureDailyLog(env.DB, {
+    userAccountId,
+    clientAccountId,
+    logDate: today,
+  })
+
+  // 食事エントリに栄養情報を反映（other として記録）
+  const existing = await findMealEntryByDailyLogAndType(env.DB, dailyLog.id, 'other')
+  if (existing) {
+    await updateMealEntryFromEstimate(env.DB, existing.id, {
+      mealText: (parsed.product_name as string) ?? '栄養成分ラベル',
+      caloriesKcal: (parsed.calories_kcal as number) ?? null,
+      proteinG: (parsed.protein_g as number) ?? null,
+      fatG: (parsed.fat_g as number) ?? null,
+      carbsG: (parsed.carbs_g as number) ?? null,
+      confirmationStatus: 'ai_estimated',
+    })
+  } else {
+    await createMealEntry(env.DB, {
+      dailyLogId: dailyLog.id,
+      mealType: 'other',
+      mealText: (parsed.product_name as string) ?? '栄養成分ラベル',
+      caloriesKcal: (parsed.calories_kcal as number) ?? null,
+      proteinG: (parsed.protein_g as number) ?? null,
+      fatG: (parsed.fat_g as number) ?? null,
+      carbsG: (parsed.carbs_g as number) ?? null,
+      confirmationStatus: 'ai_estimated',
+    })
+  }
+
+  const name = (parsed.product_name as string) ?? '食品'
+  const cal = parsed.calories_kcal
+
+  const replyMessage =
+    `🏷 栄養成分ラベルを読み取りました！\n\n` +
+    `📦 ${name}\n` +
+    (cal ? `🔥 カロリー: ${cal} kcal\n` : '') +
+    (parsed.protein_g ? `💪 タンパク質: ${parsed.protein_g}g\n` : '') +
+    (parsed.carbs_g ? `🍚 炭水化物: ${parsed.carbs_g}g\n` : '') +
+    (parsed.fat_g ? `🧈 脂質: ${parsed.fat_g}g\n` : '')
 
   return {
-    extracted,
-    proposed: { action: 'nutrition_label_scanned', product_name: productName },
-    message: `🏷 ${nameText}の栄養情報を読み取りました ✅${calText}\n\n食事記録に追加しますか？`,
+    extractedJson: parsed,
+    proposedActionJson: { action: 'update_meal_entry', meal_type: 'other', daily_log_id: dailyLog.id },
+    replyMessage,
+  }
+}
+
+async function analyzeBodyScale(
+  ai: ReturnType<typeof createOpenAIClient>,
+  dataUrl: string,
+  userAccountId: string,
+  clientAccountId: string,
+  threadId: string,
+  env: Bindings
+): Promise<{
+  extractedJson: Record<string, unknown>
+  proposedActionJson: Record<string, unknown>
+  replyMessage: string
+}> {
+  const raw = await ai.createVisionResponse(
+    SCALE_PROMPT,
+    '体重計の数値を読み取ってください。',
+    dataUrl,
+    { responseFormat: 'json_object', imageDetail: 'high', maxTokens: 256 }
+  )
+
+  let parsed: Record<string, unknown> = {}
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    parsed = { raw_response: raw }
+  }
+
+  const weightKg = parsed.weight_kg as number | null | undefined
+  let replyMessage = ''
+
+  if (weightKg && weightKg > 20 && weightKg < 300) {
+    const today = todayJst()
+    const dailyLog = await ensureDailyLog(env.DB, {
+      userAccountId,
+      clientAccountId,
+      logDate: today,
+    })
+    await upsertBodyMetrics(env.DB, {
+      dailyLogId: dailyLog.id,
+      weightKg,
+    })
+    replyMessage =
+      `⚖️ 体重計を読み取りました！\n\n` +
+      `体重: ${weightKg} kg を記録しました ✅\n\n` +
+      `継続して記録することで体重推移を可視化できます 📈`
+  } else {
+    replyMessage =
+      `⚖️ 体重計の画像を受け取りましたが、数値を正確に読み取れませんでした。\n\n` +
+      `テキストで「体重○○kg」と送っていただくと確実に記録できます。`
+  }
+
+  return {
+    extractedJson: parsed,
+    proposedActionJson: weightKg ? { action: 'upsert_weight', weight_kg: weightKg } : {},
+    replyMessage,
+  }
+}
+
+async function analyzeProgressPhoto(
+  r2Key: string,
+  userAccountId: string,
+  clientAccountId: string,
+  threadId: string,
+  env: Bindings
+): Promise<{
+  extractedJson: Record<string, unknown>
+  proposedActionJson: Record<string, unknown>
+  replyMessage: string
+}> {
+  const today = todayJst()
+  const dailyLog = await ensureDailyLog(env.DB, {
+    userAccountId,
+    clientAccountId,
+    logDate: today,
+  })
+
+  // progress_photos テーブルに保存
+  await createProgressPhoto(env.DB, {
+    userAccountId,
+    dailyLogId: dailyLog.id,
+    photoDate: today,
+    storageKey: r2Key,
+    photoType: 'progress',
+  })
+
+  const replyMessage =
+    `📸 体型写真を保存しました！\n\n` +
+    `継続して撮影することで、体型の変化を記録・比較できます。\n` +
+    `ダッシュボードから進捗写真を確認できます。`
+
+  return {
+    extractedJson: { r2_key: r2Key, photo_date: today },
+    proposedActionJson: { action: 'create_progress_photo', daily_log_id: dailyLog.id },
+    replyMessage,
   }
 }
 
@@ -495,7 +527,7 @@ async function analyzeNutritionLabel(
 // ユーティリティ
 // ===================================================================
 
-/** ArrayBuffer を base64 文字列に変換（Cloudflare Workers 対応） */
+/** ArrayBuffer → Base64 文字列（Cloudflare Workers 対応） */
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer)
   let binary = ''
