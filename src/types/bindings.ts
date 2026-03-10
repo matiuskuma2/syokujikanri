@@ -18,6 +18,7 @@ export type Bindings = {
   // マルチチャンネル化後は line_channels テーブルで解決する
   LINE_CHANNEL_ID: string        // D1 line_channels.id に対応するシステム内部 ID (UUID)
   LINE_LIFF_CHANNEL_ID: string   // LINE Login / LIFF の Channel ID (数字10桁) — /oauth2/v2.1/verify の client_id に使用
+  LINE_LIFF_ID: string           // LIFF ID (数字-英数字) — LIFF SDK の liff.init() に使用
   CLIENT_ACCOUNT_ID: string      // D1 accounts.id に対応するクライアントアカウント ID
 
   // === OpenAI ===

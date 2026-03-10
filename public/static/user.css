@@ -1,0 +1,416 @@
+/* ================================================================
+   diet-bot User PWA — スタイルシート
+   対象: /dashboard, /liff
+   ================================================================ */
+
+:root {
+  --color-primary:   #22c55e;
+  --color-primary-d: #16a34a;
+  --color-primary-l: #dcfce7;
+  --color-bg:        #f0fdf4;
+  --color-card:      #ffffff;
+  --color-text:      #1f2937;
+  --color-muted:     #6b7280;
+  --color-border:    #e5e7eb;
+  --color-danger:    #ef4444;
+  --radius-card:     16px;
+  --shadow-card:     0 2px 12px rgba(0,0,0,0.08);
+  --bottom-bar:      72px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  font-family: 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Meiryo', sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ================================================================
+   Loading / Auth screen
+   ================================================================ */
+#loading-screen, #auth-error-screen {
+  position: fixed; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  background: var(--color-bg);
+  z-index: 100;
+  gap: 16px;
+}
+#auth-error-screen { display: none; }
+
+.spinner {
+  width: 40px; height: 40px;
+  border: 3px solid var(--color-primary-l);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ================================================================
+   App Container
+   ================================================================ */
+#app {
+  display: none;
+  max-width: 430px;
+  margin: 0 auto;
+  padding: 0 0 var(--bottom-bar);
+  min-height: 100vh;
+}
+
+/* ================================================================
+   Header
+   ================================================================ */
+.app-header {
+  position: sticky; top: 0; z-index: 50;
+  background: var(--color-card);
+  border-bottom: 1px solid var(--color-border);
+  padding: 12px 16px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.app-header .logo {
+  display: flex; align-items: center; gap: 8px;
+}
+.app-header .logo-icon {
+  width: 32px; height: 32px;
+  background: var(--color-primary);
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  color: white; font-size: 14px;
+}
+.app-header .logo-text {
+  font-size: 16px; font-weight: 700; color: var(--color-text);
+}
+.app-header .user-avatar {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: var(--color-primary-l);
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+  cursor: pointer;
+}
+.app-header .user-avatar img {
+  width: 100%; height: 100%; object-fit: cover;
+}
+
+/* ================================================================
+   Bottom Navigation
+   ================================================================ */
+.bottom-nav {
+  position: fixed; bottom: 0; left: 50%;
+  transform: translateX(-50%);
+  width: 100%; max-width: 430px;
+  background: var(--color-card);
+  border-top: 1px solid var(--color-border);
+  display: flex; height: var(--bottom-bar);
+  z-index: 50;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.nav-item {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 3px;
+  cursor: pointer;
+  color: var(--color-muted);
+  font-size: 10px;
+  border: none; background: none;
+  padding: 8px 4px;
+  transition: color 0.15s;
+}
+.nav-item i { font-size: 20px; }
+.nav-item.active { color: var(--color-primary); }
+
+/* ================================================================
+   Page sections
+   ================================================================ */
+.page-section { display: none; padding: 16px; }
+.page-section.active { display: block; }
+
+/* ================================================================
+   Cards
+   ================================================================ */
+.card {
+  background: var(--color-card);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  margin-bottom: 12px;
+}
+.card-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px 0;
+}
+.card-title {
+  font-size: 13px; font-weight: 600; color: var(--color-muted);
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+.card-body { padding: 12px 16px 16px; }
+
+/* ================================================================
+   Today Summary Card
+   ================================================================ */
+.summary-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+  margin-bottom: 12px;
+}
+.summary-item {
+  border-radius: 12px; padding: 12px;
+  text-align: center;
+}
+.summary-item.green  { background: #f0fdf4; }
+.summary-item.blue   { background: #eff6ff; }
+.summary-item.orange { background: #fff7ed; }
+.summary-item.purple { background: #faf5ff; }
+.summary-item .val {
+  font-size: 22px; font-weight: 700; line-height: 1.1;
+}
+.summary-item.green  .val { color: #16a34a; }
+.summary-item.blue   .val { color: #2563eb; }
+.summary-item.orange .val { color: #ea580c; }
+.summary-item.purple .val { color: #7c3aed; }
+.summary-item .label {
+  font-size: 11px; color: var(--color-muted); margin-top: 2px;
+}
+
+.pfc-row {
+  display: grid; grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px; text-align: center;
+}
+.pfc-item .val { font-size: 16px; font-weight: 700; }
+.pfc-item.p .val { color: #ea580c; }
+.pfc-item.f .val { color: #ca8a04; }
+.pfc-item.c .val { color: #7c3aed; }
+.pfc-item .label { font-size: 11px; color: var(--color-muted); }
+
+/* ================================================================
+   Streak / Calorie Bar
+   ================================================================ */
+.streak-block {
+  display: flex; align-items: center; justify-content: space-between;
+}
+.streak-num { font-size: 28px; font-weight: 800; color: #f97316; }
+.streak-unit { font-size: 13px; color: var(--color-muted); margin-left: 2px; }
+.streak-label { font-size: 13px; font-weight: 600; color: var(--color-text); }
+
+.calorie-bar {
+  margin-top: 8px;
+  height: 8px; border-radius: 4px;
+  background: var(--color-primary-l);
+  overflow: hidden;
+}
+.calorie-bar-fill {
+  height: 100%; border-radius: 4px;
+  background: var(--color-primary);
+  transition: width 0.6s ease;
+}
+
+/* ================================================================
+   Meal List
+   ================================================================ */
+.meal-item {
+  display: flex; align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--color-border);
+  gap: 10px;
+}
+.meal-item:last-child { border-bottom: none; }
+.meal-type-badge {
+  font-size: 10px; font-weight: 600;
+  padding: 2px 8px; border-radius: 999px;
+  white-space: nowrap;
+}
+.badge-breakfast { background: #fef9c3; color: #854d0e; }
+.badge-lunch     { background: #dcfce7; color: #166534; }
+.badge-dinner    { background: #ede9fe; color: #4c1d95; }
+.badge-snack     { background: #fee2e2; color: #991b1b; }
+.badge-other     { background: #f3f4f6; color: #374151; }
+
+.meal-info { flex: 1; min-width: 0; }
+.meal-name { font-size: 13px; color: var(--color-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meal-kcal { font-size: 12px; color: var(--color-muted); white-space: nowrap; }
+
+/* ================================================================
+   Weight Chart
+   ================================================================ */
+.chart-wrap { position: relative; height: 150px; }
+
+/* ================================================================
+   Record Log List (過去記録ページ)
+   ================================================================ */
+.log-date-header {
+  font-size: 12px; font-weight: 700;
+  color: var(--color-muted); letter-spacing: 0.05em;
+  padding: 12px 0 4px;
+}
+.log-row {
+  background: var(--color-card);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  display: flex; align-items: center; justify-content: space-between;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+.log-row:active { transform: scale(0.98); }
+.log-row .log-date-label { font-size: 14px; font-weight: 600; }
+.log-row .log-meta { font-size: 12px; color: var(--color-muted); margin-top: 2px; }
+.log-row .log-weight { font-size: 16px; font-weight: 700; color: var(--color-primary-d); }
+
+/* ================================================================
+   Progress Photos
+   ================================================================ */
+.photo-grid {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.photo-card {
+  border-radius: 12px; overflow: hidden;
+  background: var(--color-card);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+.photo-card img {
+  width: 100%; aspect-ratio: 3/4; object-fit: cover;
+  display: block;
+}
+.photo-card .photo-meta {
+  padding: 8px;
+  font-size: 11px; color: var(--color-muted);
+}
+.photo-card .photo-date { font-weight: 600; color: var(--color-text); }
+
+/* ================================================================
+   Weekly Report Card
+   ================================================================ */
+.report-card {
+  background: var(--color-card);
+  border-radius: var(--radius-card);
+  padding: 16px;
+  margin-bottom: 12px;
+  box-shadow: var(--shadow-card);
+}
+.report-week { font-size: 12px; color: var(--color-muted); margin-bottom: 8px; }
+.report-stats {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 8px; margin-bottom: 12px;
+}
+.report-stat { text-align: center; }
+.report-stat .val { font-size: 15px; font-weight: 700; color: var(--color-text); }
+.report-stat .lbl { font-size: 10px; color: var(--color-muted); }
+.report-summary {
+  font-size: 13px; color: #374151; line-height: 1.6;
+  background: #f8fafc; border-radius: 8px; padding: 10px;
+  white-space: pre-wrap;
+}
+
+/* ================================================================
+   Profile Page
+   ================================================================ */
+.profile-header {
+  display: flex; flex-direction: column; align-items: center;
+  padding: 24px 16px 16px;
+}
+.profile-avatar {
+  width: 72px; height: 72px; border-radius: 50%;
+  background: var(--color-primary-l);
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden; margin-bottom: 12px;
+}
+.profile-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.profile-name { font-size: 18px; font-weight: 700; }
+.profile-sub  { font-size: 13px; color: var(--color-muted); margin-top: 2px; }
+
+.settings-list { }
+.settings-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-card);
+}
+.settings-row:first-child { border-radius: var(--radius-card) var(--radius-card) 0 0; }
+.settings-row:last-child  { border-radius: 0 0 var(--radius-card) var(--radius-card); border-bottom: none; }
+.settings-label { font-size: 14px; }
+.toggle {
+  position: relative; width: 44px; height: 24px;
+}
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle-track {
+  position: absolute; inset: 0; border-radius: 12px;
+  background: var(--color-border); cursor: pointer;
+  transition: background 0.2s;
+}
+.toggle input:checked + .toggle-track { background: var(--color-primary); }
+.toggle-track::after {
+  content: '';
+  position: absolute; top: 2px; left: 2px;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: white; transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+.toggle input:checked + .toggle-track::after { transform: translateX(20px); }
+
+/* ================================================================
+   LINE 連携ボタン
+   ================================================================ */
+.line-cta {
+  display: block; width: 100%;
+  background: #06c755; color: white;
+  border: none; border-radius: 12px;
+  padding: 14px; font-size: 15px; font-weight: 600;
+  text-align: center; cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+.line-cta:hover { background: #05a848; }
+.line-cta i { margin-right: 6px; }
+
+/* ================================================================
+   Empty State
+   ================================================================ */
+.empty-state {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 40px 16px; text-align: center; color: var(--color-muted);
+}
+.empty-state i { font-size: 36px; margin-bottom: 12px; opacity: 0.4; }
+.empty-state p { font-size: 14px; line-height: 1.5; }
+
+/* ================================================================
+   Toast
+   ================================================================ */
+#toast {
+  position: fixed; bottom: 90px; left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: rgba(0,0,0,0.8); color: white;
+  padding: 10px 20px; border-radius: 999px;
+  font-size: 13px; opacity: 0;
+  transition: all 0.3s; pointer-events: none; white-space: nowrap;
+  z-index: 200;
+}
+#toast.show {
+  opacity: 1; transform: translateX(-50%) translateY(0);
+}
+
+/* ================================================================
+   Skeleton Loader
+   ================================================================ */
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position:  400px 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, #e5e7eb 25%, #f3f4f6 50%, #e5e7eb 75%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s infinite;
+  border-radius: 6px;
+}
+
+/* ================================================================
+   Responsive / Safe Area
+   ================================================================ */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .bottom-nav { padding-bottom: env(safe-area-inset-bottom); }
+  #app { padding-bottom: calc(var(--bottom-bar) + env(safe-area-inset-bottom)); }
+}
