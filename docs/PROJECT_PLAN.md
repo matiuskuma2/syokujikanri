@@ -3,7 +3,7 @@
 > **このドキュメントの目的**  
 > ドキュメント整備状況・現在のコード状態・実装フェーズのロードマップを管理する。  
 > 各タスクには「依存関係」「実装ファイル」「完了条件」を明記する。  
-> **最終更新: 2026-03-10（users/me 認証ルーティング & 画像配信 API を正式仕様に昇格・PROJECT_PLAN 反映）**
+> **最終更新: 2026-03-10（users/me 認証ルーティング & 画像配信 API を正式仕様に昇格。API.md に `/api/auth/line` / `/api/users/me/*` / `/api/files/*` の完全仕様を追加。IMPLEMENTATION_GUIDE.md セクション20 を正式仕様に昇格・詳細化）**
 
 ---
 
@@ -15,12 +15,12 @@
 | `docs/ARCHITECTURE.md` | ✅ 完了 | システム全体図・データフロー・セキュリティ |
 | `docs/DATABASE.md` | ✅ 完了 | テーブル定義・マイグレーション対応表・ID 体系・`user_account_id` 概念説明 |
 | `docs/REPOSITORY.md` | ✅ 完了 | Repository 層 SQL 実装仕様（正規型定義含む） |
-| `docs/API.md` | ✅ 完了 | エンドポイント定義・リクエスト/レスポンス形式（`/api/auth/line` / `/api/users/me/*` / `/api/files/*` 追加済み） |
+| `docs/API.md` | ✅ 完了 | エンドポイント定義・リクエスト/レスポンス形式（`/api/auth/line` / `/api/users/me/*` 全 6 エンドポイント / `/api/files/progress|meals/:id` / 署名付き URL（Phase 2）追加済み） |
 | `docs/PROMPTS.md` | ✅ 完了 | 全プロンプト定義（TypeScript 仕様） |
 | `docs/BOT_FLOW.md` | ✅ 完了 | モード・ステップコード・キーワード定義 |
 | `docs/DEPLOYMENT.md` | ✅ 完了 | ローカル・本番デプロイ手順 |
 | `docs/PROJECT_PLAN.md` | ✅ 完了（本ファイル） | フェーズ別実装計画 |
-| `docs/IMPLEMENTATION_GUIDE.md` | ✅ 完了 | 実装雛形・ロジック仕様・ユーティリティ集（セクション 20: users/me 認証フロー & 画像配信 API を正式仕様に昇格） |
+| `docs/IMPLEMENTATION_GUIDE.md` | ✅ 完了 | 実装雛形・ロジック仕様・ユーティリティ集（セクション 20: 20-A 認証フロー・JWT ペイロード設計 / 20-B Workers プロキシ方式・R2 キー命名規則 / 20-C 依存関係グラフ を正式仕様として確定） |
 
 ---
 
@@ -343,21 +343,29 @@ export function buildMissingQuestionPrompt(input: MissingQuestionInput)
 
 ### ユーザー API タスク
 
+> **注記（2026-03-10）**: `/api/user/*`（マジックリンク方式）と `/api/users/me/*`（JWT 方式）の 2 系統が存在する。  
+> MVP では `/api/users/me/*` を正式とし、`/api/user/*` は後方互換のため維持する。  
+> 詳細は `docs/API.md`「ユーザー API」「LINE ユーザー認証 API」「ユーザー認証付き API」を参照。
+
 | # | タスク | 実装ファイル | 状態 | 完了条件 |
 |---|---|---|---|---|
-| 1d-9 | ユーザーダッシュボード API | `src/routes/user/dashboard.ts` | ❌ 未作成（`user/index.ts` は要確認・整理） | GET /api/user/dashboard |
-| 1d-10 | 日次ログ API | `src/routes/user/records.ts` | ❌ 未作成 | GET 一覧 / GET 日別詳細 |
-| 1d-11 | 進捗写真 API | `src/routes/user/progress-photos.ts` | ❌ 未作成 | GET 一覧 |
-| 1d-12 | 週次レポート API | `src/routes/user/weekly-reports.ts` | ❌ 未作成 | GET 一覧 |
+| 1d-9 | ユーザーダッシュボード API（マジックリンク） | `src/routes/user/dashboard.ts` | ❌ 未作成（`user/index.ts` は要確認・整理） | GET /api/user/dashboard（後方互換） |
+| 1d-10 | 日次ログ API（マジックリンク） | `src/routes/user/records.ts` | ❌ 未作成 | GET 一覧 / GET 日別詳細 |
+| 1d-11 | 進捗写真 API（マジックリンク） | `src/routes/user/progress-photos.ts` | ❌ 未作成 | GET 一覧 |
+| 1d-12 | 週次レポート API（マジックリンク） | `src/routes/user/weekly-reports.ts` | ❌ 未作成 | GET 一覧 |
+| 1d-13a | LINE LIFF トークン認証 & JWT 発行 | `src/routes/line/auth.ts` | ❌ 未作成 | POST /api/auth/line が LINE Profile API 検証 → JWT 発行。`INVALID_LINE_TOKEN` / `USER_NOT_REGISTERED` エラーハンドリング済み |
+| 1d-13b | ユーザー認証付き API（JWT 方式） | `src/routes/user/me.ts` | ❌ 未作成 | GET /api/users/me 全 6 エンドポイントが requireAuth + RBAC 経由で動作。`jwt.sub = userAccountId` で絞り込み |
+| 1d-13c | 画像配信プロキシ | `src/routes/user/files.ts` | ❌ 未作成 | GET /api/files/progress/:id と /api/files/meals/:id が所有者チェック + R2 プロキシで動作 |
+| 1d-13d | 添付ファイル Repository | `src/repositories/attachments-repo.ts` | ❌ 未作成 | `getMessageAttachmentById` / `getThreadByAttachmentId` が IMPLEMENTATION_GUIDE.md 20-B の SQL 通りに動作 |
 
 ### フロントエンド（ダッシュボード UI）タスク
 
 | # | タスク | 実装ファイル | 状態 | 完了条件 |
 |---|---|---|---|---|
-| 1d-13 | 管理者ダッシュボード HTML | `src/index.ts`（インライン） | 🔍 要確認（595行あり） | ログイン・サマリー・ユーザー一覧が正規 API エンドポイントを呼び出す |
-| 1d-14 | ユーザー PWA HTML | `src/index.ts`（インライン） | 🔍 要確認（上記と同） | 体重グラフ・食事ログ・進捗写真 |
-| 1d-15 | 管理者 JS | `public/static/admin.js` | 🔍 要確認 | API 呼び出し・UI 更新 |
-| 1d-16 | ユーザー JS | `public/static/user.js` | 🔍 要確認 | API 呼び出し・グラフ表示 |
+| 1d-14 | 管理者ダッシュボード HTML | `src/index.ts`（インライン） | 🔍 要確認（595行あり） | ログイン・サマリー・ユーザー一覧が正規 API エンドポイントを呼び出す |
+| 1d-15 | ユーザー PWA HTML | `src/index.ts`（インライン） | 🔍 要確認（上記と同） | 体重グラフ・食事ログ・進捗写真。画像表示は Fetch API + Object URL を使用（Bearer トークン付与のため） |
+| 1d-16 | 管理者 JS | `public/static/admin.js` | 🔍 要確認 | API 呼び出し・UI 更新 |
+| 1d-17 | ユーザー JS | `public/static/user.js` | 🔍 要確認 | API 呼び出し・グラフ表示。`/api/files/*` の画像は Fetch + Object URL 変換パターンで実装 |
 
 **依存関係**: Phase 1a + 1b 完了後（1c は並行可）  
 **参照ドキュメント**: `docs/API.md`
@@ -461,24 +469,35 @@ JWT ペイロードは `{ sub: userAccountId, role: 'user', accountId: clientAcc
 | タスク | 実装ファイル | 依存 | 状態 |
 |---|---|---|---|
 | 添付ファイル Repository | `src/repositories/attachments-repo.ts` | types/db.ts | ❌ 未作成 |
-| 画像プロキシエンドポイント | `src/routes/user/files.ts` | attachments-repo / R2 | ❌ 未作成 |
+| 画像プロキシエンドポイント | `src/routes/user/files.ts` | attachments-repo / R2 / auth.ts | ❌ 未作成 |
 | conversation_threads に user_account_id カラム確認 | `migrations/0008_*.sql` | DATABASE.md DDL | 🔍 要確認 |
 
 **設計メモ**: `IMPLEMENTATION_GUIDE.md` セクション 20-B 参照。  
-MVP は Workers プロキシ方式（方針 A）で実装する。R2 署名付き URL は将来対応。
+MVP は Workers プロキシ方式（方針 A）で実装する。R2 署名付き URL（`GET /api/files/progress/:id/signed-url`）は Phase 2 対応。
+
+**所有者チェックの流れ**:
+```
+requireAuth(request, env) → jwt.sub = userAccountId
+  ↓
+getThreadByAttachmentId(db, attachmentId) → thread.user_account_id
+  ↓
+thread.user_account_id !== jwt.sub → 403 FORBIDDEN
+  ↓ 一致
+env.R2.get(attachment.storage_key) → Response(body)
+```
 
 ---
 
-### コードスニペット追加（2026-03-10）
+### ドキュメント更新ログ（2026-03-10）
 
-以下のコードスニペットを `IMPLEMENTATION_GUIDE.md` に追記済み:
-
-| セクション | 内容 |
+| ドキュメント | 更新内容 |
 |---|---|
-| セクション 17 | `src/services/ai/response-parser.ts` 完全実装雛形 |
-| セクション 18 | `src/services/ai/schemas.ts` 全 Zod スキーマ完全実装雛形 |
-| セクション 19 | `src/services/daily-logs/classify-input.ts` 完全実装雛形 |
-| セクション 20 | `/api/users/me` 認証フロー設計・`/api/files/progress/:id` 設計 |
+| `IMPLEMENTATION_GUIDE.md` セクション 17 | `src/services/ai/response-parser.ts` 完全実装雛形 |
+| `IMPLEMENTATION_GUIDE.md` セクション 18 | `src/services/ai/schemas.ts` 全 Zod スキーマ完全実装雛形 |
+| `IMPLEMENTATION_GUIDE.md` セクション 19 | `src/services/daily-logs/classify-input.ts` 完全実装雛形 |
+| `IMPLEMENTATION_GUIDE.md` セクション 20 | `/api/users/me` 認証フロー（20-A）/ 画像配信 API（20-B）/ 依存関係グラフ（20-C）を正式仕様として確定 |
+| `API.md` | `POST /api/auth/line`・`GET /api/users/me` 全 6 エンドポイント・`GET /api/files/progress|meals/:id`・署名付き URL（Phase 2）の仕様を追加 |
+| `PROJECT_PLAN.md`（本ファイル） | Phase 1d ユーザー API タスクに 1d-13a〜1d-13d を追加。フロントエンドタスクに画像配信の注意点を追記 |
 
 ---
 
