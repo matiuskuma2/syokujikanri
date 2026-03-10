@@ -503,12 +503,17 @@ env.R2.get(attachment.storage_key) → Response(body)
 
 ## スコープ外（Phase 2 以降）
 
+> **食事解析の方針（重要）**: Phase 1 は **OpenAI Vision のみ**で実装。  
+> 外部食品 DB 連携は Phase 2 以降で検討する。FatSecret は採用しない（OpenAI → 日本食品辞書 → 必要なら外部 DB の順で段階的に強化）。
+
 | 機能 | Phase |
 |---|---|
-| 高精度食事画像 API（FatSecret 等） | Phase 2 |
+| 高精度食事画像 API（日本食品辞書・FoodData Central 等） | Phase 2 |
 | バーコード読み取り連携 | Phase 3 |
 | 体重計・歩数計デバイス連携 | Phase 3+ |
 | 自動課金・多店舗管理 | Phase 3+ |
 | Instagram 自動投稿・販促素材生成 | Phase 3+ |
 | 音声入力フロー | Phase 3+ |
 | 医療診断機能 | スコープ外 |
+| R2 署名付き URL（`/api/files/*/signed-url`） | Phase 2 |
+| 進捗写真 比較 UI 強化・週次との紐付け | Phase 2 |

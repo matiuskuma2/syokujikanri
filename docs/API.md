@@ -2,8 +2,13 @@
 
 ## 概要
 Hono フレームワーク（Cloudflare Workers）で実装。
-管理者 API は JWT 認証必須。
-ユーザー API はクエリパラメータで `line_user_id` と `account_id` を渡す形式（マジックリンク認証）。
+
+**認証方式は 2 系統**:
+- **管理者 API**: `Authorization: Bearer <JWT>`（管理者専用 JWT）
+- **ユーザー API（正式・JWT 方式）**: `Authorization: Bearer <JWT>`（`POST /api/auth/line` で発行）
+  - エンドポイント群: `/api/users/me/*`、`/api/files/*`
+- **ユーザー API（後方互換・マジックリンク方式）**: クエリパラメータ `line_user_id` + `account_id`
+  - エンドポイント群: `/api/user/*`（MVP 完了後も維持）
 
 ---
 
@@ -12,12 +17,16 @@ Hono フレームワーク（Cloudflare Workers）で実装。
 | 項目 | 値 |
 |---|---|
 | **管理者 API** | `/api/admin/*` |
-| **ユーザー API** | `/api/user/*` |
+| **ユーザー API（JWT・正式）** | `/api/users/me/*`（`POST /api/auth/line` で発行したトークン） |
+| **ユーザー API（マジックリンク・後方互換）** | `/api/user/*`（クエリパラメータ `line_user_id` + `account_id`） |
+| **LINE 認証** | `/api/auth/line`（LINE LIFF → JWT 発行） |
+| **画像配信** | `/api/files/*`（R2 プロキシ、JWT 認証必須） |
 | **LINE Webhook** | `/api/webhooks/line` |
 | **システムジョブ** | `/api/jobs/*` |
 | **ヘルスチェック** | `/health`, `/api/health` |
-| **認証方式（管理者）** | `Authorization: Bearer <JWT>` |
-| **認証方式（ユーザー）** | クエリパラメータ `line_user_id` + `account_id` |
+| **認証方式（管理者）** | `Authorization: Bearer <JWT>`（管理者専用） |
+| **認証方式（ユーザー JWT）** | `Authorization: Bearer <JWT>`（`/api/auth/line` 発行） |
+| **認証方式（マジックリンク）** | クエリパラメータ `line_user_id` + `account_id`（後方互換） |
 | **レスポンス形式** | `{ success: boolean, data?: any, error?: string, message?: string }` |
 
 ---
@@ -358,7 +367,12 @@ BOT 削除。
 
 ---
 
-## ユーザー API
+## ユーザー API（マジックリンク方式・後方互換）
+
+> ⚠️ **後方互換エンドポイント群**  
+> このセクションのエンドポイントはマジックリンク方式（クエリパラメータ認証）を採用した旧系です。  
+> **MVP 正式エンドポイントは `/api/users/me/*`（JWT 方式）**を参照してください。  
+> LINE アプリから QR コード / マジックリンクでダッシュボードへアクセスする既存フローとの互換性のために維持します。
 
 ユーザーは LINE アプリから QR コード / マジックリンクでダッシュボードへアクセス。  
 クエリパラメータ `line_user_id` と `account_id` で識別する。
@@ -527,8 +541,9 @@ BOT 削除。
 | `GET /api/admin/knowledge/bases/:id/documents/:docId` | ドキュメント詳細 |
 | `PATCH /api/admin/knowledge/documents/:docId` | ドキュメント更新 |
 | `GET /api/admin/users/:lineUserId/weekly-reports` | ユーザー週次レポート一覧 |
-| `POST /api/user/records/:date/meals` | 食事記録の手動追加 |
-| `PATCH /api/user/records/:date/meals/:id` | 食事記録の手動修正 |
+| `POST /api/user/records/:date/meals` | 食事記録の手動追加（マジックリンク方式） |
+| `PATCH /api/user/records/:date/meals/:id` | 食事記録の手動修正（マジックリンク方式） |
+| `GET /api/files/progress/:id/signed-url` | 進捗写真の R2 署名付き URL 発行（Phase 2） |
 
 ---
 

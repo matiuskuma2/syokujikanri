@@ -65,8 +65,11 @@ Queue 経由で非同期処理し、OpenAI で解析・応答生成を行う。
 [Cloudflare Pages]
     ├── GET /admin → 管理者ダッシュボード HTML（src/index.ts）
     ├── GET /dashboard → ユーザー PWA HTML（src/index.ts）
-    ├── /api/admin/* → 管理者 API（JWT 認証）  src/routes/admin/
-    └── /api/user/* → ユーザー API（クエリパラメータ認証）  src/routes/user/
+    ├── /api/admin/*     → 管理者 API（JWT 認証）              src/routes/admin/
+    ├── /api/user/*     → ユーザー API（マジックリンク・後方互換）  src/routes/user/
+    ├── /api/users/me/* → ユーザー API（JWT 認証・正式）            src/routes/user/me.ts
+    ├── /api/auth/line  → LINE LIFF トークン認証 & JWT 発行         src/routes/line/auth.ts
+    └── /api/files/*   → 画像プロキシ（R2・JWT 認証）               src/routes/user/files.ts
 ```
 
 ---
@@ -124,11 +127,15 @@ bot_mode_sessions テーブル:
 3. R2 に保存 → message_attachments に記録
 4. image_analysis_jobs に 'queued' ジョブを作成
 5. OpenAI Vision で画像分類（IMAGE_CATEGORY_PROMPT）:
-   - meal_photo         → MEAL_IMAGE_ESTIMATION_PROMPT で食事解析
-   - nutrition_label    → NUTRITION_LABEL_PROMPT で栄養値抽出
-   - body_scale         → BODY_SCALE_PROMPT で体重値抽出
-   - progress_body_photo → PROGRESS_PHOTO_PROMPT で判定 → progress_photos に保存
-   - other / unknown    → 「内容を確認できませんでした」返信
+   カテゴリは 7 種: meal_photo / nutrition_label / body_scale / food_package /
+                    progress_body_photo / other / unknown
+   - meal_photo          → MEAL_IMAGE_ESTIMATION_PROMPT で食事解析 → meal_entries に保存
+   - nutrition_label     → NUTRITION_LABEL_PROMPT で栄養値抽出 → meal_entries に保存
+   - food_package        → NUTRITION_LABEL_PROMPT で栄養値抽出（nutrition_label と同一フロー）
+   - body_scale          → BODY_SCALE_PROMPT で体重値抽出 → body_metrics に保存
+   - progress_body_photo → PROGRESS_PHOTO_PROMPT で判定 → progress_photos に保存（R2）
+   - other               → image_intake_results に記録のみ（ユーザー通知なし）
+   - unknown             → 「内容を確認できませんでした」返信
 6. image_intake_results に解析結果保存
 7. daily_logs / meal_entries / body_metrics を更新
 ```
@@ -166,11 +173,20 @@ bot_mode_sessions テーブル:
   → Authorization: Bearer <token> で各 API を保護
   → JWT_SECRET（Cloudflare Pages Secret）で署名
 
-ユーザー:
+ユーザー（JWT 方式・正式）:
+  POST /api/auth/line
+  → LIFF で取得した LINE Access Token を送信
+  → LINE Profile API で検証（userId, displayName, pictureUrl）
+  → line_users → user_accounts 紐付け確認
+  → JWT 発行（payload: sub=userAccountId, role='user', accountId, exp=24h）
+  → Authorization: Bearer <token> で /api/users/me/* を保護
+
+ユーザー（マジックリンク方式・後方互換）:
   LINE ユーザーID を識別子として使用
   → line_users テーブルで管理
   → ダッシュボードアクセス時はマジックリンク
     （line_user_id + account_id のクエリパラメータ）
+  → /api/user/* エンドポイント群（後方互換のため維持）
 ```
 
 ### LINE Webhook 署名検証
@@ -202,7 +218,11 @@ admin:
   - /api/admin/dashboard/*（読み取り）
 
 user:
-  - /api/user/*（自分のデータのみ）
+  - /api/users/me/*（JWT 認証・自分のデータのみ）
+  - /api/user/*（マジックリンク認証・後方互換）
+  - /api/files/progress/:id（自分の進捗写真のみ）
+  - /api/files/meals/:id（自分の食事写真のみ）
+  ※ JWT 方式では sub = user_accounts.id で所有者チェックを行う
 ```
 
 ---
@@ -313,7 +333,8 @@ src/
 │   ├── accounts-repo.ts
 │   ├── line-users-repo.ts
 │   ├── bot-sessions-repo.ts
-│   └── weekly-reports-repo.ts
+│   ├── weekly-reports-repo.ts
+│   └── attachments-repo.ts    ← 【要作成】新規（Phase 1d）
 │
 ├── services/
 │   └── ai/
@@ -332,7 +353,8 @@ src/
 │
 ├── routes/
 │   ├── line/
-│   │   └── webhook.ts ← 【要作成】src/routes/webhooks/line.ts から移植
+│   │   ├── webhook.ts ← 【要作成】src/routes/webhooks/line.ts から移植
+│   │   └── auth.ts    ← 【要作成】新規（POST /api/auth/line LINE LIFF 認証）
 │   ├── admin/
 │   │   ├── auth.ts      ← 【既存・要修正】誤 import 除去（55行の骨格あり）
 │   │   ├── accounts.ts  ← 【要作成】新規
@@ -341,9 +363,11 @@ src/
 │   │   ├── knowledge.ts ← 【要作成】新規
 │   │   └── dashboard.ts ← 【既存・要修正】誤 import 除去（80行の骨格あり）
 │   └── user/
+│       ├── me.ts              ← 【要作成】新規（GET /api/users/me/* 全ルート）
+│       ├── files.ts           ← 【要作成】新規（GET /api/files/* 画像プロキシ）
 │       ├── dashboard.ts       ← 【要作成】新規（index.ts は内容確認・整理）
 │       ├── records.ts         ← 【要作成】新規
-│       ├── progress-photos.ts ← 【要作成】新規
+│       ├── progress-photos.ts ← 【要作成】新規（Phase 1）
 │       └── weekly-reports.ts  ← 【要作成】新規
 │
 ├── middleware/
