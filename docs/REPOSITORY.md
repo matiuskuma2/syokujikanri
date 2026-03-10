@@ -17,7 +17,22 @@ Repository 層の設計・SQL 実装仕様書。
 | ファイル | 問題 |
 |---|---|
 | `src/repository/index.ts` | 単一ファイルに全 Repository が混在。DB キー名が仕様と異なる（例: `account_id + line_user_id` 複合キー vs 正規 `user_account_id`）。`RETURNING *` 未使用・TTL 計算方法も独自実装 |
-| `src/types/models.ts` | `DATABASE.md` スキーマとカラム定義が乖離。`user_profiles` の主キーが `user_account_id` ではなく `account_id + line_user_id` になっている。`daily_logs` も同様 |
+| `src/types/models.ts` | `DATABASE.md` スキーマとカラム定義が乖離（詳細は下表参照） |
+
+### `src/types/models.ts` の乖離詳細
+
+| 型名 | models.ts（誤） | db.ts（正規） | 問題の説明 |
+|---|---|---|---|
+| `UserProfile` | `line_user_id: string` + `account_id: string` | `user_account_id: string` | `user_accounts.id` を直接参照すべき |
+| `DailyLog` | `line_user_id` + `account_id` + `weight_kg` + `waist_cm` + `steps` + `water_ml` + `sleep_hours` | `user_account_id` + `client_account_id`（体重・歩数等のカラムなし） | 体重・歩数等は `body_metrics` / `activity_logs` テーブルに分離されている |
+| `MealEntry` | `line_user_id` + `account_id` + `description` + `estimated_calories` + `ai_parsed: boolean` | `daily_log_id`（FK）+ `meal_text` + `calories_kcal` + `confirmation_status` | カラム名が全面的に異なる |
+| `BotModeSession` | `mode: BotMode` + `step_code: string` | `current_mode: string` + `current_step: string` | フィールド名が異なる |
+| `IntakeAnswer` | `line_user_id` + `account_id` + `question_key` | `user_account_id` + `question_code` | 参照キーと質問識別子の名前が異なる |
+| `AccountMembership` | `role: 'superadmin' \| 'admin' \| 'member'` | `role: 'superadmin' \| 'admin' \| 'staff'` | `'member'` は存在せず、正規は `'staff'` |
+| `LineUser` | `account_id: string`（accounts への FK） | `line_channel_id: string`（line_channels への FK） | FK の参照先テーブルが異なる |
+| `ConversationThread` | `account_id: string` + `bot_mode: BotMode` | `client_account_id: string` + `current_mode: string` | フィールド名が全面的に異なる |
+| `ConversationMessage` | `direction: 'inbound' \| 'outbound'` + `content: string` | `sender_type: string` + `raw_text: string` + `normalized_text: string` | フィールド設計が根本的に異なる |
+| `Subscription` | `plan: 'professional'` あり | `plan: 'pro'` | enum 値が異なる |
 
 ### 正規の型定義ファイル
 

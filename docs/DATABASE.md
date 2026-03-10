@@ -633,15 +633,27 @@ npx wrangler d1 migrations apply diet-bot-production --local
 
 | テーブル | Repository ファイル | 主な関数 |
 |---|---|---|
+| `accounts` | `accounts-repo.ts` | findAccountById, findAccountMembership, createAccount, updateAccountStatus |
+| `account_memberships` | `accounts-repo.ts` | findAccountMembership |
+| `subscriptions` | `accounts-repo.ts` | updateSubscription |
+| `line_channels` | `line-users-repo.ts` | findLineChannelByAccountId |
+| `line_users` | `line-users-repo.ts` | findLineUser, upsertLineUser |
+| `user_accounts` | `line-users-repo.ts` | findUserAccount, ensureUserAccount |
+| `user_service_statuses` | `line-users-repo.ts` | findUserServiceStatus, upsertUserServiceStatus |
+| `bot_mode_sessions` | `bot-sessions-repo.ts` | findActiveSession, upsertSession, deleteSession, deleteExpiredSessions |
 | `daily_logs` | `daily-logs-repo.ts` | findDailyLog, createDailyLog, ensureDailyLog, updateDailyLog |
 | `meal_entries` | `meal-entries-repo.ts` | findMealEntriesByDailyLog, createMealEntry, updateMealEntry |
-| `body_metrics` | `body-metrics-repo.ts` | upsertBodyMetrics (upsertWeight) |
+| `body_metrics` | `body-metrics-repo.ts` | upsertBodyMetrics, upsertWeight |
 | `conversation_threads` | `conversations-repo.ts` | findOpenThread, createThread |
 | `conversation_messages` | `conversations-repo.ts` | createMessage |
 | `image_analysis_jobs` | `image-intake-repo.ts` | createImageAnalysisJob |
 | `image_intake_results` | `image-intake-repo.ts` | saveImageIntakeResult |
 | `progress_photos` | `progress-photos-repo.ts` | createProgressPhoto, listProgressPhotos |
 | `knowledge_chunks` | `knowledge-repo.ts` | getKnowledgeChunksByIds |
+| `weekly_reports` | `weekly-reports-repo.ts` | findWeeklyReport, createWeeklyReport, listRecentWeeklyReports |
+
+> **⚠️ 注意**: 上記の Repository ファイルはすべて `src/repositories/` 配下に新規作成する。  
+> 現在存在する `src/repository/index.ts` は誤実装のため削除対象。詳細は `docs/PROJECT_PLAN.md` 参照。
 
 ---
 

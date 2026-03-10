@@ -282,22 +282,27 @@ PM2 起動設定: ecosystem.config.cjs
 | ファイル | 問題 | 対処 |
 |---|---|---|
 | `src/repository/index.ts` | 単一ファイルに全 Repository が混在。`user_account_id` ではなく `account_id + line_user_id` の複合キーを使用しており `DATABASE.md` 仕様と乖離 | 削除 → `src/repositories/` 配下に分割再実装 |
-| `src/types/models.ts` | `daily_logs`・`user_profiles` 等の型定義が DB スキーマと異なる。`weight_kg` が `daily_logs` に直接紐付いているが実際は `body_metrics` テーブルに存在 | 削除 → `src/types/db.ts` に置き換え |
-| `src/ai/prompts.ts` | 配置パスが誤り。`src/services/ai/prompts.ts` が正規パス | 移動 or 削除して再作成 |
-| `src/ai/client.ts` | 同上 | 移動 or 削除して再作成 |
+| `src/types/models.ts` | `daily_logs`・`user_profiles` 等の型定義が DB スキーマと異なる。`weight_kg` が `daily_logs` に直接紐付いているが実際は `body_metrics` テーブルに存在。`BotModeSession.mode` → 正規は `current_mode`。`AccountMembership.role: 'member'` → 正規は `'staff'`。全体的にカラム名・FK 参照先が異なる | 削除 → `src/types/db.ts` に置き換え |
+| `src/ai/prompts.ts` | 配置パスが誤り。`src/services/ai/prompts.ts` が正規パス。エクスポート名も仕様外（`buildConsultSystemPrompt` → 正規は `buildConsultPrompt` 等）。`models.ts` の誤った型を import している | 削除して `src/services/ai/prompts.ts` に再作成 |
+| `src/ai/client.ts` | 同上。`models.ts` の誤った型を import している | 削除して `src/services/ai/client.ts` に再作成 |
+| `src/bot/dispatcher.ts` | 誤った `src/repository/index.ts` と `models.ts` を import。仕様の Bot Dispatcher 設計と乖離 | 削除して正規 Repository・型を使って再実装 |
+| `src/bot/consumer.ts` | 骨格（43行）は存在するが誤 import あり | 誤 import を除去し正規 Repository に差し替え |
+| `src/bot/cron.ts` | Cron 処理（116行）は存在するが誤 import あり。配置先は `src/jobs/` が正規 | `src/jobs/daily-reminder.ts` / `src/jobs/weekly-report.ts` として再配置 |
+| `src/routes/webhooks/line.ts` | パスが誤り。正規は `src/routes/line/webhook.ts` | 内容を `src/routes/line/webhook.ts` に移植して削除 |
 
 ### 正規のディレクトリ構造
 
 ```
 src/
 ├── types/
-│   ├── db.ts          ← 新規作成（DATABASE.md DDL に対応した全型定義）
-│   ├── line.ts        ← 新規作成（LINE Webhook イベント型）
-│   ├── api.ts         ← 新規作成（ApiResponse<T> / エラーコード型）
-│   ├── bindings.ts    ← 既存（Cloudflare Bindings 型）
-│   └── index.ts       ← 既存（re-export）
+│   ├── db.ts          ← 【要作成】DATABASE.md DDL に対応した全型定義
+│   ├── line.ts        ← 【要作成】LINE Webhook イベント型
+│   ├── api.ts         ← 【要作成】ApiResponse<T> / エラーコード型
+│   ├── bindings.ts    ← 【既存・要確認】Cloudflare Bindings 型
+│   └── index.ts       ← 【既存】re-export
+│                         ※ models.ts は削除対象
 │
-├── repositories/      ← 新規作成（11 ファイル分割）
+├── repositories/      ← 【要作成】11 ファイル（src/repository/index.ts は削除対象）
 │   ├── daily-logs-repo.ts
 │   ├── meal-entries-repo.ts
 │   ├── body-metrics-repo.ts
@@ -312,46 +317,48 @@ src/
 │
 ├── services/
 │   └── ai/
-│       ├── prompts.ts     ← 正規パス（src/ai/prompts.ts は誤配置）
-│       ├── client.ts      ← 正規パス（src/ai/client.ts は誤配置）
-│       ├── rag.ts         ← 新規作成
-│       └── embeddings.ts  ← 新規作成
+│       ├── prompts.ts     ← 【要作成】正規パス（src/ai/prompts.ts は削除対象）
+│       ├── client.ts      ← 【要作成】正規パス（src/ai/client.ts は削除対象）
+│       ├── rag.ts         ← 【要作成】新規
+│       └── embeddings.ts  ← 【要作成】新規
 │
 ├── bot/
-│   ├── dispatcher.ts
-│   ├── intake-flow.ts
-│   ├── record-mode.ts
-│   └── consult-mode.ts
+│   ├── dispatcher.ts  ← 【要再実装】現行は削除対象
+│   ├── intake-flow.ts ← 【要作成】新規
+│   ├── record-mode.ts ← 【要作成】新規
+│   ├── consult-mode.ts← 【要作成】新規
+│   ├── consumer.ts    ← 【既存・要修正】誤 import 除去（43行の骨格あり）
+│   └── cron.ts        ← 【既存・要整理】src/jobs/ 配下に移動・再配置
 │
 ├── routes/
 │   ├── line/
-│   │   ├── webhook.ts
-│   │   └── consumer.ts
+│   │   └── webhook.ts ← 【要作成】src/routes/webhooks/line.ts から移植
 │   ├── admin/
-│   │   ├── auth.ts
-│   │   ├── accounts.ts
-│   │   ├── users.ts
-│   │   ├── bots.ts
-│   │   ├── knowledge.ts
-│   │   └── dashboard.ts
+│   │   ├── auth.ts      ← 【既存・要修正】誤 import 除去（55行の骨格あり）
+│   │   ├── accounts.ts  ← 【要作成】新規
+│   │   ├── users.ts     ← 【既存・要修正】誤 import 除去（96行の骨格あり）
+│   │   ├── bots.ts      ← 【要作成】新規
+│   │   ├── knowledge.ts ← 【要作成】新規
+│   │   └── dashboard.ts ← 【既存・要修正】誤 import 除去（80行の骨格あり）
 │   └── user/
-│       ├── dashboard.ts
-│       ├── records.ts
-│       ├── progress-photos.ts
-│       └── weekly-reports.ts
+│       ├── dashboard.ts       ← 【要作成】新規（index.ts は内容確認・整理）
+│       ├── records.ts         ← 【要作成】新規
+│       ├── progress-photos.ts ← 【要作成】新規
+│       └── weekly-reports.ts  ← 【要作成】新規
 │
 ├── middleware/
-│   ├── auth.ts
-│   └── rbac.ts
+│   ├── auth.ts   ← 【既存・要確認】JWT ミドルウェア（48行あり）
+│   └── rbac.ts   ← 【要作成】新規
 │
 ├── utils/
-│   ├── line-api.ts
-│   └── response.ts
+│   ├── line.ts       ← 【既存・要確認】LINE API ヘルパー（154行あり、仕様名は line-api.ts）
+│   ├── jwt.ts        ← 【既存・要確認】JWT ユーティリティ（89行あり）
+│   └── response.ts   ← 【既存・要確認】レスポンスユーティリティ（34行あり）
 │
-├── jobs/
+├── jobs/              ← 【要作成】src/bot/cron.ts の内容を分割・移動
 │   ├── daily-reminder.ts
 │   ├── weekly-report.ts
 │   └── image-analysis.ts
 │
-└── index.ts           ← メインエントリポイント（Hono app）
+└── index.ts           ← 【既存・要確認】メインエントリポイント（Hono app、595行あり）
 ```

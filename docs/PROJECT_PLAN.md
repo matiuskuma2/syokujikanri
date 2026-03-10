@@ -2,7 +2,8 @@
 
 > **このドキュメントの目的**  
 > ドキュメント整備状況・現在のコード状態・実装フェーズのロードマップを管理する。  
-> 各タスクには「依存関係」「実装ファイル」「完了条件」を明記する。
+> 各タスクには「依存関係」「実装ファイル」「完了条件」を明記する。  
+> **最終更新: 2026-03-10**
 
 ---
 
@@ -12,15 +13,13 @@
 |---|---|---|
 | `docs/README.md` | ✅ 完了 | プロジェクト概要・ディレクトリ構造 |
 | `docs/ARCHITECTURE.md` | ✅ 完了 | システム全体図・データフロー・セキュリティ |
-| `docs/DATABASE.md` | ✅ 完了 | テーブル定義・マイグレーション対応表・ID 体系 |
-| `docs/REPOSITORY.md` | ✅ 完了 | Repository 層 SQL 実装仕様（型定義含む） |
+| `docs/DATABASE.md` | ✅ 完了 | テーブル定義・マイグレーション対応表・ID 体系・`user_account_id` 概念説明 |
+| `docs/REPOSITORY.md` | ✅ 完了 | Repository 層 SQL 実装仕様（正規型定義含む） |
 | `docs/API.md` | ✅ 完了 | エンドポイント定義・リクエスト/レスポンス形式 |
 | `docs/PROMPTS.md` | ✅ 完了 | 全プロンプト定義（TypeScript 仕様） |
 | `docs/BOT_FLOW.md` | ✅ 完了 | モード・ステップコード・キーワード定義 |
 | `docs/DEPLOYMENT.md` | ✅ 完了 | ローカル・本番デプロイ手順 |
 | `docs/PROJECT_PLAN.md` | ✅ 完了（本ファイル） | フェーズ別実装計画 |
-
-**✅ ドキュメント整備完了**
 
 ---
 
@@ -28,26 +27,74 @@
 
 ### 誤実装ファイル一覧
 
-以下のファイルが**ドキュメント仕様と乖離した状態で実装されてしまっている**。  
+以下のファイルが**ドキュメント仕様と乖離した状態で存在する**。  
 実装フェーズ開始前に必ず下記の方針で対処すること。
 
 | ファイル | 状態 | 問題点 | 対処方針 |
 |---|---|---|---|
-| `src/repository/index.ts` | ❌ 誤実装 | 単一ファイルに全 Repository が混在。型名・カラム名が `DATABASE.md` と乖離（例: `account_id + line_user_id` vs `user_account_id`）。`src/repositories/` 分割構成ではない | **全削除して `src/repositories/` 配下に再実装** |
-| `src/types/models.ts` | ⚠️ 要修正 | `user_profiles` の主キー参照が `account_id + line_user_id` になっているが、正しくは `user_account_id`。`DailyLog` の主キー参照も同様に乖離 | **`src/types/db.ts` に置き換え。`models.ts` は削除** |
-| `src/ai/prompts.ts` | ❓ 要確認 | ファイルは存在するが中身が空または旧版の可能性あり | **`src/services/ai/prompts.ts` に正しく配置** |
-| `src/ai/client.ts` | ❓ 要確認 | 同上 | **`src/services/ai/client.ts` に正しく配置** |
+| `src/repository/index.ts` | ❌ 誤実装・削除対象 | 単一ファイルに全 Repository が混在。型名・カラム名が `DATABASE.md` と乖離（`account_id + line_user_id` 複合キー vs 正規 `user_account_id`）。`src/repositories/` 分割構成ではない | **削除して `src/repositories/` 配下に再実装** |
+| `src/types/models.ts` | ❌ 誤実装・削除対象 | `user_profiles` / `daily_logs` の主キー参照が `line_user_id + account_id` 複合形式。`DailyLog` に `weight_kg` 等 `body_metrics` テーブルのカラムが混入。`BotModeSession.mode` は `DATABASE.md` では `current_mode`。`AccountMembership.role` に `'member'` が存在するが正規は `'staff'` | **削除して `src/types/db.ts` に置き換え** |
+| `src/ai/prompts.ts` | ❌ 誤配置・削除対象 | `src/ai/` 配下にあるが仕様は `src/services/ai/` 配下。エクスポート名も `PROMPTS.md` 仕様と異なる（例: `buildConsultSystemPrompt` vs `buildConsultPrompt`）。`src/types/models.ts` の誤った型を import している | **削除して `src/services/ai/prompts.ts` に正規実装** |
+| `src/ai/client.ts` | ❌ 誤配置・削除対象 | 上記と同様。`src/services/ai/` 配下に移動が必要。`src/types/models.ts` の誤った型を import している | **削除して `src/services/ai/client.ts` に正規実装** |
+| `src/bot/dispatcher.ts` | ❌ 誤実装・削除対象 | `src/repository/index.ts` の誤った Repository を import。誤った型（`models.ts`）を使用。`ARCHITECTURE.md` の設計と構造が乖離 | **削除して正規 Repository・型を使って再実装** |
+| `src/bot/consumer.ts` | ⚠️ 要修正 | Queue コンシューマーの骨格は存在（43行）。ただし `src/repository/index.ts` / `models.ts` への依存あり | **誤 import を除去し正規 Repository に差し替え** |
+| `src/bot/cron.ts` | ⚠️ 要修正 | Cron 処理の骨格は存在（116行）。ただし同様の誤 import あり | **誤 import を除去し正規 Repository に差し替え** |
+| `src/routes/admin/auth.ts` | ⚠️ 要修正 | 骨格あり（55行）。`models.ts` への依存を確認・修正が必要 |  **誤 import を確認・除去** |
+| `src/routes/admin/dashboard.ts` | ⚠️ 要修正 | 骨格あり（80行）。同上 | **誤 import を確認・除去** |
+| `src/routes/admin/users.ts` | ⚠️ 要修正 | 骨格あり（96行）。同上 | **誤 import を確認・除去** |
+| `src/routes/user/index.ts` | ⚠️ 要修正 | 骨格あり（107行）。同上 | **誤 import を確認・除去** |
+| `src/routes/webhooks/line.ts` | ⚠️ 要修正 | Webhook 受信骨格あり（61行）。`src/routes/line/webhook.ts` に移動が必要 | **移動 + 誤 import 除去** |
+| `src/middleware/auth.ts` | 🔍 要確認 | JWT 認証ミドルウェア骨格あり（48行）。`ARCHITECTURE.md` 設計と整合か確認が必要 | **内容確認後、必要なら修正** |
+| `src/utils/jwt.ts` | 🔍 要確認 | JWT ユーティリティ（89行）。仕様との整合確認が必要 | **内容確認後、必要なら修正** |
+| `src/utils/line.ts` | 🔍 要確認 | LINE API ヘルパー（154行）。`replyText` / `pushText` 等は `ARCHITECTURE.md` 仕様と一致するか確認 | **内容確認後、必要なら修正** |
+| `src/utils/response.ts` | 🔍 要確認 | レスポンスユーティリティ（34行）。小規模なので仕様確認 | **内容確認後、必要なら修正** |
 
-### 正しいディレクトリ構造（ドキュメント仕様）
+### 現在存在するが仕様に定義されていないファイル
+
+| ファイル | 状況 | 方針 |
+|---|---|---|
+| `src/routes/line/` | ディレクトリのみ、ファイルなし | `webhook.ts` を新規作成 |
+| `src/routes/webhooks/line.ts` | 仕様では `src/routes/line/webhook.ts` が正規 | 内容を移動して削除 |
+
+### 仕様に定義されているが存在しないファイル
+
+| ファイル | フェーズ | 優先度 |
+|---|---|---|
+| `src/types/db.ts` | Phase 1a | ⭐ 最高（全層の前提） |
+| `src/repositories/` 以下 11 ファイル | Phase 1a | ⭐ 最高 |
+| `src/services/ai/prompts.ts` | Phase 1b | ⭐ 高 |
+| `src/services/ai/client.ts` | Phase 1b | ⭐ 高 |
+| `src/services/ai/rag.ts` | Phase 1b | 高 |
+| `src/services/ai/embeddings.ts` | Phase 1b | 高 |
+| `src/bot/intake-flow.ts` | Phase 1c | 高 |
+| `src/bot/record-mode.ts` | Phase 1c | 高 |
+| `src/bot/consult-mode.ts` | Phase 1c | 高 |
+| `src/routes/line/webhook.ts` | Phase 1c | 高 |
+| `src/routes/admin/accounts.ts` | Phase 1d | 中 |
+| `src/routes/admin/bots.ts` | Phase 1d | 中 |
+| `src/routes/admin/knowledge.ts` | Phase 1d | 中 |
+| `src/routes/user/dashboard.ts` | Phase 1d | 中 |
+| `src/routes/user/records.ts` | Phase 1d | 中 |
+| `src/routes/user/progress-photos.ts` | Phase 1d | 中 |
+| `src/routes/user/weekly-reports.ts` | Phase 1d | 中 |
+| `src/jobs/daily-reminder.ts` | Phase 1e | 中 |
+| `src/jobs/weekly-report.ts` | Phase 1e | 中 |
+| `src/jobs/image-analysis.ts` | Phase 1e | 中 |
+| `src/middleware/rbac.ts` | Phase 1d | 中 |
+
+---
+
+## 目標ディレクトリ構造（仕様通り）
 
 ```
 src/
 ├── types/
-│   ├── db.ts          ← DATABASE.md のスキーマに対応した型定義（新規作成）
-│   ├── bindings.ts    ← Cloudflare Bindings 型（既存）
-│   └── index.ts       ← re-export（既存）
+│   ├── db.ts          ← 【未作成】DATABASE.md スキーマに対応した型定義
+│   ├── bindings.ts    ← 【既存・要確認】Cloudflare Bindings 型
+│   └── index.ts       ← 【既存】re-export
+│                         ※ models.ts は削除対象
 │
-├── repositories/      ← 新規作成（現在は index.ts のみ・誤実装）
+├── repositories/      ← 【未作成】11 ファイル全て新規
 │   ├── daily-logs-repo.ts
 │   ├── meal-entries-repo.ts
 │   ├── body-metrics-repo.ts
@@ -62,19 +109,53 @@ src/
 │
 ├── services/
 │   └── ai/
-│       ├── prompts.ts     ← src/ai/prompts.ts を移動・修正
-│       ├── client.ts      ← src/ai/client.ts を移動・修正
-│       ├── rag.ts         ← 新規作成
-│       └── embeddings.ts  ← 新規作成
+│       ├── prompts.ts     ← 【未作成】src/ai/prompts.ts を削除して新規作成
+│       ├── client.ts      ← 【未作成】src/ai/client.ts を削除して新規作成
+│       ├── rag.ts         ← 【未作成】新規
+│       └── embeddings.ts  ← 【未作成】新規
 │
-├── bot/               ← 未実装
-├── routes/            ← 未実装
-├── middleware/        ← 未実装
-├── utils/             ← 未実装
-└── jobs/              ← 未実装
+├── bot/
+│   ├── dispatcher.ts  ← 【要再実装】現在のものは削除対象
+│   ├── intake-flow.ts ← 【未作成】新規
+│   ├── record-mode.ts ← 【未作成】新規
+│   ├── consult-mode.ts← 【未作成】新規
+│   ├── consumer.ts    ← 【要修正】誤 import 除去
+│   └── cron.ts        ← 【要修正】誤 import 除去（または src/jobs/ に移動）
+│
+├── routes/
+│   ├── line/
+│   │   └── webhook.ts ← 【未作成】src/routes/webhooks/line.ts の内容を移動
+│   ├── admin/
+│   │   ├── auth.ts      ← 【要修正】誤 import 除去
+│   │   ├── accounts.ts  ← 【未作成】新規
+│   │   ├── users.ts     ← 【要修正】誤 import 除去
+│   │   ├── bots.ts      ← 【未作成】新規
+│   │   ├── knowledge.ts ← 【未作成】新規
+│   │   └── dashboard.ts ← 【要修正】誤 import 除去
+│   └── user/
+│       ├── dashboard.ts       ← 【未作成】新規（index.ts は削除対象か要確認）
+│       ├── records.ts         ← 【未作成】新規
+│       ├── progress-photos.ts ← 【未作成】新規
+│       └── weekly-reports.ts  ← 【未作成】新規
+│
+├── middleware/
+│   ├── auth.ts   ← 【要確認】仕様整合確認
+│   └── rbac.ts   ← 【未作成】新規
+│
+├── utils/
+│   ├── jwt.ts        ← 【要確認】仕様整合確認
+│   ├── line.ts       ← 【要確認】仕様整合確認（LINE API ヘルパー）
+│   └── response.ts   ← 【要確認】仕様整合確認
+│
+└── jobs/              ← 【未作成】3 ファイル新規
+    ├── daily-reminder.ts
+    ├── weekly-report.ts
+    └── image-analysis.ts
 ```
 
-### 実装前に必ず行う前処理
+---
+
+## 実装前に必ず行う前処理
 
 ```bash
 # 1. 誤実装ファイルの削除
@@ -82,16 +163,17 @@ rm src/repository/index.ts
 rm src/types/models.ts
 rm src/ai/prompts.ts
 rm src/ai/client.ts
+rmdir src/ai
+rmdir src/repository
+rm src/bot/dispatcher.ts   # 誤実装。正規版は src/bot/dispatcher.ts として再実装
 
-# 2. 正しいディレクトリの作成
+# 2. 仕様通りのディレクトリ作成
 mkdir -p src/repositories
 mkdir -p src/services/ai
-mkdir -p src/bot
-mkdir -p src/routes/line
-mkdir -p src/routes/admin
-mkdir -p src/routes/user
-mkdir -p src/utils
 mkdir -p src/jobs
+
+# 3. 既存 routes/webhooks/line.ts の内容を routes/line/webhook.ts に移動
+#    （src/routes/line/ ディレクトリは既に存在）
 ```
 
 ---
@@ -99,15 +181,15 @@ mkdir -p src/jobs
 ## 実装フェーズ概要
 
 ```
-Phase 1a: 基盤・型定義・Repository 層（全 11 ファイル）
+Phase 1a: 基盤・型定義・Repository 層（14 タスク）
     ↓（依存）
-Phase 1b: AI サービス層（prompts.ts / client.ts / rag.ts / embeddings.ts）
+Phase 1b: AI サービス層（4 タスク）
     ↓（依存）
-Phase 1c: Bot ディスパッチャー・LINE Webhook（Queue 含む）
+Phase 1c: Bot ディスパッチャー・LINE Webhook（7 タスク）
     ↓（依存）
-Phase 1d: Admin API / User API / ダッシュボード
+Phase 1d: Admin API / User API / ダッシュボード（16 タスク）
     ↓（依存）
-Phase 1e: Cron ジョブ・週次レポート・テスト・デプロイ
+Phase 1e: Cron ジョブ・テスト・デプロイ（9 タスク）
 ```
 
 ---
@@ -119,22 +201,22 @@ Phase 1e: Cron ジョブ・週次レポート・テスト・デプロイ
 
 ### タスク一覧
 
-| # | タスク | 実装ファイル | 完了条件 |
-|---|---|---|---|
-| 1a-1 | DB テーブル型定義 | `src/types/db.ts` | `DATABASE.md` の全テーブルスキーマに対応した TypeScript interface が定義済み。`user_account_id` / `client_account_id` の命名規則が一致している |
-| 1a-2 | LINE イベント型定義 | `src/types/line.ts` | follow / unfollow / message / postback イベントが型付き |
-| 1a-3 | API 共通型定義 | `src/types/api.ts` | `ApiResponse<T>` / エラーコード型が定義済み |
-| 1a-4 | daily-logs-repo 実装 | `src/repositories/daily-logs-repo.ts` | `findDailyLog` / `createDailyLog` / `ensureDailyLog` / `updateDailyLog` が REPOSITORY.md SQL 仕様通りに動作 |
-| 1a-5 | meal-entries-repo 実装 | `src/repositories/meal-entries-repo.ts` | `findMealEntriesByDailyLog` / `createMealEntry` / `updateMealEntry` が REPOSITORY.md SQL 仕様通りに動作 |
-| 1a-6 | body-metrics-repo 実装 | `src/repositories/body-metrics-repo.ts` | `upsertBodyMetrics` / `upsertWeight` が REPOSITORY.md SQL 仕様通りに動作 |
-| 1a-7 | conversations-repo 実装 | `src/repositories/conversations-repo.ts` | `findOpenThread` / `createThread` / `createMessage` が REPOSITORY.md SQL 仕様通りに動作 |
-| 1a-8 | image-intake-repo 実装 | `src/repositories/image-intake-repo.ts` | `createImageAnalysisJob` / `saveImageIntakeResult` が REPOSITORY.md SQL 仕様通りに動作 |
-| 1a-9 | progress-photos-repo 実装 | `src/repositories/progress-photos-repo.ts` | `createProgressPhoto` / `listProgressPhotos` が REPOSITORY.md SQL 仕様通りに動作 |
-| 1a-10 | knowledge-repo 実装 | `src/repositories/knowledge-repo.ts` | `getKnowledgeChunksByIds` が REPOSITORY.md SQL 仕様通りに動作（動的 IN 句実装済み） |
-| 1a-11 | accounts-repo 実装 | `src/repositories/accounts-repo.ts` | `findAccountById` / `findAccountMembership` / `createAccount` / `updateAccountStatus` |
-| 1a-12 | line-users-repo 実装 | `src/repositories/line-users-repo.ts` | `findLineUser` / `upsertLineUser` / `findUserAccount` / `ensureUserAccount` / `findUserServiceStatus` / `upsertUserServiceStatus` / `listActiveLineUsers` |
-| 1a-13 | bot-sessions-repo 実装 | `src/repositories/bot-sessions-repo.ts` | `findActiveSession` / `upsertSession` / `deleteSession` / `deleteExpiredSessions` |
-| 1a-14 | weekly-reports-repo 実装 | `src/repositories/weekly-reports-repo.ts` | `findWeeklyReport` / `createWeeklyReport` / `listRecentWeeklyReports` |
+| # | タスク | 実装ファイル | 状態 | 完了条件 |
+|---|---|---|---|---|
+| 1a-1 | DB テーブル型定義 | `src/types/db.ts` | ❌ 未作成 | `DATABASE.md` の全テーブルスキーマに対応した TypeScript interface が定義済み。`user_account_id` / `client_account_id` の命名規則が一致している |
+| 1a-2 | LINE イベント型定義 | `src/types/line.ts` | ❌ 未作成 | follow / unfollow / message / postback イベントが型付き |
+| 1a-3 | API 共通型定義 | `src/types/api.ts` | ❌ 未作成（※`response.ts` に一部あり） | `ApiResponse<T>` / エラーコード型が定義済み |
+| 1a-4 | daily-logs-repo 実装 | `src/repositories/daily-logs-repo.ts` | ❌ 未作成 | `findDailyLog` / `createDailyLog` / `ensureDailyLog` / `updateDailyLog` が REPOSITORY.md SQL 仕様通りに動作 |
+| 1a-5 | meal-entries-repo 実装 | `src/repositories/meal-entries-repo.ts` | ❌ 未作成 | `findMealEntriesByDailyLog` / `createMealEntry` / `updateMealEntry` が REPOSITORY.md SQL 仕様通りに動作 |
+| 1a-6 | body-metrics-repo 実装 | `src/repositories/body-metrics-repo.ts` | ❌ 未作成 | `upsertBodyMetrics` / `upsertWeight` が REPOSITORY.md SQL 仕様通りに動作 |
+| 1a-7 | conversations-repo 実装 | `src/repositories/conversations-repo.ts` | ❌ 未作成 | `findOpenThread` / `createThread` / `createMessage` が REPOSITORY.md SQL 仕様通りに動作 |
+| 1a-8 | image-intake-repo 実装 | `src/repositories/image-intake-repo.ts` | ❌ 未作成 | `createImageAnalysisJob` / `saveImageIntakeResult` が REPOSITORY.md SQL 仕様通りに動作 |
+| 1a-9 | progress-photos-repo 実装 | `src/repositories/progress-photos-repo.ts` | ❌ 未作成 | `createProgressPhoto` / `listProgressPhotos` が REPOSITORY.md SQL 仕様通りに動作 |
+| 1a-10 | knowledge-repo 実装 | `src/repositories/knowledge-repo.ts` | ❌ 未作成 | `getKnowledgeChunksByIds` が REPOSITORY.md SQL 仕様通りに動作（動的 IN 句実装済み） |
+| 1a-11 | accounts-repo 実装 | `src/repositories/accounts-repo.ts` | ❌ 未作成 | `findAccountById` / `findAccountMembership` / `createAccount` / `updateAccountStatus` |
+| 1a-12 | line-users-repo 実装 | `src/repositories/line-users-repo.ts` | ❌ 未作成 | `findLineUser` / `upsertLineUser` / `findUserAccount` / `ensureUserAccount` / `findUserServiceStatus` / `upsertUserServiceStatus` / `listActiveLineUsers` |
+| 1a-13 | bot-sessions-repo 実装 | `src/repositories/bot-sessions-repo.ts` | ❌ 未作成 | `findActiveSession` / `upsertSession` / `deleteSession` / `deleteExpiredSessions` |
+| 1a-14 | weekly-reports-repo 実装 | `src/repositories/weekly-reports-repo.ts` | ❌ 未作成 | `findWeeklyReport` / `createWeeklyReport` / `listRecentWeeklyReports` |
 
 **依存関係**: 1a-1 → 1a-4〜1a-14（型定義が全 repo の前提）  
 **参照ドキュメント**: `docs/DATABASE.md`、`docs/REPOSITORY.md`
@@ -148,13 +230,22 @@ Phase 1e: Cron ジョブ・週次レポート・テスト・デプロイ
   - line_users.id       → 変数名は line_user_record_id（内部ID、通常は不使用）
   - line_user_id        → LINE プラットフォームの U xxxxxxx 文字列（外部ID）
 
-型命名規則:
-  - テーブル名をパスカルケースに変換
-  - daily_logs       → DailyLog
-  - meal_entries     → MealEntry
-  - body_metrics     → BodyMetrics
-  - user_accounts    → UserAccount
-  - bot_mode_sessions → BotModeSession
+型命名規則（pascal case）:
+  - daily_logs          → DailyLog
+  - meal_entries        → MealEntry
+  - body_metrics        → BodyMetrics
+  - user_accounts       → UserAccount
+  - bot_mode_sessions   → BotModeSession
+  - user_service_statuses → UserServiceStatus
+
+⚠️ models.ts との差異（削除理由）:
+  - UserProfile: line_user_id + account_id → 正規は user_account_id
+  - DailyLog: weight_kg等 body_metricsカラムが混入 → 正規は body_metrics テーブルに分離
+  - BotModeSession: mode → 正規は current_mode
+  - AccountMembership: role 'member' → 正規は 'staff'
+  - LineUser: account_id → 正規は line_channel_id（line_channels への FK）
+  - ConversationThread: account_id → 正規は client_account_id
+  - IntakeAnswer: line_user_id + account_id → 正規は user_account_id
 ```
 
 ---
@@ -165,37 +256,40 @@ Phase 1e: Cron ジョブ・週次レポート・テスト・デプロイ
 
 ### タスク一覧
 
-| # | タスク | 実装ファイル | 完了条件 |
-|---|---|---|---|
-| 1b-1 | プロンプト定数・型・ビルダー実装 | `src/services/ai/prompts.ts` | `PROMPTS.md` の全定数・型・ビルダー関数が実装済み。`src/ai/prompts.ts`（旧）は削除済み |
-| 1b-2 | OpenAI クライアント実装 | `src/services/ai/client.ts` | `callOpenAI()` / `callVisionAPI()` が動作。`src/ai/client.ts`（旧）は削除済み |
-| 1b-3 | Embeddings 実装 | `src/services/ai/embeddings.ts` | `text-embedding-3-small` でベクトル生成可能 |
-| 1b-4 | RAG コンテキスト構築実装 | `src/services/ai/rag.ts` | `buildContextStrings()` が全プロンプト変数（profileSummary / recentDailySummary 等）を生成 |
+| # | タスク | 実装ファイル | 状態 | 完了条件 |
+|---|---|---|---|---|
+| 1b-1 | プロンプト定数・型・ビルダー実装 | `src/services/ai/prompts.ts` | ❌ 未作成（`src/ai/prompts.ts` は削除対象） | `PROMPTS.md` の全定数・型・ビルダー関数が実装済み。`src/ai/prompts.ts`（旧）は削除済み |
+| 1b-2 | OpenAI クライアント実装 | `src/services/ai/client.ts` | ❌ 未作成（`src/ai/client.ts` は削除対象） | `callOpenAI()` / `callVisionAPI()` が動作。`src/ai/client.ts`（旧）は削除済み |
+| 1b-3 | Embeddings 実装 | `src/services/ai/embeddings.ts` | ❌ 未作成 | `text-embedding-3-small` でベクトル生成可能 |
+| 1b-4 | RAG コンテキスト構築実装 | `src/services/ai/rag.ts` | ❌ 未作成 | `buildContextStrings()` が全プロンプト変数（profileSummary / recentDailySummary 等）を生成 |
 
 **依存関係**: 1a-1（db.ts）→ 1b-1 → 1b-2 → 1b-4  
 **参照ドキュメント**: `docs/PROMPTS.md`、`docs/ARCHITECTURE.md`（RAG フロー）
 
-### `src/services/ai/prompts.ts` エクスポート一覧
+### `src/services/ai/prompts.ts` エクスポート一覧（PROMPTS.md 準拠）
 
 ```typescript
 // 定数
-export const SYSTEM_GUARDRAILS
-export const IMAGE_CATEGORY_PROMPT
-export const MEAL_IMAGE_ESTIMATION_PROMPT
-export const NUTRITION_LABEL_PROMPT
-export const BODY_SCALE_PROMPT
-export const PROGRESS_PHOTO_PROMPT
-export const WELCOME_MESSAGE
-export const SESSION_TIMEOUT_MESSAGE
-export const UNRECOGNIZED_INPUT_MESSAGE
+export const SYSTEM_GUARDRAILS           // 共通ガードレール
+export const IMAGE_CATEGORY_PROMPT       // 画像分類
+export const MEAL_IMAGE_ESTIMATION_PROMPT // 食事画像解析
+export const NUTRITION_LABEL_PROMPT      // 栄養ラベル解析
+export const BODY_SCALE_PROMPT           // 体重計解析
+export const PROGRESS_PHOTO_PROMPT       // 進捗写真判定
+export const WELCOME_MESSAGE             // ウェルカムメッセージ
+export const SESSION_TIMEOUT_MESSAGE     // セッションタイムアウト
+export const UNRECOGNIZED_INPUT_MESSAGE  // 未認識入力
 
-// ビルダー関数
+// ビルダー関数（PROMPTS.md の Input 型・Output 型に準拠）
 export function buildConsultPrompt(input: ConsultPromptInput)
 export function buildDailyFeedbackPrompt(input: DailyFeedbackPromptInput)
 export function buildWeeklyReportPrompt(input: WeeklyReportPromptInput)
 export function buildMealTypeInferencePrompt(input: MealTypeInferenceInput)
 export function buildMissingQuestionPrompt(input: MissingQuestionInput)
 ```
+
+> ⚠️ `src/ai/prompts.ts` の現行エクスポート名（`buildConsultSystemPrompt` 等）は仕様外。  
+> 正規の名前は `buildConsultPrompt` 等（PROMPTS.md 参照）。
 
 ---
 
@@ -205,15 +299,15 @@ export function buildMissingQuestionPrompt(input: MissingQuestionInput)
 
 ### タスク一覧
 
-| # | タスク | 実装ファイル | 完了条件 |
-|---|---|---|---|
-| 1c-1 | LINE Webhook 受信 | `src/routes/line/webhook.ts` | X-Line-Signature 検証 + Queue エンキュー + 即時 200 返却 |
-| 1c-2 | Queue コンシューマー | `src/routes/line/consumer.ts` | follow / unfollow / message / postback イベント処理 |
-| 1c-3 | Bot ディスパッチャー | `src/bot/dispatcher.ts` | セッション確認・モード判定・ルーティング |
-| 1c-4 | Intake フロー | `src/bot/intake-flow.ts` | 全ステップ（`intake_start` → `intake_complete`）動作 |
-| 1c-5 | Record モード | `src/bot/record-mode.ts` | テキスト解析 + 画像解析 + D1 保存 + 日次フィードバック |
-| 1c-6 | Consult モード | `src/bot/consult-mode.ts` | RAG 検索 + OpenAI 回答生成 + 返信 |
-| 1c-7 | LINE API ヘルパー | `src/utils/line-api.ts` | `sendMessage` / `replyMessage` / `getMessageContent` |
+| # | タスク | 実装ファイル | 状態 | 完了条件 |
+|---|---|---|---|---|
+| 1c-1 | LINE Webhook 受信 | `src/routes/line/webhook.ts` | ❌ 未作成（`webhooks/line.ts` の内容を移植・修正） | X-Line-Signature 検証 + Queue エンキュー + 即時 200 返却 |
+| 1c-2 | Queue コンシューマー | `src/bot/consumer.ts` | ⚠️ 要修正（43行の骨格あり） | follow / unfollow / message / postback イベント処理。正規 Repository を使用 |
+| 1c-3 | Bot ディスパッチャー | `src/bot/dispatcher.ts` | ❌ 再実装（現行は削除対象） | セッション確認・モード判定・ルーティング。正規 Repository・型を使用 |
+| 1c-4 | Intake フロー | `src/bot/intake-flow.ts` | ❌ 未作成 | 全ステップ（`intake_start` → `intake_complete`）動作 |
+| 1c-5 | Record モード | `src/bot/record-mode.ts` | ❌ 未作成 | テキスト解析 + 画像解析 + D1 保存 + 日次フィードバック |
+| 1c-6 | Consult モード | `src/bot/consult-mode.ts` | ❌ 未作成 | RAG 検索 + OpenAI 回答生成 + 返信 |
+| 1c-7 | LINE API ヘルパー | `src/utils/line.ts` | 🔍 要確認（154行あり） | `sendMessage` / `replyMessage` / `getMessageContent` が ARCHITECTURE.md 仕様と一致 |
 
 **依存関係**: Phase 1a + 1b 完了後  
 **参照ドキュメント**: `docs/BOT_FLOW.md`、`docs/ARCHITECTURE.md`
@@ -226,34 +320,34 @@ export function buildMissingQuestionPrompt(input: MissingQuestionInput)
 
 ### 管理者 API タスク
 
-| # | タスク | 実装ファイル | 完了条件 |
-|---|---|---|---|
-| 1d-1 | JWT 認証ミドルウェア | `src/middleware/auth.ts` | Bearer トークン検証 |
-| 1d-2 | RBAC ミドルウェア | `src/middleware/rbac.ts` | superadmin / admin ロール制御 |
-| 1d-3 | 管理者認証 API | `src/routes/admin/auth.ts` | POST /api/admin/auth/login |
-| 1d-4 | アカウント管理 API | `src/routes/admin/accounts.ts` | GET/POST/PATCH |
-| 1d-5 | ユーザー管理 API | `src/routes/admin/users.ts` | GET 一覧・詳細 / PATCH ON/OFF |
-| 1d-6 | BOT 管理 API | `src/routes/admin/bots.ts` | CRUD |
-| 1d-7 | ナレッジ管理 API | `src/routes/admin/knowledge.ts` | CRUD + インデックス登録 |
-| 1d-8 | ダッシュボード API | `src/routes/admin/dashboard.ts` | GET stats / conversations |
+| # | タスク | 実装ファイル | 状態 | 完了条件 |
+|---|---|---|---|---|
+| 1d-1 | JWT 認証ミドルウェア | `src/middleware/auth.ts` | 🔍 要確認（48行あり） | Bearer トークン検証が仕様通りに動作 |
+| 1d-2 | RBAC ミドルウェア | `src/middleware/rbac.ts` | ❌ 未作成 | superadmin / admin ロール制御 |
+| 1d-3 | 管理者認証 API | `src/routes/admin/auth.ts` | ⚠️ 要修正（55行の骨格あり） | POST /api/admin/auth/login が正規 Repository を使用 |
+| 1d-4 | アカウント管理 API | `src/routes/admin/accounts.ts` | ❌ 未作成 | GET/POST/PATCH |
+| 1d-5 | ユーザー管理 API | `src/routes/admin/users.ts` | ⚠️ 要修正（96行の骨格あり） | GET 一覧・詳細 / PATCH ON/OFF が正規 Repository を使用 |
+| 1d-6 | BOT 管理 API | `src/routes/admin/bots.ts` | ❌ 未作成 | CRUD |
+| 1d-7 | ナレッジ管理 API | `src/routes/admin/knowledge.ts` | ❌ 未作成 | CRUD + インデックス登録 |
+| 1d-8 | ダッシュボード API | `src/routes/admin/dashboard.ts` | ⚠️ 要修正（80行の骨格あり） | GET stats / conversations が正規 Repository を使用 |
 
 ### ユーザー API タスク
 
-| # | タスク | 実装ファイル | 完了条件 |
-|---|---|---|---|
-| 1d-9 | ユーザーダッシュボード API | `src/routes/user/dashboard.ts` | GET /api/user/dashboard |
-| 1d-10 | 日次ログ API | `src/routes/user/records.ts` | GET 一覧 / GET 日別詳細 |
-| 1d-11 | 進捗写真 API | `src/routes/user/progress-photos.ts` | GET 一覧 |
-| 1d-12 | 週次レポート API | `src/routes/user/weekly-reports.ts` | GET 一覧 |
+| # | タスク | 実装ファイル | 状態 | 完了条件 |
+|---|---|---|---|---|
+| 1d-9 | ユーザーダッシュボード API | `src/routes/user/dashboard.ts` | ❌ 未作成（`user/index.ts` は要確認・整理） | GET /api/user/dashboard |
+| 1d-10 | 日次ログ API | `src/routes/user/records.ts` | ❌ 未作成 | GET 一覧 / GET 日別詳細 |
+| 1d-11 | 進捗写真 API | `src/routes/user/progress-photos.ts` | ❌ 未作成 | GET 一覧 |
+| 1d-12 | 週次レポート API | `src/routes/user/weekly-reports.ts` | ❌ 未作成 | GET 一覧 |
 
 ### フロントエンド（ダッシュボード UI）タスク
 
-| # | タスク | 実装ファイル | 完了条件 |
-|---|---|---|---|
-| 1d-13 | 管理者ダッシュボード HTML | `src/index.ts`（インライン） | ログイン・サマリー・ユーザー一覧 |
-| 1d-14 | ユーザー PWA HTML | `src/index.ts`（インライン） | 体重グラフ・食事ログ・進捗写真 |
-| 1d-15 | 管理者 JS | `public/static/admin.js` | API 呼び出し・UI 更新 |
-| 1d-16 | ユーザー JS | `public/static/user.js` | API 呼び出し・グラフ表示 |
+| # | タスク | 実装ファイル | 状態 | 完了条件 |
+|---|---|---|---|---|
+| 1d-13 | 管理者ダッシュボード HTML | `src/index.ts`（インライン） | 🔍 要確認（595行あり） | ログイン・サマリー・ユーザー一覧が正規 API エンドポイントを呼び出す |
+| 1d-14 | ユーザー PWA HTML | `src/index.ts`（インライン） | 🔍 要確認（上記と同） | 体重グラフ・食事ログ・進捗写真 |
+| 1d-15 | 管理者 JS | `public/static/admin.js` | 🔍 要確認 | API 呼び出し・UI 更新 |
+| 1d-16 | ユーザー JS | `public/static/user.js` | 🔍 要確認 | API 呼び出し・グラフ表示 |
 
 **依存関係**: Phase 1a + 1b 完了後（1c は並行可）  
 **参照ドキュメント**: `docs/API.md`
@@ -266,17 +360,17 @@ export function buildMissingQuestionPrompt(input: MissingQuestionInput)
 
 ### タスク一覧
 
-| # | タスク | 実装ファイル | 完了条件 |
-|---|---|---|---|
-| 1e-1 | 日次リマインダー Cron | `src/jobs/daily-reminder.ts` | 未記録ユーザーへ LINE 送信 |
-| 1e-2 | 週次レポート生成 Cron | `src/jobs/weekly-report.ts` | データ集計 + AI 生成 + LINE 送信 |
-| 1e-3 | 画像解析ジョブ | `src/jobs/image-analysis.ts` | Queue からジョブ取得・処理 |
-| 1e-4 | ビルド確認 | `npm run build` | ビルドエラーなし |
-| 1e-5 | ローカル動作確認 | PM2 + wrangler pages dev | 全エンドポイント正常応答 |
-| 1e-6 | D1 本番 DB 作成 | `npx wrangler d1 create diet-bot-production` | database_id 取得・wrangler.jsonc に反映 |
-| 1e-7 | 本番マイグレーション | `npx wrangler d1 migrations apply diet-bot-production` | 全 7 マイグレーション適用 |
-| 1e-8 | Cloudflare Pages デプロイ | `npx wrangler pages deploy dist` | 本番 URL で動作確認 |
-| 1e-9 | Secrets 設定 | `npx wrangler pages secret put` | OPENAI_API_KEY / LINE / JWT 設定済み |
+| # | タスク | 実装ファイル | 状態 | 完了条件 |
+|---|---|---|---|---|
+| 1e-1 | 日次リマインダー Cron | `src/jobs/daily-reminder.ts` | ❌ 未作成（`src/bot/cron.ts` に骨格あり・要整理） | 未記録ユーザーへ LINE 送信 |
+| 1e-2 | 週次レポート生成 Cron | `src/jobs/weekly-report.ts` | ❌ 未作成（同上） | データ集計 + AI 生成 + LINE 送信 |
+| 1e-3 | 画像解析ジョブ | `src/jobs/image-analysis.ts` | ❌ 未作成 | Queue からジョブ取得・処理 |
+| 1e-4 | ビルド確認 | `npm run build` | - | ビルドエラーなし |
+| 1e-5 | ローカル動作確認 | PM2 + wrangler pages dev | - | 全エンドポイント正常応答 |
+| 1e-6 | D1 本番 DB 作成 | `npx wrangler d1 create diet-bot-production` | ❌ 未実行 | database_id 取得・wrangler.jsonc に反映 |
+| 1e-7 | 本番マイグレーション | `npx wrangler d1 migrations apply diet-bot-production` | ❌ 未実行 | 全 7 マイグレーション適用 |
+| 1e-8 | Cloudflare Pages デプロイ | `npx wrangler pages deploy dist` | ❌ 未実行 | 本番 URL で動作確認 |
+| 1e-9 | Secrets 設定 | `npx wrangler pages secret put` | ❌ 未実行 | OPENAI_API_KEY / LINE / JWT 設定済み |
 
 **依存関係**: Phase 1a〜1d 完了後  
 **参照ドキュメント**: `docs/DEPLOYMENT.md`
@@ -288,12 +382,16 @@ export function buildMissingQuestionPrompt(input: MissingQuestionInput)
 ```
 □ src/repository/index.ts を削除済み
 □ src/types/models.ts を削除済み
-□ src/ai/prompts.ts を削除済み（または src/services/ai/prompts.ts に移動済み）
-□ src/ai/client.ts を削除済み（または src/services/ai/client.ts に移動済み）
+□ src/ai/prompts.ts を削除済み
+□ src/ai/client.ts を削除済み
+□ src/ai/ ディレクトリを削除済み
+□ src/bot/dispatcher.ts（現行）を削除済み
 □ src/repositories/ ディレクトリ作成済み
 □ src/services/ai/ ディレクトリ作成済み
+□ src/jobs/ ディレクトリ作成済み
 □ src/types/db.ts の型定義が DATABASE.md と一致していることを確認
 □ 全型の user_account_id 命名が REPOSITORY.md 仕様と一致していることを確認
+□ src/routes/webhooks/line.ts の内容を src/routes/line/webhook.ts に移植済み
 ```
 
 ---
