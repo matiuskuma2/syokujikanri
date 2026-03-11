@@ -28,6 +28,8 @@ import { lineQueueConsumer } from './jobs/image-analysis'
 // Cron ジョブ
 import { runDailyReminder } from './jobs/daily-reminder'
 import { runWeeklyReport } from './jobs/weekly-report'
+import { expirePendingIntakeResults } from './repositories/image-intake-repo'
+import { deleteExpiredSessions } from './repositories/mode-sessions-repo'
 
 type Variables = {
   jwtPayload: JwtPayload
@@ -144,6 +146,19 @@ app.onError((err, c) => {
 // Cloudflare Scheduled (Cron)
 // ===================================================================
 
+/** 毎時クリーンアップ: 期限切れ画像確認の自動破棄 + セッション清掃 */
+async function runHourlyCleanup(env: Bindings): Promise<void> {
+  try {
+    const expired = await expirePendingIntakeResults(env.DB)
+    const sessions = await deleteExpiredSessions(env.DB)
+    if (expired > 0 || sessions > 0) {
+      console.log(`[cron] hourly cleanup: ${expired} expired image results, ${sessions} expired sessions`)
+    }
+  } catch (err) {
+    console.error('[cron] hourly cleanup error:', err)
+  }
+}
+
 export async function scheduled(
   event: ScheduledEvent,
   env: Bindings,
@@ -156,6 +171,9 @@ export async function scheduled(
         break
       case '0 11 * * 0': // UTC 11:00 日曜 = JST 20:00 日曜 週次レポート
         await runWeeklyReport(env)
+        break
+      case '0 * * * *': // 毎時: 期限切れ画像確認の自動破棄 + セッション清掃
+        await runHourlyCleanup(env)
         break
       default:
         console.log(`[cron] unknown cron expression: ${event.cron}`)
