@@ -290,6 +290,29 @@ async function handleTextMessageEvent(
   const session = await findActiveModeSession(env.DB, clientAccountId, lineUserId)
   const currentMode = session?.current_mode ?? thread.current_mode
 
+  // 画像確認 pending 中の応答を優先処理
+  if (session?.current_step === 'pending_image_confirm') {
+    const { handleImageConfirm, handleImageDiscard } = await import('./image-confirm-handler')
+    let sessionData: { intakeResultId?: string } = {}
+    try {
+      sessionData = session.session_data ? JSON.parse(session.session_data) : {}
+    } catch { /* ignore */ }
+
+    const intakeResultId = sessionData.intakeResultId
+    if (!intakeResultId) {
+      // データ不整合 — セッションをクリア
+      await deleteModeSession(env.DB, clientAccountId, lineUserId)
+    } else if (['確定', 'はい', 'yes', 'ok', 'OK'].some(kw => textTrim.includes(kw))) {
+      await handleImageConfirm(event.replyToken, intakeResultId, lineUserId, clientAccountId, env)
+      return
+    } else if (['取消', 'キャンセル', 'いいえ', 'no', 'cancel'].some(kw => textTrim.includes(kw))) {
+      await handleImageDiscard(event.replyToken, intakeResultId, lineUserId, clientAccountId, env)
+      return
+    }
+    // それ以外のテキストはモードセッションをクリアして通常処理へ
+    await deleteModeSession(env.DB, clientAccountId, lineUserId)
+  }
+
   // インテーク（問診）モード中は優先処理
   if (currentMode === 'intake') {
     const handled = await handleIntakeStep(

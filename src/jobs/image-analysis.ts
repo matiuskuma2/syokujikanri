@@ -24,17 +24,10 @@ import {
   updateJobStatus,
   saveImageIntakeResult,
 } from '../repositories/image-intake-repo'
-import { ensureDailyLog } from '../repositories/daily-logs-repo'
-import {
-  createMealEntry,
-  findMealEntryByDailyLogAndType,
-  updateMealEntryFromEstimate,
-  incrementMealPhotoCount,
-} from '../repositories/meal-entries-repo'
-import { upsertBodyMetrics } from '../repositories/body-metrics-repo'
-import { createProgressPhoto } from '../repositories/progress-photos-repo'
+
 import { createConversationMessage } from '../repositories/conversations-repo'
-import { pushText } from '../services/line/reply'
+import { upsertModeSession } from '../repositories/mode-sessions-repo'
+import { pushText, pushWithQuickReplies } from '../services/line/reply'
 import { todayJst, nowIso } from '../utils/id'
 
 // ===================================================================
@@ -214,10 +207,11 @@ async function processImageAnalysis(
         break
     }
 
-    // 6. image_intake_results を保存
-    await saveImageIntakeResult(env.DB, {
+    // 6. image_intake_results を pending 状態で保存（applied_flag=0, 24h 期限付き）
+    const intakeResult = await saveImageIntakeResult(env.DB, {
       messageAttachmentId: attachmentId,
       userAccountId,
+      lineUserId,
       imageCategory: category,
       confidenceScore: confidence,
       extractedJson,
@@ -227,9 +221,32 @@ async function processImageAnalysis(
     // 7. ジョブを done に更新
     await updateJobStatus(env.DB, job.id, 'done')
 
-    // 8. LINE push で結果通知
+    // 8. mode_session に pending_image_confirm を設定
+    //    ユーザーの次回テキストで確認応答をハンドリング
+    if (lineUserId) {
+      await upsertModeSession(env.DB, {
+        clientAccountId,
+        lineUserId,
+        currentMode: 'record',
+        currentStep: 'pending_image_confirm',
+        sessionData: { intakeResultId: intakeResult.id, category },
+        ttlHours: 24,
+      })
+    }
+
+    // 9. LINE push で確認メッセージ + QuickReply を送信
     if (replyMessage && lineUserId) {
-      await pushText(lineUserId, replyMessage, env.LINE_CHANNEL_ACCESS_TOKEN).catch((err) => {
+      const confirmMessage = replyMessage + '\n\n↓ この内容で記録しますか？'
+
+      await pushWithQuickReplies(
+        lineUserId,
+        confirmMessage,
+        [
+          { label: '✅ 確定', text: '確定' },
+          { label: '❌ 取消', text: '取消' },
+        ],
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      ).catch((err) => {
         console.warn('[Queue] LINE push failed (non-fatal):', err)
       })
 
@@ -238,7 +255,7 @@ async function processImageAnalysis(
         threadId,
         senderType: 'bot',
         messageType: 'text',
-        rawText: replyMessage,
+        rawText: confirmMessage,
         modeAtSend: 'record',
         sentAt: nowIso(),
       }).catch((err) => {
@@ -291,44 +308,12 @@ async function analyzeMealPhoto(
     parsed = { raw_response: raw }
   }
 
-  const today = todayJst()
-  const dailyLog = await ensureDailyLog(env.DB, {
-    userAccountId,
-    clientAccountId,
-    logDate: today,
-  })
-
   // meal_type の判定
   const guessedType = (parsed.meal_type_guess as string) ?? 'other'
   const mealType =
     ['breakfast', 'lunch', 'dinner', 'snack', 'other'].includes(guessedType)
-      ? (guessedType as 'breakfast' | 'lunch' | 'dinner' | 'snack' | 'other')
+      ? guessedType
       : 'other'
-
-  // 既存エントリを確認して更新または新規作成
-  const existing = await findMealEntryByDailyLogAndType(env.DB, dailyLog.id, mealType)
-  if (existing) {
-    await updateMealEntryFromEstimate(env.DB, existing.id, {
-      mealText: (parsed.meal_description as string) ?? null,
-      caloriesKcal: (parsed.estimated_calories_kcal as number) ?? null,
-      proteinG: (parsed.estimated_protein_g as number) ?? null,
-      fatG: (parsed.estimated_fat_g as number) ?? null,
-      carbsG: (parsed.estimated_carbs_g as number) ?? null,
-      confirmationStatus: 'ai_estimated',
-    })
-    await incrementMealPhotoCount(env.DB, existing.id)
-  } else {
-    await createMealEntry(env.DB, {
-      dailyLogId: dailyLog.id,
-      mealType,
-      mealText: (parsed.meal_description as string) ?? null,
-      caloriesKcal: (parsed.estimated_calories_kcal as number) ?? null,
-      proteinG: (parsed.estimated_protein_g as number) ?? null,
-      fatG: (parsed.estimated_fat_g as number) ?? null,
-      carbsG: (parsed.estimated_carbs_g as number) ?? null,
-      confirmationStatus: 'ai_estimated',
-    })
-  }
 
   const cal = parsed.estimated_calories_kcal
   const desc = (parsed.meal_description as string) ?? '食事'
@@ -342,12 +327,23 @@ async function analyzeMealPhoto(
     `🍽 ${mealTypeJa}の解析が完了しました！\n\n` +
     `📝 ${desc}\n` +
     (cal ? `🔥 推定カロリー: ${cal} kcal\n` : '') +
-    (parsed.estimated_protein_g ? `💪 タンパク質: ${parsed.estimated_protein_g}g\n` : '') +
-    `\n※ AIによる推定値です。正確な値は食品ラベルをご確認ください。`
+    (parsed.estimated_protein_g ? `💪 タンパク質: ${parsed.estimated_protein_g}g\n` : '')
 
+  // ★ メインテーブルへの即時反映は行わない
+  // proposed_action_json にデータを保存し、ユーザー確認後に反映する
   return {
     extractedJson: parsed,
-    proposedActionJson: { action: 'update_meal_entry', meal_type: mealType, daily_log_id: dailyLog.id },
+    proposedActionJson: {
+      action: 'create_or_update_meal_entry',
+      meal_type: mealType,
+      meal_text: desc,
+      calories_kcal: (parsed.estimated_calories_kcal as number) ?? null,
+      protein_g: (parsed.estimated_protein_g as number) ?? null,
+      fat_g: (parsed.estimated_fat_g as number) ?? null,
+      carbs_g: (parsed.estimated_carbs_g as number) ?? null,
+      user_account_id: userAccountId,
+      client_account_id: clientAccountId,
+    },
     replyMessage,
   }
 }
@@ -378,37 +374,6 @@ async function analyzeNutritionLabel(
     parsed = { raw_response: raw }
   }
 
-  const today = todayJst()
-  const dailyLog = await ensureDailyLog(env.DB, {
-    userAccountId,
-    clientAccountId,
-    logDate: today,
-  })
-
-  // 食事エントリに栄養情報を反映（other として記録）
-  const existing = await findMealEntryByDailyLogAndType(env.DB, dailyLog.id, 'other')
-  if (existing) {
-    await updateMealEntryFromEstimate(env.DB, existing.id, {
-      mealText: (parsed.product_name as string) ?? '栄養成分ラベル',
-      caloriesKcal: (parsed.calories_kcal as number) ?? null,
-      proteinG: (parsed.protein_g as number) ?? null,
-      fatG: (parsed.fat_g as number) ?? null,
-      carbsG: (parsed.carbs_g as number) ?? null,
-      confirmationStatus: 'ai_estimated',
-    })
-  } else {
-    await createMealEntry(env.DB, {
-      dailyLogId: dailyLog.id,
-      mealType: 'other',
-      mealText: (parsed.product_name as string) ?? '栄養成分ラベル',
-      caloriesKcal: (parsed.calories_kcal as number) ?? null,
-      proteinG: (parsed.protein_g as number) ?? null,
-      fatG: (parsed.fat_g as number) ?? null,
-      carbsG: (parsed.carbs_g as number) ?? null,
-      confirmationStatus: 'ai_estimated',
-    })
-  }
-
   const name = (parsed.product_name as string) ?? '食品'
   const cal = parsed.calories_kcal
 
@@ -420,9 +385,20 @@ async function analyzeNutritionLabel(
     (parsed.carbs_g ? `🍚 炭水化物: ${parsed.carbs_g}g\n` : '') +
     (parsed.fat_g ? `🧈 脂質: ${parsed.fat_g}g\n` : '')
 
+  // ★ メインテーブルへの即時反映は行わない
   return {
     extractedJson: parsed,
-    proposedActionJson: { action: 'update_meal_entry', meal_type: 'other', daily_log_id: dailyLog.id },
+    proposedActionJson: {
+      action: 'create_or_update_meal_entry',
+      meal_type: 'other',
+      meal_text: name,
+      calories_kcal: (parsed.calories_kcal as number) ?? null,
+      protein_g: (parsed.protein_g as number) ?? null,
+      fat_g: (parsed.fat_g as number) ?? null,
+      carbs_g: (parsed.carbs_g as number) ?? null,
+      user_account_id: userAccountId,
+      client_account_id: clientAccountId,
+    },
     replyMessage,
   }
 }
@@ -457,29 +433,26 @@ async function analyzeBodyScale(
   let replyMessage = ''
 
   if (weightKg && weightKg > 20 && weightKg < 300) {
-    const today = todayJst()
-    const dailyLog = await ensureDailyLog(env.DB, {
-      userAccountId,
-      clientAccountId,
-      logDate: today,
-    })
-    await upsertBodyMetrics(env.DB, {
-      dailyLogId: dailyLog.id,
-      weightKg,
-    })
     replyMessage =
       `⚖️ 体重計を読み取りました！\n\n` +
-      `体重: ${weightKg} kg を記録しました ✅\n\n` +
-      `継続して記録することで体重推移を可視化できます 📈`
+      `体重: ${weightKg} kg`
   } else {
     replyMessage =
       `⚖️ 体重計の画像を受け取りましたが、数値を正確に読み取れませんでした。\n\n` +
       `テキストで「体重○○kg」と送っていただくと確実に記録できます。`
   }
 
+  // ★ メインテーブルへの即時反映は行わない
   return {
     extractedJson: parsed,
-    proposedActionJson: weightKg ? { action: 'upsert_weight', weight_kg: weightKg } : {},
+    proposedActionJson: weightKg && weightKg > 20 && weightKg < 300
+      ? {
+          action: 'upsert_weight',
+          weight_kg: weightKg,
+          user_account_id: userAccountId,
+          client_account_id: clientAccountId,
+        }
+      : { action: 'none' },
     replyMessage,
   }
 }
@@ -496,29 +469,21 @@ async function analyzeProgressPhoto(
   replyMessage: string
 }> {
   const today = todayJst()
-  const dailyLog = await ensureDailyLog(env.DB, {
-    userAccountId,
-    clientAccountId,
-    logDate: today,
-  })
-
-  // progress_photos テーブルに保存
-  await createProgressPhoto(env.DB, {
-    userAccountId,
-    dailyLogId: dailyLog.id,
-    photoDate: today,
-    storageKey: r2Key,
-    photoType: 'progress',
-  })
 
   const replyMessage =
-    `📸 体型写真を保存しました！\n\n` +
-    `継続して撮影することで、体型の変化を記録・比較できます。\n` +
-    `ダッシュボードから進捗写真を確認できます。`
+    `📸 体型写真を受け取りました！\n\n` +
+    `保存すると、体型の変化を記録・比較できます。`
 
+  // ★ メインテーブルへの即時反映は行わない
   return {
     extractedJson: { r2_key: r2Key, photo_date: today },
-    proposedActionJson: { action: 'create_progress_photo', daily_log_id: dailyLog.id },
+    proposedActionJson: {
+      action: 'create_progress_photo',
+      r2_key: r2Key,
+      photo_date: today,
+      user_account_id: userAccountId,
+      client_account_id: clientAccountId,
+    },
     replyMessage,
   }
 }

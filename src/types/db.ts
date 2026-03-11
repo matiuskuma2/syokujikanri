@@ -169,16 +169,26 @@ export type ImageAnalysisJob = {
   finished_at: string | null
 }
 
+/**
+ * applied_flag の値:
+ *   0 = pending  (AI解析済み、ユーザー未確認)
+ *   1 = confirmed (ユーザーが確定 → メインテーブルに反映済み)
+ *   2 = discarded (ユーザーが取消)
+ *   3 = expired   (24時間自動破棄)
+ */
 export type ImageIntakeResult = {
   id: string
   message_attachment_id: string
   user_account_id: string | null
   daily_log_id: string | null
+  line_user_id: string | null
   image_category: ImageCategory
   confidence_score: number | null
   extracted_json: string | null     // JSON
   proposed_action_json: string | null  // JSON
-  applied_flag: number  // 0|1
+  applied_flag: number  // 0=pending|1=confirmed|2=discarded|3=expired
+  confirmed_at: string | null
+  expires_at: string | null
   created_at: string
   updated_at: string
 }

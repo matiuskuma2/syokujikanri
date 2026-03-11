@@ -83,12 +83,13 @@ export async function findJobByAttachmentId(
 // image_intake_results
 // ===================================================================
 
-/** 画像解析結果を保存 */
+/** 画像解析結果を保存（pending 状態で作成、24h 後の期限付き） */
 export async function saveImageIntakeResult(
   db: D1Database,
   params: {
     messageAttachmentId: string
     userAccountId?: string | null
+    lineUserId?: string | null
     dailyLogId?: string | null
     imageCategory: ImageCategory
     confidenceScore?: number | null
@@ -98,23 +99,29 @@ export async function saveImageIntakeResult(
 ): Promise<ImageIntakeResult> {
   const id = generateId()
   const now = nowIso()
+  // 24時間後の期限
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000)
+    .toISOString().replace('T', ' ').substring(0, 19)
+
   await db
     .prepare(`
       INSERT INTO image_intake_results
-        (id, message_attachment_id, user_account_id, daily_log_id,
+        (id, message_attachment_id, user_account_id, line_user_id, daily_log_id,
          image_category, confidence_score, extracted_json, proposed_action_json,
-         applied_flag, created_at, updated_at)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?9)
+         applied_flag, expires_at, created_at, updated_at)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11, ?11)
     `)
     .bind(
       id,
       params.messageAttachmentId,
       params.userAccountId ?? null,
+      params.lineUserId ?? null,
       params.dailyLogId ?? null,
       params.imageCategory,
       params.confidenceScore ?? null,
       params.extractedJson ? JSON.stringify(params.extractedJson) : null,
       params.proposedActionJson ? JSON.stringify(params.proposedActionJson) : null,
+      expiresAt,
       now
     )
     .run()
@@ -133,11 +140,71 @@ export async function markIntakeResultApplied(
   await db
     .prepare(`
       UPDATE image_intake_results
-      SET applied_flag = 1, updated_at = ?1
+      SET applied_flag = 1, confirmed_at = ?1, updated_at = ?1
       WHERE id = ?2
     `)
     .bind(nowIso(), id)
     .run()
+}
+
+/** ユーザーが取消した場合 */
+export async function markIntakeResultDiscarded(
+  db: D1Database,
+  id: string
+): Promise<void> {
+  await db
+    .prepare(`
+      UPDATE image_intake_results
+      SET applied_flag = 2, confirmed_at = ?1, updated_at = ?1
+      WHERE id = ?2
+    `)
+    .bind(nowIso(), id)
+    .run()
+}
+
+/** 24時間タイムアウトで自動破棄（Cron 用） */
+export async function expirePendingIntakeResults(
+  db: D1Database
+): Promise<number> {
+  const now = nowIso()
+  const result = await db
+    .prepare(`
+      UPDATE image_intake_results
+      SET applied_flag = 3, updated_at = ?1
+      WHERE applied_flag = 0 AND expires_at <= ?1
+    `)
+    .bind(now)
+    .run()
+  return result.meta.changes ?? 0
+}
+
+/** ユーザーの未確認(pending)結果を取得 */
+export async function findPendingIntakeResult(
+  db: D1Database,
+  userAccountId: string
+): Promise<ImageIntakeResult | null> {
+  const row = await db
+    .prepare(`
+      SELECT * FROM image_intake_results
+      WHERE user_account_id = ?1 AND applied_flag = 0
+      ORDER BY created_at DESC
+      LIMIT 1
+    `)
+    .bind(userAccountId)
+    .first<ImageIntakeResult>()
+  return row ?? null
+}
+
+/** IDで解析結果を取得 */
+export async function findIntakeResultById(
+  db: D1Database,
+  id: string
+): Promise<ImageIntakeResult | null> {
+  const row = await db
+    .prepare('SELECT * FROM image_intake_results WHERE id = ?1')
+    .bind(id)
+    .first<ImageIntakeResult>()
+  return row ?? null
 }
 
 /** attachment_id で解析結果を取得 */
