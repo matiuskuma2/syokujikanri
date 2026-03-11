@@ -21,7 +21,6 @@ import type {
 
 import { getUserProfile, replyText, replyWithQuickReplies, getMessageContent } from './reply'
 import { startIntakeFlow, handleIntakeStep, beginIntakeFromStart, resumeIntakeFlow } from './intake-flow'
-import { handleImageConfirmResponse } from './image-confirm'
 import { upsertLineUser, ensureUserAccount } from '../../repositories/line-users-repo'
 import { upsertUserServiceStatus, checkServiceAccess } from '../../repositories/subscriptions-repo'
 import { ensureOpenThread, createConversationMessage, updateThreadMode } from '../../repositories/conversations-repo'
@@ -293,16 +292,36 @@ async function handleTextMessageEvent(
 
   // 画像確認 pending 中の応答を優先処理
   if (session?.current_step === 'pending_image_confirm') {
-    const handled = await handleImageConfirmResponse(
-      event.replyToken,
-      textTrim,
-      lineUserId,
-      userAccount.id,
-      clientAccountId,
-      session,
-      env
-    )
-    if (handled) return
+    let sessionData: { intakeResultId?: string } = {}
+    try {
+      sessionData = session.session_data ? JSON.parse(session.session_data) : {}
+    } catch { /* ignore */ }
+
+    const intakeResultId = sessionData.intakeResultId
+    if (!intakeResultId) {
+      // データ不整合 — セッションをクリアして通常処理へ
+      await deleteModeSession(env.DB, clientAccountId, lineUserId)
+    } else if (['確定', 'はい', 'yes', 'ok', 'OK', '記録', '保存'].some(kw => textTrim.includes(kw))) {
+      const { handleImageConfirm } = await import('./image-confirm-handler')
+      await handleImageConfirm(event.replyToken, intakeResultId, lineUserId, clientAccountId, env)
+      return
+    } else if (['取消', 'キャンセル', 'cancel', 'いいえ', 'no', 'やめる', '削除'].some(kw => textTrim.includes(kw))) {
+      const { handleImageDiscard } = await import('./image-confirm-handler')
+      await handleImageDiscard(event.replyToken, intakeResultId, lineUserId, clientAccountId, env)
+      return
+    } else {
+      // 判定できないテキスト → 再度確認を促す
+      await replyWithQuickReplies(
+        event.replyToken,
+        '画像の解析結果を記録しますか？\n「確定」または「取消」で応答してください。',
+        [
+          { label: '✅ 確定', text: '確定' },
+          { label: '❌ 取消', text: '取消' },
+        ],
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+      return
+    }
   }
 
   // インテーク（問診）モード中は優先処理
