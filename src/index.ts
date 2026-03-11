@@ -184,13 +184,17 @@ function getAdminDashboardHtml(): string {
     .stat-card { transition: transform 0.2s; }
     .stat-card:hover { transform: translateY(-2px); }
     .modal-bg { background: rgba(0,0,0,0.5); }
-    .toast { animation: fadeInOut 3s forwards; }
+    .toast { animation: fadeInOut 3.5s forwards; }
     @keyframes fadeInOut {
       0% { opacity:0; transform:translateY(20px); }
       15% { opacity:1; transform:translateY(0); }
       80% { opacity:1; }
       100% { opacity:0; }
     }
+    .nav-active { background-color: #374151; color: white; }
+    .role-badge-superadmin { background:#fef3c7; color:#92400e; }
+    .role-badge-admin { background:#dbeafe; color:#1e40af; }
+    .role-badge-staff { background:#f3f4f6; color:#374151; }
   </style>
 </head>
 <body class="bg-gray-50">
@@ -198,7 +202,7 @@ function getAdminDashboardHtml(): string {
 <!-- Toast通知 -->
 <div id="toast-container" class="fixed bottom-4 right-4 z-50 space-y-2"></div>
 
-<!-- ログイン画面 -->
+<!-- ========== ログイン画面 ========== -->
 <div id="login-screen" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-50 to-teal-50">
   <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md">
     <div class="text-center mb-8">
@@ -211,15 +215,16 @@ function getAdminDashboardHtml(): string {
     <div class="space-y-4">
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1">メールアドレス</label>
-        <input id="email" type="email" value="admin@diet-bot.local"
+        <input id="login-email" type="email"
           class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent"
-          placeholder="admin@diet-bot.local">
+          placeholder="admin@example.com">
       </div>
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1">パスワード</label>
-        <input id="password" type="password" value="admin123"
+        <input id="login-password" type="password"
           class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent"
-          placeholder="パスワード">
+          placeholder="パスワード"
+          onkeydown="if(event.key==='Enter')handleLogin()">
       </div>
       <div id="login-error" class="hidden text-red-500 text-sm bg-red-50 p-3 rounded-lg"></div>
       <button onclick="handleLogin()"
@@ -227,19 +232,15 @@ function getAdminDashboardHtml(): string {
         ログイン
       </button>
       <div class="text-center">
-        <button onclick="showPage('register')" class="text-sm text-green-600 hover:underline">
-          新規管理者登録
-        </button>
-        <span class="text-gray-300 mx-2">|</span>
         <button onclick="showForgotPassword()" class="text-sm text-gray-500 hover:underline">
-          パスワードを忘れた
+          パスワードを忘れた場合
         </button>
       </div>
     </div>
   </div>
 </div>
 
-<!-- パスワードリセット申請モーダル -->
+<!-- ========== パスワードリセット申請モーダル ========== -->
 <div id="forgot-modal" class="hidden fixed inset-0 modal-bg z-50 flex items-center justify-center">
   <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md mx-4">
     <h2 class="text-xl font-bold text-gray-800 mb-6">パスワード再設定</h2>
@@ -265,43 +266,49 @@ function getAdminDashboardHtml(): string {
   </div>
 </div>
 
-<!-- ダッシュボード本体 -->
+<!-- ========== ダッシュボード本体 ========== -->
 <div id="dashboard-screen" class="hidden flex">
   <!-- サイドバー -->
-  <div class="sidebar bg-gray-800 text-white flex flex-col fixed h-full z-10">
-    <div class="p-6 border-b border-gray-700">
+  <div class="sidebar bg-gray-800 text-white flex flex-col fixed h-full z-10 overflow-y-auto">
+    <div class="p-5 border-b border-gray-700">
       <div class="flex items-center space-x-3">
-        <div class="w-10 h-10 bg-green-500 rounded-full flex items-center justify-center">
+        <div class="w-10 h-10 bg-green-500 rounded-full flex items-center justify-center flex-shrink-0">
           <i class="fas fa-leaf text-white"></i>
         </div>
-        <div>
-          <h1 class="font-bold text-white">diet-bot</h1>
-          <p class="text-gray-400 text-xs" id="sidebar-email">-</p>
+        <div class="min-w-0">
+          <h1 class="font-bold text-white text-sm">diet-bot</h1>
+          <p class="text-gray-400 text-xs truncate" id="sidebar-email">-</p>
+          <span id="sidebar-role-badge" class="text-xs px-2 py-0.5 rounded-full bg-gray-600 text-gray-300"></span>
         </div>
       </div>
     </div>
     <nav class="flex-1 p-4 space-y-1">
+      <p class="text-gray-500 text-xs font-medium px-3 py-2 uppercase tracking-wider">メインメニュー</p>
       <button id="nav-overview" onclick="showPage('overview')"
         class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-300 hover:bg-gray-700 transition-colors text-left">
-        <i class="fas fa-chart-bar w-5"></i><span>ダッシュボード</span>
+        <i class="fas fa-chart-bar w-5 text-center"></i><span>ダッシュボード</span>
       </button>
       <button id="nav-users" onclick="showPage('users')"
         class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-300 hover:bg-gray-700 transition-colors text-left">
-        <i class="fas fa-users w-5"></i><span>ユーザー管理</span>
+        <i class="fas fa-users w-5 text-center"></i><span>LINEユーザー管理</span>
       </button>
+
+      <p class="text-gray-500 text-xs font-medium px-3 py-2 mt-3 uppercase tracking-wider">管理者管理</p>
+      <button id="nav-staff" onclick="showPage('staff')"
+        class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-300 hover:bg-gray-700 transition-colors text-left">
+        <i class="fas fa-user-shield w-5 text-center"></i><span>スタッフ管理</span>
+      </button>
+
+      <p class="text-gray-500 text-xs font-medium px-3 py-2 mt-3 uppercase tracking-wider">設定</p>
       <button id="nav-account" onclick="showPage('account')"
         class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-300 hover:bg-gray-700 transition-colors text-left">
-        <i class="fas fa-cog w-5"></i><span>アカウント設定</span>
-      </button>
-      <button id="nav-register" onclick="showPage('register')"
-        class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-300 hover:bg-gray-700 transition-colors text-left">
-        <i class="fas fa-user-plus w-5"></i><span>管理者登録</span>
+        <i class="fas fa-cog w-5 text-center"></i><span>アカウント設定</span>
       </button>
     </nav>
     <div class="p-4 border-t border-gray-700">
       <button onclick="handleLogout()"
         class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-400 hover:bg-gray-700 transition-colors text-left">
-        <i class="fas fa-sign-out-alt w-5"></i><span>ログアウト</span>
+        <i class="fas fa-sign-out-alt w-5 text-center"></i><span>ログアウト</span>
       </button>
     </div>
   </div>
@@ -309,15 +316,14 @@ function getAdminDashboardHtml(): string {
   <!-- メインコンテンツ -->
   <div class="ml-60 flex-1 min-h-screen">
 
-    <!-- ダッシュボードページ -->
+    <!-- ===== ダッシュボードページ ===== -->
     <div id="page-overview" class="p-8">
       <h1 class="text-2xl font-bold text-gray-800 mb-6">ダッシュボード</h1>
-      <!-- 統計カード -->
       <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <div class="stat-card bg-white rounded-xl shadow p-6">
           <div class="flex items-center justify-between">
             <div>
-              <p class="text-gray-500 text-sm">総ユーザー数</p>
+              <p class="text-gray-500 text-sm">総LINEユーザー数</p>
               <p class="text-3xl font-bold text-gray-800 mt-1" id="stat-total-users">-</p>
             </div>
             <div class="w-14 h-14 bg-blue-100 rounded-full flex items-center justify-center">
@@ -348,19 +354,25 @@ function getAdminDashboardHtml(): string {
           </div>
         </div>
       </div>
-      <!-- 最近のユーザー -->
       <div class="bg-white rounded-xl shadow p-6">
-        <h2 class="font-bold text-gray-800 mb-4">最近のユーザー</h2>
+        <h2 class="font-bold text-gray-800 mb-4">最近参加したLINEユーザー</h2>
         <div id="recent-users-list" class="space-y-3">
           <div class="text-gray-400 text-sm">読み込み中...</div>
         </div>
       </div>
     </div>
 
-    <!-- ユーザー管理ページ -->
+    <!-- ===== LINEユーザー管理ページ ===== -->
     <div id="page-users" class="hidden p-8">
       <div class="flex items-center justify-between mb-6">
-        <h1 class="text-2xl font-bold text-gray-800">ユーザー管理</h1>
+        <div>
+          <h1 class="text-2xl font-bold text-gray-800">LINEユーザー管理</h1>
+          <p class="text-gray-500 text-sm mt-1">diet-bot を利用しているLINEユーザーの一覧・設定管理</p>
+        </div>
+      </div>
+      <div class="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 text-sm text-blue-800">
+        <i class="fas fa-info-circle mr-2"></i>
+        LINEユーザーはLINE公式アカウントを友達追加した際に自動的に登録されます。ここでは各ユーザーのサービス設定（BOT・記録・相談機能の有効化）を管理できます。
       </div>
       <div class="bg-white rounded-xl shadow">
         <div class="p-4 border-b flex gap-3">
@@ -374,25 +386,118 @@ function getAdminDashboardHtml(): string {
       </div>
     </div>
 
-    <!-- アカウント設定ページ -->
+    <!-- ===== スタッフ管理ページ ===== -->
+    <div id="page-staff" class="hidden p-8">
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          <h1 class="text-2xl font-bold text-gray-800">スタッフ管理</h1>
+          <p class="text-gray-500 text-sm mt-1">管理者・スタッフアカウントの招待と権限管理</p>
+        </div>
+      </div>
+
+      <!-- 役割の説明 -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+        <div class="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-xs px-2 py-0.5 rounded-full role-badge-superadmin font-medium">superadmin</span>
+          </div>
+          <p class="text-sm font-semibold text-gray-800">スーパー管理者</p>
+          <ul class="text-xs text-gray-600 mt-2 space-y-1">
+            <li><i class="fas fa-check text-green-500 mr-1"></i>全機能アクセス</li>
+            <li><i class="fas fa-check text-green-500 mr-1"></i>管理者の追加・削除</li>
+            <li><i class="fas fa-check text-green-500 mr-1"></i>システム設定の変更</li>
+            <li><i class="fas fa-check text-green-500 mr-1"></i>全ユーザーデータ閲覧</li>
+          </ul>
+        </div>
+        <div class="bg-blue-50 border border-blue-200 rounded-xl p-4">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-xs px-2 py-0.5 rounded-full role-badge-admin font-medium">admin</span>
+          </div>
+          <p class="text-sm font-semibold text-gray-800">管理者</p>
+          <ul class="text-xs text-gray-600 mt-2 space-y-1">
+            <li><i class="fas fa-check text-green-500 mr-1"></i>LINEユーザー管理</li>
+            <li><i class="fas fa-check text-green-500 mr-1"></i>スタッフの招待</li>
+            <li><i class="fas fa-check text-green-500 mr-1"></i>ユーザーサービス設定</li>
+            <li><i class="fas fa-times text-red-400 mr-1"></i>管理者の追加・削除</li>
+          </ul>
+        </div>
+        <div class="bg-gray-50 border border-gray-200 rounded-xl p-4">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-xs px-2 py-0.5 rounded-full role-badge-staff font-medium">staff</span>
+          </div>
+          <p class="text-sm font-semibold text-gray-800">スタッフ</p>
+          <ul class="text-xs text-gray-600 mt-2 space-y-1">
+            <li><i class="fas fa-check text-green-500 mr-1"></i>LINEユーザー閲覧</li>
+            <li><i class="fas fa-check text-green-500 mr-1"></i>ダッシュボード閲覧</li>
+            <li><i class="fas fa-times text-red-400 mr-1"></i>設定変更</li>
+            <li><i class="fas fa-times text-red-400 mr-1"></i>招待・管理操作</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- 招待フォーム（admin/superadminのみ表示） -->
+      <div id="invite-form-section" class="bg-white rounded-xl shadow p-6 mb-6">
+        <h2 class="font-bold text-gray-800 mb-2 flex items-center gap-2">
+          <i class="fas fa-envelope text-blue-600"></i> スタッフを招待する
+        </h2>
+        <p class="text-gray-500 text-sm mb-4">
+          招待リンクをメールで送信します。受信者はそのリンクからアカウントを作成できます（48時間有効）。
+        </p>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 max-w-2xl">
+          <div class="md:col-span-2">
+            <label class="block text-sm font-medium text-gray-700 mb-1">招待先メールアドレス</label>
+            <input id="invite-email" type="email"
+              class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500"
+              placeholder="staff@example.com">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">権限</label>
+            <select id="invite-role"
+              class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500">
+              <option value="staff">スタッフ</option>
+              <option id="invite-role-admin-option" value="admin">管理者</option>
+            </select>
+          </div>
+        </div>
+        <div class="mt-4 p-3 bg-gray-50 rounded-lg text-xs text-gray-600 max-w-2xl" id="role-desc">
+          <i class="fas fa-info-circle mr-1"></i>
+          <span id="role-desc-text">スタッフ：ユーザー閲覧のみ可能。設定変更・招待は不可。</span>
+        </div>
+        <div id="invite-msg" class="hidden text-sm p-3 rounded-lg mt-3 max-w-2xl"></div>
+        <div class="mt-4">
+          <button onclick="handleInvite()"
+            class="bg-blue-500 hover:bg-blue-600 text-white px-6 py-3 rounded-xl font-medium transition-colors">
+            <i class="fas fa-paper-plane mr-2"></i>招待メールを送信
+          </button>
+        </div>
+      </div>
+
+      <!-- staff権限の場合は非表示メッセージ -->
+      <div id="staff-no-invite" class="hidden bg-yellow-50 border border-yellow-200 rounded-xl p-4 mb-6 text-sm text-yellow-800">
+        <i class="fas fa-lock mr-2"></i>スタッフ権限では招待機能は使用できません。
+      </div>
+
+    </div>
+
+    <!-- ===== アカウント設定ページ ===== -->
     <div id="page-account" class="hidden p-8">
       <h1 class="text-2xl font-bold text-gray-800 mb-6">アカウント設定</h1>
       <!-- 管理者情報 -->
       <div class="bg-white rounded-xl shadow p-6 mb-6">
         <h2 class="font-bold text-gray-800 mb-4 flex items-center gap-2">
-          <i class="fas fa-user text-green-600"></i> 管理者情報
+          <i class="fas fa-user text-green-600"></i> 自分のアカウント情報
         </h2>
-        <div class="space-y-2 text-sm" id="admin-info">
-          <div class="flex gap-2">
-            <span class="text-gray-500 w-24">メール</span>
+        <div class="space-y-3 text-sm" id="admin-info">
+          <div class="flex items-center gap-3">
+            <span class="text-gray-500 w-28">メールアドレス</span>
             <span id="admin-email" class="font-medium">-</span>
           </div>
-          <div class="flex gap-2">
-            <span class="text-gray-500 w-24">権限</span>
+          <div class="flex items-center gap-3">
+            <span class="text-gray-500 w-28">権限</span>
             <span id="admin-role" class="font-medium">-</span>
           </div>
-          <div class="flex gap-2">
-            <span class="text-gray-500 w-24">最終ログイン</span>
+          <div class="flex items-center gap-3">
+            <span class="text-gray-500 w-28">最終ログイン</span>
             <span id="admin-last-login" class="font-medium">-</span>
           </div>
         </div>
@@ -425,76 +530,7 @@ function getAdminDashboardHtml(): string {
           <div id="change-pw-msg" class="hidden text-sm p-3 rounded-lg"></div>
           <button onclick="handleChangePassword()"
             class="bg-green-500 hover:bg-green-600 text-white px-6 py-3 rounded-xl font-medium transition-colors">
-            パスワードを変更
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- 管理者登録ページ -->
-    <div id="page-register" class="hidden p-8">
-      <h1 class="text-2xl font-bold text-gray-800 mb-6">管理者登録</h1>
-
-      <!-- 初回/既存アカウントへのパスワード設定 -->
-      <div class="bg-white rounded-xl shadow p-6 mb-6">
-        <h2 class="font-bold text-gray-800 mb-2 flex items-center gap-2">
-          <i class="fas fa-user-plus text-green-600"></i> 新規管理者登録 / パスワード設定
-        </h2>
-        <p class="text-gray-500 text-sm mb-4">
-          既存メールアドレスの場合はパスワードが設定されます。初めての場合はsuperadminとして登録されます。
-        </p>
-        <div class="space-y-4 max-w-md">
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">メールアドレス</label>
-            <input id="reg-email" type="email"
-              class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500"
-              placeholder="admin@example.com">
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">名前（任意）</label>
-            <input id="reg-name" type="text"
-              class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500"
-              placeholder="山田 太郎">
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">パスワード</label>
-            <input id="reg-password" type="password"
-              class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500"
-              placeholder="8文字以上">
-          </div>
-          <div id="reg-msg" class="hidden text-sm p-3 rounded-lg"></div>
-          <button onclick="handleRegister()"
-            class="bg-green-500 hover:bg-green-600 text-white px-6 py-3 rounded-xl font-medium transition-colors">
-            登録する
-          </button>
-        </div>
-      </div>
-
-      <!-- 招待リンク送信（ログイン済みの場合のみ） -->
-      <div class="bg-white rounded-xl shadow p-6" id="invite-section" style="display:none">
-        <h2 class="font-bold text-gray-800 mb-2 flex items-center gap-2">
-          <i class="fas fa-envelope text-blue-600"></i> スタッフを招待
-        </h2>
-        <p class="text-gray-500 text-sm mb-4">招待メールを送信して、スタッフアカウントを作成できます。</p>
-        <div class="space-y-4 max-w-md">
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">招待先メール</label>
-            <input id="invite-email" type="email"
-              class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500"
-              placeholder="staff@example.com">
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">権限</label>
-            <select id="invite-role"
-              class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500">
-              <option value="staff">スタッフ</option>
-              <option value="admin">管理者</option>
-            </select>
-          </div>
-          <div id="invite-msg" class="hidden text-sm p-3 rounded-lg"></div>
-          <button onclick="handleInvite()"
-            class="bg-blue-500 hover:bg-blue-600 text-white px-6 py-3 rounded-xl font-medium transition-colors">
-            招待メールを送信
+            <i class="fas fa-save mr-2"></i>パスワードを変更
           </button>
         </div>
       </div>
@@ -503,7 +539,7 @@ function getAdminDashboardHtml(): string {
   </div>
 </div>
 
-<!-- ユーザー詳細モーダル -->
+<!-- ========== ユーザー詳細モーダル ========== -->
 <div id="user-modal" class="hidden fixed inset-0 modal-bg z-50 flex items-center justify-center p-4">
   <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
     <div class="flex items-center justify-between mb-6">
@@ -524,10 +560,15 @@ const API_BASE = '/api';
 
 // ===== 認証 =====
 async function handleLogin() {
-  const email = document.getElementById('email').value.trim();
-  const password = document.getElementById('password').value;
+  const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
   const errEl = document.getElementById('login-error');
   errEl.classList.add('hidden');
+  if (!email || !password) {
+    errEl.textContent = 'メールアドレスとパスワードを入力してください。';
+    errEl.classList.remove('hidden');
+    return;
+  }
   try {
     const res = await axios.post(API_BASE + '/admin/auth/login', { email, password });
     authToken = res.data.data.token;
@@ -536,7 +577,7 @@ async function handleLogin() {
     localStorage.setItem('diet_bot_admin', JSON.stringify(currentAdmin));
     showDashboard();
   } catch (err) {
-    const msg = err.response?.data?.error || 'ログインに失敗しました。';
+    const msg = err.response?.data?.error || 'ログインに失敗しました。メールアドレスとパスワードを確認してください。';
     errEl.textContent = msg;
     errEl.classList.remove('hidden');
   }
@@ -572,6 +613,15 @@ async function showDashboard() {
   document.getElementById('dashboard-screen').classList.remove('hidden');
   if (currentAdmin) {
     document.getElementById('sidebar-email').textContent = currentAdmin.email || '-';
+    const roleBadge = document.getElementById('sidebar-role-badge');
+    const roleLabel = { superadmin: 'スーパー管理者', admin: '管理者', staff: 'スタッフ' }[currentAdmin.role] || currentAdmin.role;
+    roleBadge.textContent = roleLabel;
+    roleBadge.className = 'text-xs px-2 py-0.5 rounded-full role-badge-' + (currentAdmin.role || 'staff');
+  }
+  // staff権限の場合はスタッフ管理ページのメニューを制限
+  if (currentAdmin?.role === 'staff') {
+    const staffNavBtn = document.getElementById('nav-staff');
+    if (staffNavBtn) staffNavBtn.style.opacity = '0.5';
   }
   await showPage('overview');
 }
@@ -589,7 +639,7 @@ async function loadOverview() {
 
     const listEl = document.getElementById('recent-users-list');
     if (!recent_users || recent_users.length === 0) {
-      listEl.innerHTML = '<p class="text-gray-400 text-sm">まだユーザーがいません</p>';
+      listEl.innerHTML = '<p class="text-gray-400 text-sm">まだLINEユーザーがいません</p>';
     } else {
       listEl.innerHTML = recent_users.map(u => \`
         <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
@@ -611,7 +661,7 @@ async function loadOverview() {
   }
 }
 
-// ===== ユーザー管理 =====
+// ===== LINEユーザー管理 =====
 async function loadUsers() {
   try {
     const res = await axios.get(API_BASE + '/admin/users', {
@@ -640,6 +690,7 @@ function renderUsersTable(users) {
     tableEl.innerHTML = '<p class="text-gray-400 text-sm py-4 text-center">ユーザーがいません</p>';
     return;
   }
+  const isReadOnly = currentAdmin?.role === 'staff';
   tableEl.innerHTML = \`
     <div class="overflow-x-auto">
     <table class="w-full text-sm">
@@ -701,6 +752,7 @@ async function openUserModal(lineUserId) {
     });
     const u = res.data.data;
     const logs = (u.recentLogs || []).slice(0, 7);
+    const isReadOnly = currentAdmin?.role === 'staff';
     document.getElementById('modal-username').textContent = u.display_name || 'ユーザー詳細';
     document.getElementById('modal-content').innerHTML = \`
       <div class="grid grid-cols-2 gap-4 mb-6 text-sm">
@@ -714,12 +766,12 @@ async function openUserModal(lineUserId) {
         </div>
       </div>
       <div class="mb-6">
-        <h3 class="font-semibold text-gray-700 mb-3">サービス設定</h3>
+        <h3 class="font-semibold text-gray-700 mb-3">サービス設定\${isReadOnly ? ' <span class=\"text-xs text-gray-400 font-normal\">(閲覧のみ)</span>' : ''}</h3>
         <div class="grid grid-cols-2 gap-3">
-          \${serviceToggle(lineUserId, 'bot_enabled', u.service?.bot_enabled, 'BOT有効')}
-          \${serviceToggle(lineUserId, 'record_enabled', u.service?.record_enabled, '記録機能')}
-          \${serviceToggle(lineUserId, 'consult_enabled', u.service?.consult_enabled, '相談機能')}
-          \${serviceToggle(lineUserId, 'intake_completed', u.service?.intake_completed, '問診完了')}
+          \${serviceToggle(lineUserId, 'bot_enabled', u.service?.bot_enabled, 'BOT有効', isReadOnly)}
+          \${serviceToggle(lineUserId, 'record_enabled', u.service?.record_enabled, '記録機能', isReadOnly)}
+          \${serviceToggle(lineUserId, 'consult_enabled', u.service?.consult_enabled, '相談機能', isReadOnly)}
+          \${serviceToggle(lineUserId, 'intake_completed', u.service?.intake_completed, '問診完了', isReadOnly)}
         </div>
       </div>
       <div>
@@ -743,8 +795,18 @@ async function openUserModal(lineUserId) {
   }
 }
 
-function serviceToggle(lineUserId, key, val, label) {
+function serviceToggle(lineUserId, key, val, label, isReadOnly) {
   const isOn = val === 1 || val === true;
+  if (isReadOnly) {
+    return \`
+      <div class="flex items-center justify-between bg-gray-50 p-3 rounded-lg">
+        <span class="text-sm text-gray-700">\${label}</span>
+        <span class="w-10 h-6 rounded-full \${isOn ? 'bg-green-400' : 'bg-gray-300'} relative inline-block">
+          <span class="absolute top-0.5 \${isOn ? 'right-0.5' : 'left-0.5'} w-5 h-5 bg-white rounded-full shadow"></span>
+        </span>
+      </div>
+    \`;
+  }
   return \`
     <div class="flex items-center justify-between bg-gray-50 p-3 rounded-lg">
       <span class="text-sm text-gray-700">\${label}</span>
@@ -773,6 +835,60 @@ function closeUserModal() {
   document.getElementById('user-modal').classList.add('hidden');
 }
 
+// ===== スタッフ管理 =====
+function loadStaff() {
+  const role = currentAdmin?.role;
+  const inviteSection = document.getElementById('invite-form-section');
+  const noInviteMsg = document.getElementById('staff-no-invite');
+
+  if (role === 'staff') {
+    inviteSection.classList.add('hidden');
+    noInviteMsg.classList.remove('hidden');
+  } else {
+    inviteSection.classList.remove('hidden');
+    noInviteMsg.classList.add('hidden');
+    // superadminのみ「管理者」オプションを表示
+    const adminOption = document.getElementById('invite-role-admin-option');
+    if (adminOption) {
+      adminOption.style.display = role === 'superadmin' ? '' : 'none';
+    }
+  }
+  updateRoleDesc();
+}
+
+function updateRoleDesc() {
+  const role = document.getElementById('invite-role')?.value;
+  const descEl = document.getElementById('role-desc-text');
+  if (!descEl) return;
+  const descs = {
+    staff: 'スタッフ：ユーザー閲覧のみ可能。設定変更・招待は不可。',
+    admin: '管理者：ユーザー管理・スタッフ招待が可能。管理者の追加は不可。'
+  };
+  descEl.textContent = descs[role] || '';
+}
+
+async function handleInvite() {
+  const email = document.getElementById('invite-email').value.trim();
+  const role = document.getElementById('invite-role').value;
+  const msgEl = document.getElementById('invite-msg');
+
+  if (!email) { showMsg(msgEl, 'メールアドレスを入力してください', 'error'); return; }
+
+  try {
+    const res = await axios.post(API_BASE + '/admin/auth/invite', { email, role },
+      { headers: { Authorization: 'Bearer ' + authToken } }
+    );
+    const inviteUrl = res.data.data.inviteUrl;
+    showMsg(msgEl, \`招待メールを送信しました！（\${email}）\`, 'success');
+    document.getElementById('invite-email').value = '';
+    showToast('招待メールを送信しました', 'success');
+    console.log('招待URL:', inviteUrl);
+  } catch (err) {
+    const msg = err.response?.data?.error || '招待に失敗しました';
+    showMsg(msgEl, msg, 'error');
+  }
+}
+
 // ===== アカウント設定 =====
 async function loadAccount() {
   try {
@@ -781,7 +897,8 @@ async function loadAccount() {
     });
     const admin = res.data.data;
     document.getElementById('admin-email').textContent = admin.email || '-';
-    document.getElementById('admin-role').textContent = admin.role || '-';
+    const roleLabels = { superadmin: 'スーパー管理者 (superadmin)', admin: '管理者 (admin)', staff: 'スタッフ (staff)' };
+    document.getElementById('admin-role').textContent = roleLabels[admin.role] || admin.role || '-';
     document.getElementById('admin-last-login').textContent = admin.lastLoginAt
       ? admin.lastLoginAt.substring(0, 19).replace('T', ' ')
       : '初回ログイン';
@@ -807,61 +924,22 @@ async function handleChangePassword() {
     document.getElementById('current-password').value = '';
     document.getElementById('new-password').value = '';
     document.getElementById('confirm-password').value = '';
+    showToast('パスワードを変更しました', 'success');
   } catch (err) {
     const msg = err.response?.data?.error || 'パスワード変更に失敗しました';
     showMsg(msgEl, msg, 'error');
   }
 }
 
-// ===== 管理者登録 =====
-async function handleRegister() {
-  const email = document.getElementById('reg-email').value.trim();
-  const name = document.getElementById('reg-name').value.trim();
-  const password = document.getElementById('reg-password').value;
-  const msgEl = document.getElementById('reg-msg');
-
-  if (!email || !password) { showMsg(msgEl, 'メールアドレスとパスワードを入力してください', 'error'); return; }
-  if (password.length < 8) { showMsg(msgEl, 'パスワードは8文字以上にしてください', 'error'); return; }
-
-  try {
-    await axios.post(API_BASE + '/admin/auth/register', { email, name, password });
-    showMsg(msgEl, '登録しました！ログインしてください。', 'success');
-    showToast('管理者登録が完了しました', 'success');
-  } catch (err) {
-    const msg = err.response?.data?.error || '登録に失敗しました';
-    showMsg(msgEl, msg, 'error');
-  }
-}
-
-async function handleInvite() {
-  const email = document.getElementById('invite-email').value.trim();
-  const role = document.getElementById('invite-role').value;
-  const msgEl = document.getElementById('invite-msg');
-
-  if (!email) { showMsg(msgEl, 'メールアドレスを入力してください', 'error'); return; }
-
-  try {
-    const res = await axios.post(API_BASE + '/admin/auth/invite', { email, role },
-      { headers: { Authorization: 'Bearer ' + authToken } }
-    );
-    const inviteUrl = res.data.data.inviteUrl;
-    showMsg(msgEl, \`招待を送信しました！URL: \${inviteUrl}\`, 'success');
-    showToast('招待メールを送信しました', 'success');
-  } catch (err) {
-    const msg = err.response?.data?.error || '招待に失敗しました';
-    showMsg(msgEl, msg, 'error');
-  }
-}
-
 // ===== ページ切替 =====
 function showPage(page) {
-  const pages = ['overview', 'users', 'account', 'register'];
+  const pages = ['overview', 'users', 'staff', 'account'];
   pages.forEach(p => {
     const el = document.getElementById('page-' + p);
     if (el) el.classList.add('hidden');
     const nav = document.getElementById('nav-' + p);
     if (nav) {
-      nav.classList.remove('bg-gray-700', 'text-white');
+      nav.classList.remove('bg-gray-700', 'text-white', 'nav-active');
       nav.classList.add('text-gray-300');
     }
   });
@@ -873,7 +951,7 @@ function showPage(page) {
     navEl.classList.remove('text-gray-300');
   }
 
-  if (!authToken && page !== 'register') {
+  if (!authToken) {
     document.getElementById('login-screen').classList.remove('hidden');
     document.getElementById('dashboard-screen').classList.add('hidden');
     return;
@@ -881,10 +959,8 @@ function showPage(page) {
 
   if (page === 'overview') loadOverview();
   else if (page === 'users') loadUsers();
+  else if (page === 'staff') loadStaff();
   else if (page === 'account') loadAccount();
-  else if (page === 'register' && authToken) {
-    document.getElementById('invite-section').style.display = 'block';
-  }
 }
 
 // ===== ユーティリティ =====
@@ -905,6 +981,11 @@ function showToast(msg, type = 'success') {
   container.appendChild(toast);
   setTimeout(() => toast.remove(), 3500);
 }
+
+// 権限変更時の説明文更新
+document.addEventListener('change', function(e) {
+  if (e.target && e.target.id === 'invite-role') updateRoleDesc();
+});
 
 // 初期化
 window.addEventListener('load', () => {
