@@ -118,11 +118,14 @@ lineAuthRouter.post('/', async (c) => {
 /**
  * LINE Social API の /oauth2/v2.1/verify エンドポイントで ID Token を検証する
  *
+ * LINE 側で iss / aud / exp / 署名の検証は実行済みだが、
+ * defense-in-depth としてレスポンスのフィールドをクライアント側でも再検証する。
+ *
  * @param idToken  liff.getIDToken() で取得した ID Token
  * @param liffChannelId  LINE Login の Channel ID（数字10桁）= LINE_LIFF_CHANNEL_ID
  * @returns LINE User ID (sub) または null（検証失敗時）
  *
- * @see https://developers.line.biz/ja/reference/line-login/#verify-id-token
+ * @see https://developers.line.biz/en/reference/line-login/#verify-id-token
  */
 async function verifyLineIdToken(
   idToken: string,
@@ -145,13 +148,42 @@ async function verifyLineIdToken(
     }
 
     const data = await res.json<{
-      sub?: string      // LINE User ID
-      exp?: number
-      iat?: number
-      amr?: string[]
+      iss?: string       // 発行者 — "https://access.line.me" であること
+      sub?: string       // LINE User ID
+      aud?: string       // 対象者 — client_id (LINE_LIFF_CHANNEL_ID) と一致すること
+      exp?: number       // 有効期限 (Unix timestamp)
+      iat?: number       // 発行日時
+      amr?: string[]     // 認証方法
     }>()
 
-    if (!data.sub) return null
+    // ---- defense-in-depth: レスポンスフィールド検証 ----
+
+    // sub（LINE User ID）の存在確認
+    if (!data.sub) {
+      console.warn('[LineAuth] Missing sub in verified token')
+      return null
+    }
+
+    // iss（発行者）の検証 — LINE公式ドキュメントで "https://access.line.me" と明記
+    if (data.iss && data.iss !== 'https://access.line.me') {
+      console.warn(`[LineAuth] Invalid iss: ${data.iss}`)
+      return null
+    }
+
+    // aud（対象者）の検証 — リクエストで送った client_id と一致すること
+    if (data.aud && data.aud !== liffChannelId) {
+      console.warn(`[LineAuth] aud mismatch: expected=${liffChannelId} got=${data.aud}`)
+      return null
+    }
+
+    // exp（有効期限）の検証 — 現在時刻より未来であること（5分のバッファ許容）
+    if (data.exp) {
+      const nowSec = Math.floor(Date.now() / 1000)
+      if (data.exp < nowSec - 300) {
+        console.warn(`[LineAuth] Token expired: exp=${data.exp} now=${nowSec}`)
+        return null
+      }
+    }
 
     return data.sub
   } catch (err) {
