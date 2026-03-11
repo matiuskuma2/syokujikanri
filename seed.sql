@@ -89,8 +89,9 @@ VALUES (
 -- 4. LINE Channels（LINEチャンネル設定）
 -- ===================================================================
 
--- テスト用 LINE チャンネル
--- ※ channel_secret / access_token は .dev.vars の値に合わせて変更してください
+-- LINE チャンネル（Messaging API: 食事指導BOT）
+-- Messaging API Channel ID: 1656660870
+-- LIFF Channel ID: 2009409790 (LINE Login), LIFF ID: 2009409790-DekZRh4t
 INSERT OR IGNORE INTO line_channels (
   id, account_id, channel_id, channel_secret, access_token,
   webhook_path, is_active, created_at, updated_at
@@ -98,9 +99,9 @@ INSERT OR IGNORE INTO line_channels (
 VALUES (
   'ch_default_replace_me',
   'acc_client_00000000000000000000000000000001',
-  '0000000000',                          -- LINE の Messaging API Channel ID（10桁）を設定
-  'your-line-channel-secret',            -- .dev.vars の LINE_CHANNEL_SECRET に合わせる
-  'your-line-channel-access-token',      -- .dev.vars の LINE_CHANNEL_ACCESS_TOKEN に合わせる
+  '1656660870',
+  '1dc7f90ab6bb265fd9a6f9eb2bf06e6c',
+  'wpO2bsNwKwIz1vhVAouJAlMfLipXwiq8HAGeeSuWbvwVe77FKQVh1DpJzfUbPxpJJMz9MY3z4x/J4gDitrUMljwNamL0O/30SYCh1TwgTRffZ7kXvYPnUCTYXCdngdLOq11Syo72UKhcMJe2CBz5cgdB04t89/1O/w1cDnyilFU=',
   '/api/webhooks/line',
   1,
   datetime('now'),
