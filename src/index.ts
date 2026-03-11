@@ -558,6 +558,17 @@ let currentAdmin = null;
 let allUsers = [];
 const API_BASE = '/api';
 
+// XSS対策: HTML特殊文字エスケープ
+function esc(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // ===== 認証 =====
 async function handleLogin() {
   const email = document.getElementById('login-email').value.trim();
@@ -648,11 +659,11 @@ async function loadOverview() {
               <i class="fas fa-user text-green-600"></i>
             </div>
             <div>
-              <p class="font-medium text-gray-800">\${u.nickname || u.display_name || 'Unknown'}</p>
-              <p class="text-xs text-gray-500">\${u.last_active_at || '-'}</p>
+              <p class="font-medium text-gray-800">\${esc(u.nickname || u.display_name || 'Unknown')}</p>
+              <p class="text-xs text-gray-500">\${esc(u.last_active_at || '-')}</p>
             </div>
           </div>
-          \${u.current_weight_kg ? '<span class="text-sm font-medium text-gray-600">' + u.current_weight_kg + 'kg</span>' : ''}
+          \${u.current_weight_kg ? '<span class="text-sm font-medium text-gray-600">' + esc(u.current_weight_kg) + 'kg</span>' : ''}
         </div>
       \`).join('');
     }
@@ -705,25 +716,25 @@ function renderUsersTable(users) {
       </tr></thead>
       <tbody>
         \${users.map(u => \`
-        <tr class="border-b hover:bg-gray-50 cursor-pointer" onclick="openUserModal('\${u.lineUserId}')">
+        <tr class="border-b hover:bg-gray-50 cursor-pointer" onclick="openUserModal('\${esc(u.lineUserId)}')">
           <td class="py-3 px-3">
             <div class="flex items-center gap-2">
               <div class="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center flex-shrink-0">
                 <i class="fas fa-user text-green-600 text-xs"></i>
               </div>
               <div>
-                <p class="font-medium text-gray-800">\${u.display_name || 'Unknown'}</p>
-                <p class="text-xs text-gray-400">\${(u.lineUserId||'').substring(0,12)}...</p>
+                <p class="font-medium text-gray-800">\${esc(u.display_name || 'Unknown')}</p>
+                <p class="text-xs text-gray-400">\${esc((u.lineUserId||'').substring(0,12))}...</p>
               </div>
             </div>
           </td>
-          <td class="py-3 px-3 text-gray-500 text-xs">\${(u.joinedAt||'').substring(0,10)}</td>
+          <td class="py-3 px-3 text-gray-500 text-xs">\${esc((u.joinedAt||'').substring(0,10))}</td>
           <td class="py-3 px-3 text-center">\${badge(u.botEnabled)}</td>
           <td class="py-3 px-3 text-center">\${badge(u.recordEnabled)}</td>
           <td class="py-3 px-3 text-center">\${badge(u.consultEnabled)}</td>
           <td class="py-3 px-3 text-center">\${badge(u.intakeCompleted)}</td>
           <td class="py-3 px-3">
-            <button onclick="event.stopPropagation();openUserModal('\${u.lineUserId}')"
+            <button onclick="event.stopPropagation();openUserModal('\${esc(u.lineUserId)}')"
               class="text-xs bg-green-100 text-green-700 hover:bg-green-200 px-3 py-1 rounded-lg transition-colors">
               詳細
             </button>
@@ -758,11 +769,11 @@ async function openUserModal(lineUserId) {
       <div class="grid grid-cols-2 gap-4 mb-6 text-sm">
         <div class="bg-gray-50 p-3 rounded-lg">
           <p class="text-gray-500 text-xs mb-1">LINE User ID</p>
-          <p class="font-mono text-xs truncate">\${lineUserId}</p>
+          <p class="font-mono text-xs truncate">\${esc(lineUserId)}</p>
         </div>
         <div class="bg-gray-50 p-3 rounded-lg">
           <p class="text-gray-500 text-xs mb-1">参加日</p>
-          <p class="font-medium">\${(u.joinedAt||'').substring(0,10)}</p>
+          <p class="font-medium">\${esc((u.joinedAt||'').substring(0,10))}</p>
         </div>
       </div>
       <div class="mb-6">
@@ -780,10 +791,10 @@ async function openUserModal(lineUserId) {
           ? '<p class="text-gray-400 text-sm">記録なし</p>'
           : \`<div class="space-y-2">\${logs.map(log => \`
             <div class="flex items-center justify-between bg-gray-50 p-3 rounded-lg text-sm">
-              <span class="text-gray-600">\${log.log_date}</span>
+              <span class="text-gray-600">\${esc(log.log_date)}</span>
               <div class="flex gap-4 text-gray-500 text-xs">
-                \${log.total_calories_kcal ? '<span>🔥 '+log.total_calories_kcal+'kcal</span>' : ''}
-                \${log.weight_snapshot_kg ? '<span>⚖️ '+log.weight_snapshot_kg+'kg</span>' : ''}
+                \${log.total_calories_kcal ? '<span>🔥 '+esc(log.total_calories_kcal)+'kcal</span>' : ''}
+                \${log.weight_snapshot_kg ? '<span>⚖️ '+esc(log.weight_snapshot_kg)+'kg</span>' : ''}
               </div>
             </div>
           \`).join('')}</div>\`
@@ -800,7 +811,7 @@ function serviceToggle(lineUserId, key, val, label, isReadOnly) {
   if (isReadOnly) {
     return \`
       <div class="flex items-center justify-between bg-gray-50 p-3 rounded-lg">
-        <span class="text-sm text-gray-700">\${label}</span>
+        <span class="text-sm text-gray-700">\${esc(label)}</span>
         <span class="w-10 h-6 rounded-full \${isOn ? 'bg-green-400' : 'bg-gray-300'} relative inline-block">
           <span class="absolute top-0.5 \${isOn ? 'right-0.5' : 'left-0.5'} w-5 h-5 bg-white rounded-full shadow"></span>
         </span>
@@ -809,8 +820,8 @@ function serviceToggle(lineUserId, key, val, label, isReadOnly) {
   }
   return \`
     <div class="flex items-center justify-between bg-gray-50 p-3 rounded-lg">
-      <span class="text-sm text-gray-700">\${label}</span>
-      <button onclick="toggleService('\${lineUserId}','\${key}',\${isOn})"
+      <span class="text-sm text-gray-700">\${esc(label)}</span>
+      <button onclick="toggleService('\${esc(lineUserId)}','\${esc(key)}',\${isOn})"
         class="w-10 h-6 rounded-full transition-colors \${isOn ? 'bg-green-500' : 'bg-gray-300'} relative">
         <span class="absolute top-0.5 \${isOn ? 'right-0.5' : 'left-0.5'} w-5 h-5 bg-white rounded-full shadow transition-all"></span>
       </button>
@@ -977,7 +988,7 @@ function showToast(msg, type = 'success') {
   toast.className = \`toast px-4 py-3 rounded-xl shadow-lg text-sm font-medium \${
     type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
   }\`;
-  toast.innerHTML = \`<i class="fas fa-\${type === 'success' ? 'check' : 'exclamation'} mr-2"></i>\${msg}\`;
+  toast.innerHTML = \`<i class="fas fa-\${type === 'success' ? 'check' : 'exclamation'} mr-2"></i>\${esc(msg)}\`;
   container.appendChild(toast);
   setTimeout(() => toast.remove(), 3500);
 }
