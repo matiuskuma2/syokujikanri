@@ -10,7 +10,7 @@
     {
       "binding": "DB",
       "database_name": "diet-bot-production",
-      "database_id": "placeholder-replace-after-create"
+      "database_id": "72e33989-d529-4a07-b907-d883c3e85614"
     }
   ],
 
@@ -22,29 +22,14 @@
     }
   ],
 
-  // Cron Triggers
-  "triggers": {
-    "crons": [
-      "0 12 * * *",    // UTC 12:00 = JST 21:00 毎日リマインダー
-      "0 11 * * 0"     // UTC 11:00 日曜 = JST 20:00 日曜 週次レポート
-    ]
-  },
-
-  // Queue for LINE events
+  // Queue Producer (LINE events enqueue)
+  // Note: queues.consumers and triggers.crons are not supported in Pages config
+  // They are managed via Cloudflare dashboard or separate Worker config
   "queues": {
     "producers": [
       {
         "binding": "LINE_EVENTS_QUEUE",
         "queue": "diet-bot-line-events"
-      }
-    ],
-    "consumers": [
-      {
-        "queue": "diet-bot-line-events",
-        "max_batch_size": 10,
-        "max_batch_timeout": 30,
-        "max_retries": 3,
-        "dead_letter_queue": "diet-bot-line-events-dlq"
       }
     ]
   }
