@@ -467,10 +467,11 @@ async function processActivity(
   await saveIntakeAnswer(env.DB, userAccountId, clientAccountId, 'activity_level', activityLevel ?? '')
 
   // インテーク完了フラグを設定
+  // 正本キー: account_id + line_user_id（DDL: UNIQUE(account_id, line_user_id)）
   await env.DB.prepare(
     `UPDATE user_service_statuses SET intake_completed = 1, updated_at = ?1
-     WHERE user_account_id = ?2 AND account_id = ?3`
-  ).bind(nowIso(), userAccountId, clientAccountId).run()
+     WHERE account_id = ?2 AND line_user_id = ?3`
+  ).bind(nowIso(), clientAccountId, lineUserId).run()
 
   // モードをrecordに戻す
   await upsertModeSession(env.DB, {
