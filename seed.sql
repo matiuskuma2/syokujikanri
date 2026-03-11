@@ -92,6 +92,14 @@ VALUES (
 -- LINE チャンネル（Messaging API: 食事指導BOT）
 -- Messaging API Channel ID: 1656660870
 -- LIFF Channel ID: 2009409790 (LINE Login), LIFF ID: 2009409790-DekZRh4t
+--
+-- WARNING: 'ch_default_replace_me' はプレースホルダー。
+--          .dev.vars の LINE_CHANNEL_ID と必ず一致させること。
+--          本番では実際の UUID に置き換えること。
+--
+-- NOTE: channel_secret / access_token はダミー値。
+--       実際の値は .dev.vars (ローカル) または wrangler secret (本番) で管理する。
+--       seed.sql は DB スキーマの初期レコード挿入のみを目的とする。
 INSERT OR IGNORE INTO line_channels (
   id, account_id, channel_id, channel_secret, access_token,
   webhook_path, is_active, created_at, updated_at
@@ -100,8 +108,8 @@ VALUES (
   'ch_default_replace_me',
   'acc_client_00000000000000000000000000000001',
   '1656660870',
-  '1dc7f90ab6bb265fd9a6f9eb2bf06e6c',
-  'wpO2bsNwKwIz1vhVAouJAlMfLipXwiq8HAGeeSuWbvwVe77FKQVh1DpJzfUbPxpJJMz9MY3z4x/J4gDitrUMljwNamL0O/30SYCh1TwgTRffZ7kXvYPnUCTYXCdngdLOq11Syo72UKhcMJe2CBz5cgdB04t89/1O/w1cDnyilFU=',
+  'DUMMY_CHANNEL_SECRET_REPLACE_IN_DEV_VARS',
+  'DUMMY_ACCESS_TOKEN_REPLACE_IN_DEV_VARS',
   '/api/webhooks/line',
   1,
   datetime('now'),

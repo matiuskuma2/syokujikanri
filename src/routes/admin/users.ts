@@ -9,7 +9,7 @@ import { Hono } from 'hono'
 import type { HonoEnv } from '../../middleware/auth'
 import { listUserAccountsWithDetails, findUserAccount } from '../../repositories/line-users-repo'
 import { listRecentDailyLogs } from '../../repositories/daily-logs-repo'
-import { findMealEntriesByDailyLog } from '../../repositories/meal-entries-repo'
+import { listMealEntriesByDailyLogIds } from '../../repositories/meal-entries-repo'
 import { upsertUserServiceStatus, findUserServiceStatus } from '../../repositories/subscriptions-repo'
 import { ok, badRequest, notFound } from '../../utils/response'
 
@@ -123,12 +123,25 @@ usersRouter.get('/:lineUserId/logs', async (c) => {
   if (!userAccount) return notFound(c, 'User not found')
 
   const logs = await listRecentDailyLogs(c.env.DB, userAccount.id, limit)
-  const logsWithMeals = await Promise.all(
-    logs.map(async (log) => {
-      const meals = await findMealEntriesByDailyLog(c.env.DB, log.id)
-      return { ...log, meals }
-    })
-  )
+
+  // N+1 解消: 全ログIDの食事記録を 1 クエリで一括取得して振り分け
+  if (logs.length === 0) return ok(c, { logs: [] })
+
+  const logIds = logs.map(l => l.id)
+  const allMeals = await listMealEntriesByDailyLogIds(c.env.DB, logIds)
+
+  // daily_log_id → meals[] の Map を構築
+  const mealsMap = new Map<string, typeof allMeals>()
+  for (const meal of allMeals) {
+    const arr = mealsMap.get(meal.daily_log_id) ?? []
+    arr.push(meal)
+    mealsMap.set(meal.daily_log_id, arr)
+  }
+
+  const logsWithMeals = logs.map(log => ({
+    ...log,
+    meals: mealsMap.get(log.id) ?? [],
+  }))
 
   return ok(c, { logs: logsWithMeals })
 })

@@ -36,6 +36,40 @@ export async function findMealEntriesByDailyLog(
   return results
 }
 
+/**
+ * 複数の daily_log_id に紐づく全食事記録を一括取得（N+1 解消用）
+ * D1 は IN 句のパラメータバインドをサポートしないため、
+ * 安全に値をエスケープした上で IN 句を構築する。
+ * daily_log_id は内部生成の generateId() (nanoid) のみが入るため安全。
+ */
+export async function listMealEntriesByDailyLogIds(
+  db: D1Database,
+  dailyLogIds: string[]
+): Promise<MealEntry[]> {
+  if (dailyLogIds.length === 0) return []
+
+  // D1 は配列バインドをサポートしないため、プレースホルダを個別に生成
+  const placeholders = dailyLogIds.map((_, i) => `?${i + 1}`).join(',')
+  const { results } = await db
+    .prepare(`
+      SELECT * FROM meal_entries
+      WHERE daily_log_id IN (${placeholders})
+      ORDER BY
+        daily_log_id,
+        CASE meal_type
+          WHEN 'breakfast' THEN 1
+          WHEN 'lunch'     THEN 2
+          WHEN 'dinner'    THEN 3
+          WHEN 'snack'     THEN 4
+          ELSE 5
+        END,
+        created_at ASC
+    `)
+    .bind(...dailyLogIds)
+    .all<MealEntry>()
+  return results
+}
+
 /** daily_log_id + meal_type で1件取得 */
 export async function findMealEntryByDailyLogAndType(
   db: D1Database,
