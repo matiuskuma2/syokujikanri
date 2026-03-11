@@ -173,3 +173,84 @@ export async function getUserProfile(
   if (!res.ok) return null
   return res.json() as Promise<LineProfile>
 }
+
+// ===================================================================
+// クイックリプライ
+// ===================================================================
+
+export type QuickReplyItem = {
+  label: string  // 最大20文字
+  text: string   // 送信テキスト
+}
+
+/** クイックリプライ付きテキストメッセージを送信（replyToken使用） */
+export async function replyWithQuickReplies(
+  replyToken: string,
+  text: string,
+  items: QuickReplyItem[],
+  accessToken: string
+): Promise<void> {
+  const quickReply = {
+    items: items.slice(0, 13).map(item => ({
+      type: 'action',
+      action: {
+        type: 'message',
+        label: item.label.substring(0, 20),
+        text: item.text,
+      },
+    })),
+  }
+
+  const res = await fetch(`${LINE_API}/message/reply`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      replyToken,
+      messages: [{ type: 'text', text, quickReply }],
+    }),
+  })
+
+  if (!res.ok) {
+    const err = await res.text().catch(() => '')
+    console.error(`[LINE] replyWithQuickReplies failed ${res.status}: ${err}`)
+  }
+}
+
+/** クイックリプライ付きテキストメッセージをプッシュ送信 */
+export async function pushWithQuickReplies(
+  lineUserId: string,
+  text: string,
+  items: QuickReplyItem[],
+  accessToken: string
+): Promise<void> {
+  const quickReply = {
+    items: items.slice(0, 13).map(item => ({
+      type: 'action',
+      action: {
+        type: 'message',
+        label: item.label.substring(0, 20),
+        text: item.text,
+      },
+    })),
+  }
+
+  const res = await fetch(`${LINE_API}/message/push`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      to: lineUserId,
+      messages: [{ type: 'text', text, quickReply }],
+    }),
+  })
+
+  if (!res.ok) {
+    const err = await res.text().catch(() => '')
+    console.error(`[LINE] pushWithQuickReplies failed ${res.status}: ${err}`)
+  }
+}

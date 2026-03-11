@@ -48,6 +48,11 @@ export type Bindings = {
 
   // === Cron ===
   CRON_SECRET: string
+
+  // === SendGrid ===
+  SENDGRID_API_KEY: string
+  SENDGRID_FROM_EMAIL: string
+  SENDGRID_FROM_NAME: string
 }
 
 // === LINE Queue Message ===

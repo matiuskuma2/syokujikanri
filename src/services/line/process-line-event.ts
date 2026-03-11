@@ -19,7 +19,8 @@ import type {
   LineMessageEvent,
 } from '../../types/bindings'
 
-import { getUserProfile, replyText, replyTextWithQuickReplies, getMessageContent } from './reply'
+import { getUserProfile, replyText, replyWithQuickReplies, getMessageContent } from './reply'
+import { startIntakeFlow, handleIntakeStep } from './intake-flow'
 import { upsertLineUser, ensureUserAccount } from '../../repositories/line-users-repo'
 import { upsertUserServiceStatus, checkServiceAccess } from '../../repositories/subscriptions-repo'
 import { ensureOpenThread, createConversationMessage, updateThreadMode } from '../../repositories/conversations-repo'
@@ -151,16 +152,13 @@ async function handleFollowEvent(
     userAccountId: userAccount.id,
   })
 
-  // 6. ウェルカムメッセージ
+  // 6. インテークフロー開始（初回問診）
   if (event.replyToken) {
-    await replyTextWithQuickReplies(
+    await startIntakeFlow(
       event.replyToken,
-      `${profile?.displayName ?? 'ようこそ'}さん、ダイエットサポートBOTへようこそ！🎉\n\n食事・体重・運動の記録をお手伝いします。\nまずは今日の記録を始めましょう！`,
-      [
-        { label: '📝 記録する', text: '記録モード' },
-        { label: '💬 相談する', text: '相談モード' },
-      ],
-      env.LINE_CHANNEL_ACCESS_TOKEN
+      lineUserId,
+      clientAccountId,
+      env
     )
   }
 
@@ -242,6 +240,12 @@ async function handleTextMessageEvent(
   // ------------------------------------------------------------------
   // 4. モード切替コマンド判定
   // ------------------------------------------------------------------
+  // インテーク再開コマンド
+  if (['問診', 'ヒアリング', '登録', '初期設定'].includes(textTrim)) {
+    await startIntakeFlow(event.replyToken, lineUserId, clientAccountId, env)
+    return
+  }
+
   if (SWITCH_TO_CONSULT.some(kw => textTrim.includes(kw))) {
     await updateThreadMode(env.DB, thread.id, 'consult')
     await upsertModeSession(env.DB, {
@@ -266,6 +270,19 @@ async function handleTextMessageEvent(
   // ------------------------------------------------------------------
   const session = await findActiveModeSession(env.DB, clientAccountId, lineUserId)
   const currentMode = session?.current_mode ?? thread.current_mode
+
+  // インテーク（問診）モード中は優先処理
+  if (currentMode === 'intake') {
+    const handled = await handleIntakeStep(
+      event.replyToken,
+      textTrim,
+      lineUserId,
+      userAccount.id,
+      clientAccountId,
+      env
+    )
+    if (handled) return
+  }
 
   if (currentMode === 'consult') {
     await handleConsultText(event.replyToken, textTrim, thread.id, userAccount.id, ctx)

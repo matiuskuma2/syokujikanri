@@ -181,12 +181,22 @@ function getAdminDashboardHtml(): string {
   <style>
     body { font-family: 'Hiragino Sans', 'Meiryo', sans-serif; }
     .sidebar { width: 240px; min-height: 100vh; }
-    .main-content { flex: 1; min-height: 100vh; }
     .stat-card { transition: transform 0.2s; }
     .stat-card:hover { transform: translateY(-2px); }
+    .modal-bg { background: rgba(0,0,0,0.5); }
+    .toast { animation: fadeInOut 3s forwards; }
+    @keyframes fadeInOut {
+      0% { opacity:0; transform:translateY(20px); }
+      15% { opacity:1; transform:translateY(0); }
+      80% { opacity:1; }
+      100% { opacity:0; }
+    }
   </style>
 </head>
 <body class="bg-gray-50">
+
+<!-- Toast通知 -->
+<div id="toast-container" class="fixed bottom-4 right-4 z-50 space-y-2"></div>
 
 <!-- ログイン画面 -->
 <div id="login-screen" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-50 to-teal-50">
@@ -202,94 +212,145 @@ function getAdminDashboardHtml(): string {
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1">メールアドレス</label>
         <input id="email" type="email" value="admin@diet-bot.local"
-          class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
+          class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent"
           placeholder="admin@diet-bot.local">
       </div>
       <div>
         <label class="block text-sm font-medium text-gray-700 mb-1">パスワード</label>
         <input id="password" type="password" value="admin123"
-          class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
+          class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent"
           placeholder="パスワード">
       </div>
-      <div id="login-error" class="text-red-500 text-sm hidden"></div>
+      <div id="login-error" class="hidden text-red-500 text-sm bg-red-50 p-3 rounded-lg"></div>
       <button onclick="handleLogin()"
-        class="w-full bg-green-500 text-white py-3 rounded-lg font-medium hover:bg-green-600 transition-colors">
+        class="w-full bg-green-500 hover:bg-green-600 text-white py-3 rounded-xl font-medium transition-colors">
         ログイン
       </button>
+      <div class="text-center">
+        <button onclick="showPage('register')" class="text-sm text-green-600 hover:underline">
+          新規管理者登録
+        </button>
+        <span class="text-gray-300 mx-2">|</span>
+        <button onclick="showForgotPassword()" class="text-sm text-gray-500 hover:underline">
+          パスワードを忘れた
+        </button>
+      </div>
     </div>
   </div>
 </div>
 
-<!-- ダッシュボード -->
-<div id="dashboard-screen" class="hidden flex">
-  <!-- サイドバー -->
-  <div class="sidebar bg-gray-800 text-white p-4 flex flex-col">
-    <div class="mb-8">
-      <div class="flex items-center space-x-2">
-        <div class="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center">
-          <i class="fas fa-leaf text-white text-sm"></i>
-        </div>
-        <span class="font-bold text-lg">diet-bot</span>
+<!-- パスワードリセット申請モーダル -->
+<div id="forgot-modal" class="hidden fixed inset-0 modal-bg z-50 flex items-center justify-center">
+  <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md mx-4">
+    <h2 class="text-xl font-bold text-gray-800 mb-6">パスワード再設定</h2>
+    <div class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">登録メールアドレス</label>
+        <input id="forgot-email" type="email"
+          class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500"
+          placeholder="メールアドレスを入力">
+      </div>
+      <div id="forgot-msg" class="hidden text-sm p-3 rounded-lg"></div>
+      <div class="flex gap-3">
+        <button onclick="document.getElementById('forgot-modal').classList.add('hidden')"
+          class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 py-3 rounded-xl font-medium transition-colors">
+          キャンセル
+        </button>
+        <button onclick="handleForgotPassword()"
+          class="flex-1 bg-green-500 hover:bg-green-600 text-white py-3 rounded-xl font-medium transition-colors">
+          送信
+        </button>
       </div>
     </div>
-    <nav class="space-y-1 flex-1">
-      <a href="#" onclick="showPage('overview')" id="nav-overview"
-        class="nav-item flex items-center space-x-3 px-3 py-2 rounded-lg text-gray-300 hover:bg-gray-700 hover:text-white transition-colors active">
-        <i class="fas fa-chart-line w-5"></i><span>概要</span>
-      </a>
-      <a href="#" onclick="showPage('users')" id="nav-users"
-        class="nav-item flex items-center space-x-3 px-3 py-2 rounded-lg text-gray-300 hover:bg-gray-700 hover:text-white transition-colors">
+  </div>
+</div>
+
+<!-- ダッシュボード本体 -->
+<div id="dashboard-screen" class="hidden flex">
+  <!-- サイドバー -->
+  <div class="sidebar bg-gray-800 text-white flex flex-col fixed h-full z-10">
+    <div class="p-6 border-b border-gray-700">
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 bg-green-500 rounded-full flex items-center justify-center">
+          <i class="fas fa-leaf text-white"></i>
+        </div>
+        <div>
+          <h1 class="font-bold text-white">diet-bot</h1>
+          <p class="text-gray-400 text-xs" id="sidebar-email">-</p>
+        </div>
+      </div>
+    </div>
+    <nav class="flex-1 p-4 space-y-1">
+      <button id="nav-overview" onclick="showPage('overview')"
+        class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-300 hover:bg-gray-700 transition-colors text-left">
+        <i class="fas fa-chart-bar w-5"></i><span>ダッシュボード</span>
+      </button>
+      <button id="nav-users" onclick="showPage('users')"
+        class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-300 hover:bg-gray-700 transition-colors text-left">
         <i class="fas fa-users w-5"></i><span>ユーザー管理</span>
-      </a>
-      <a href="#" onclick="showPage('knowledge')" id="nav-knowledge"
-        class="nav-item flex items-center space-x-3 px-3 py-2 rounded-lg text-gray-300 hover:bg-gray-700 hover:text-white transition-colors">
-        <i class="fas fa-book w-5"></i><span>ナレッジ管理</span>
-      </a>
+      </button>
+      <button id="nav-account" onclick="showPage('account')"
+        class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-300 hover:bg-gray-700 transition-colors text-left">
+        <i class="fas fa-cog w-5"></i><span>アカウント設定</span>
+      </button>
+      <button id="nav-register" onclick="showPage('register')"
+        class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-300 hover:bg-gray-700 transition-colors text-left">
+        <i class="fas fa-user-plus w-5"></i><span>管理者登録</span>
+      </button>
     </nav>
-    <button onclick="handleLogout()"
-      class="flex items-center space-x-3 px-3 py-2 rounded-lg text-gray-400 hover:bg-gray-700 hover:text-white transition-colors">
-      <i class="fas fa-sign-out-alt w-5"></i><span>ログアウト</span>
-    </button>
+    <div class="p-4 border-t border-gray-700">
+      <button onclick="handleLogout()"
+        class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-400 hover:bg-gray-700 transition-colors text-left">
+        <i class="fas fa-sign-out-alt w-5"></i><span>ログアウト</span>
+      </button>
+    </div>
   </div>
 
   <!-- メインコンテンツ -->
-  <div class="main-content p-8 overflow-auto">
-    <!-- 概要ページ -->
-    <div id="page-overview">
-      <h1 class="text-2xl font-bold text-gray-800 mb-6">ダッシュボード概要</h1>
-      <div class="grid grid-cols-3 gap-6 mb-8">
+  <div class="ml-60 flex-1 min-h-screen">
+
+    <!-- ダッシュボードページ -->
+    <div id="page-overview" class="p-8">
+      <h1 class="text-2xl font-bold text-gray-800 mb-6">ダッシュボード</h1>
+      <!-- 統計カード -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <div class="stat-card bg-white rounded-xl shadow p-6">
-          <div class="flex items-center justify-between mb-4">
-            <div class="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-gray-500 text-sm">総ユーザー数</p>
+              <p class="text-3xl font-bold text-gray-800 mt-1" id="stat-total-users">-</p>
+            </div>
+            <div class="w-14 h-14 bg-blue-100 rounded-full flex items-center justify-center">
               <i class="fas fa-users text-blue-600 text-xl"></i>
             </div>
-            <span class="text-2xl font-bold text-gray-800" id="stat-total-users">-</span>
           </div>
-          <p class="text-gray-600 text-sm">総ユーザー数</p>
         </div>
         <div class="stat-card bg-white rounded-xl shadow p-6">
-          <div class="flex items-center justify-between mb-4">
-            <div class="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center">
-              <i class="fas fa-clipboard-check text-green-600 text-xl"></i>
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-gray-500 text-sm">今日の記録数</p>
+              <p class="text-3xl font-bold text-gray-800 mt-1" id="stat-today-logs">-</p>
             </div>
-            <span class="text-2xl font-bold text-gray-800" id="stat-today-logs">-</span>
+            <div class="w-14 h-14 bg-green-100 rounded-full flex items-center justify-center">
+              <i class="fas fa-clipboard-list text-green-600 text-xl"></i>
+            </div>
           </div>
-          <p class="text-gray-600 text-sm">今日の記録数</p>
         </div>
         <div class="stat-card bg-white rounded-xl shadow p-6">
-          <div class="flex items-center justify-between mb-4">
-            <div class="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-gray-500 text-sm">今週のアクティブ</p>
+              <p class="text-3xl font-bold text-gray-800 mt-1" id="stat-weekly-active">-</p>
+            </div>
+            <div class="w-14 h-14 bg-purple-100 rounded-full flex items-center justify-center">
               <i class="fas fa-fire text-purple-600 text-xl"></i>
             </div>
-            <span class="text-2xl font-bold text-gray-800" id="stat-weekly-active">-</span>
           </div>
-          <p class="text-gray-600 text-sm">週間アクティブユーザー</p>
         </div>
       </div>
-
       <!-- 最近のユーザー -->
       <div class="bg-white rounded-xl shadow p-6">
-        <h2 class="text-lg font-semibold text-gray-800 mb-4">最近のアクティブユーザー</h2>
+        <h2 class="font-bold text-gray-800 mb-4">最近のユーザー</h2>
         <div id="recent-users-list" class="space-y-3">
           <div class="text-gray-400 text-sm">読み込み中...</div>
         </div>
@@ -297,12 +358,15 @@ function getAdminDashboardHtml(): string {
     </div>
 
     <!-- ユーザー管理ページ -->
-    <div id="page-users" class="hidden">
-      <h1 class="text-2xl font-bold text-gray-800 mb-6">ユーザー管理</h1>
+    <div id="page-users" class="hidden p-8">
+      <div class="flex items-center justify-between mb-6">
+        <h1 class="text-2xl font-bold text-gray-800">ユーザー管理</h1>
+      </div>
       <div class="bg-white rounded-xl shadow">
-        <div class="p-4 border-b">
-          <input type="text" placeholder="ユーザーを検索..."
-            class="px-4 py-2 border border-gray-300 rounded-lg w-full max-w-xs">
+        <div class="p-4 border-b flex gap-3">
+          <input type="text" id="user-search" placeholder="名前で検索..."
+            class="px-4 py-2 border border-gray-300 rounded-lg w-full max-w-xs"
+            onkeyup="filterUsers()">
         </div>
         <div id="users-table" class="p-4">
           <div class="text-gray-400 text-sm">読み込み中...</div>
@@ -310,60 +374,221 @@ function getAdminDashboardHtml(): string {
       </div>
     </div>
 
-    <!-- ナレッジ管理ページ -->
-    <div id="page-knowledge" class="hidden">
-      <h1 class="text-2xl font-bold text-gray-800 mb-6">ナレッジ管理</h1>
+    <!-- アカウント設定ページ -->
+    <div id="page-account" class="hidden p-8">
+      <h1 class="text-2xl font-bold text-gray-800 mb-6">アカウント設定</h1>
+      <!-- 管理者情報 -->
+      <div class="bg-white rounded-xl shadow p-6 mb-6">
+        <h2 class="font-bold text-gray-800 mb-4 flex items-center gap-2">
+          <i class="fas fa-user text-green-600"></i> 管理者情報
+        </h2>
+        <div class="space-y-2 text-sm" id="admin-info">
+          <div class="flex gap-2">
+            <span class="text-gray-500 w-24">メール</span>
+            <span id="admin-email" class="font-medium">-</span>
+          </div>
+          <div class="flex gap-2">
+            <span class="text-gray-500 w-24">権限</span>
+            <span id="admin-role" class="font-medium">-</span>
+          </div>
+          <div class="flex gap-2">
+            <span class="text-gray-500 w-24">最終ログイン</span>
+            <span id="admin-last-login" class="font-medium">-</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- パスワード変更 -->
       <div class="bg-white rounded-xl shadow p-6">
-        <p class="text-gray-500">ナレッジ管理機能は開発中です。</p>
+        <h2 class="font-bold text-gray-800 mb-4 flex items-center gap-2">
+          <i class="fas fa-lock text-green-600"></i> パスワード変更
+        </h2>
+        <div class="space-y-4 max-w-md">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">現在のパスワード</label>
+            <input id="current-password" type="password"
+              class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500"
+              placeholder="現在のパスワード">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">新しいパスワード</label>
+            <input id="new-password" type="password"
+              class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500"
+              placeholder="8文字以上">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">新しいパスワード（確認）</label>
+            <input id="confirm-password" type="password"
+              class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500"
+              placeholder="再入力">
+          </div>
+          <div id="change-pw-msg" class="hidden text-sm p-3 rounded-lg"></div>
+          <button onclick="handleChangePassword()"
+            class="bg-green-500 hover:bg-green-600 text-white px-6 py-3 rounded-xl font-medium transition-colors">
+            パスワードを変更
+          </button>
+        </div>
       </div>
     </div>
+
+    <!-- 管理者登録ページ -->
+    <div id="page-register" class="hidden p-8">
+      <h1 class="text-2xl font-bold text-gray-800 mb-6">管理者登録</h1>
+
+      <!-- 初回/既存アカウントへのパスワード設定 -->
+      <div class="bg-white rounded-xl shadow p-6 mb-6">
+        <h2 class="font-bold text-gray-800 mb-2 flex items-center gap-2">
+          <i class="fas fa-user-plus text-green-600"></i> 新規管理者登録 / パスワード設定
+        </h2>
+        <p class="text-gray-500 text-sm mb-4">
+          既存メールアドレスの場合はパスワードが設定されます。初めての場合はsuperadminとして登録されます。
+        </p>
+        <div class="space-y-4 max-w-md">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">メールアドレス</label>
+            <input id="reg-email" type="email"
+              class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500"
+              placeholder="admin@example.com">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">名前（任意）</label>
+            <input id="reg-name" type="text"
+              class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500"
+              placeholder="山田 太郎">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">パスワード</label>
+            <input id="reg-password" type="password"
+              class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500"
+              placeholder="8文字以上">
+          </div>
+          <div id="reg-msg" class="hidden text-sm p-3 rounded-lg"></div>
+          <button onclick="handleRegister()"
+            class="bg-green-500 hover:bg-green-600 text-white px-6 py-3 rounded-xl font-medium transition-colors">
+            登録する
+          </button>
+        </div>
+      </div>
+
+      <!-- 招待リンク送信（ログイン済みの場合のみ） -->
+      <div class="bg-white rounded-xl shadow p-6" id="invite-section" style="display:none">
+        <h2 class="font-bold text-gray-800 mb-2 flex items-center gap-2">
+          <i class="fas fa-envelope text-blue-600"></i> スタッフを招待
+        </h2>
+        <p class="text-gray-500 text-sm mb-4">招待メールを送信して、スタッフアカウントを作成できます。</p>
+        <div class="space-y-4 max-w-md">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">招待先メール</label>
+            <input id="invite-email" type="email"
+              class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500"
+              placeholder="staff@example.com">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">権限</label>
+            <select id="invite-role"
+              class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500">
+              <option value="staff">スタッフ</option>
+              <option value="admin">管理者</option>
+            </select>
+          </div>
+          <div id="invite-msg" class="hidden text-sm p-3 rounded-lg"></div>
+          <button onclick="handleInvite()"
+            class="bg-blue-500 hover:bg-blue-600 text-white px-6 py-3 rounded-xl font-medium transition-colors">
+            招待メールを送信
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ユーザー詳細モーダル -->
+<div id="user-modal" class="hidden fixed inset-0 modal-bg z-50 flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+    <div class="flex items-center justify-between mb-6">
+      <h2 class="text-xl font-bold text-gray-800" id="modal-username">ユーザー詳細</h2>
+      <button onclick="closeUserModal()" class="text-gray-400 hover:text-gray-600">
+        <i class="fas fa-times text-xl"></i>
+      </button>
+    </div>
+    <div id="modal-content">読み込み中...</div>
   </div>
 </div>
 
 <script>
 let authToken = null;
+let currentAdmin = null;
+let allUsers = [];
 const API_BASE = '/api';
-const ACCOUNT_ID = 'system';
 
+// ===== 認証 =====
 async function handleLogin() {
-  const email = document.getElementById('email').value;
+  const email = document.getElementById('email').value.trim();
   const password = document.getElementById('password').value;
+  const errEl = document.getElementById('login-error');
+  errEl.classList.add('hidden');
   try {
     const res = await axios.post(API_BASE + '/admin/auth/login', { email, password });
     authToken = res.data.data.token;
+    currentAdmin = res.data.data.admin;
     localStorage.setItem('diet_bot_token', authToken);
+    localStorage.setItem('diet_bot_admin', JSON.stringify(currentAdmin));
     showDashboard();
   } catch (err) {
-    document.getElementById('login-error').textContent = 'ログインに失敗しました。';
-    document.getElementById('login-error').classList.remove('hidden');
+    const msg = err.response?.data?.error || 'ログインに失敗しました。';
+    errEl.textContent = msg;
+    errEl.classList.remove('hidden');
   }
 }
 
 function handleLogout() {
-  authToken = null;
+  authToken = null; currentAdmin = null;
   localStorage.removeItem('diet_bot_token');
+  localStorage.removeItem('diet_bot_admin');
   document.getElementById('login-screen').classList.remove('hidden');
   document.getElementById('dashboard-screen').classList.add('hidden');
 }
 
+function showForgotPassword() {
+  document.getElementById('forgot-modal').classList.remove('hidden');
+}
+
+async function handleForgotPassword() {
+  const email = document.getElementById('forgot-email').value.trim();
+  const msgEl = document.getElementById('forgot-msg');
+  if (!email) { showMsg(msgEl, 'メールアドレスを入力してください', 'error'); return; }
+  try {
+    await axios.post(API_BASE + '/admin/auth/forgot-password', { email });
+    showMsg(msgEl, 'リセットリンクを送信しました（登録済みメールの場合）', 'success');
+  } catch {
+    showMsg(msgEl, '送信に失敗しました', 'error');
+  }
+}
+
+// ===== ダッシュボード表示 =====
 async function showDashboard() {
   document.getElementById('login-screen').classList.add('hidden');
   document.getElementById('dashboard-screen').classList.remove('hidden');
-  await loadOverview();
+  if (currentAdmin) {
+    document.getElementById('sidebar-email').textContent = currentAdmin.email || '-';
+  }
+  await showPage('overview');
 }
 
+// ===== 概要 =====
 async function loadOverview() {
   try {
-    const res = await axios.get(API_BASE + '/admin/dashboard/summary?account_id=' + ACCOUNT_ID, {
+    const res = await axios.get(API_BASE + '/admin/dashboard/summary', {
       headers: { Authorization: 'Bearer ' + authToken }
     });
     const { summary, recent_users } = res.data.data;
-    document.getElementById('stat-total-users').textContent = summary.total_users;
-    document.getElementById('stat-today-logs').textContent = summary.today_logs;
-    document.getElementById('stat-weekly-active').textContent = summary.weekly_active;
-    
+    document.getElementById('stat-total-users').textContent = summary.total_users ?? 0;
+    document.getElementById('stat-today-logs').textContent = summary.today_logs ?? 0;
+    document.getElementById('stat-weekly-active').textContent = summary.weekly_active ?? 0;
+
     const listEl = document.getElementById('recent-users-list');
-    if (recent_users.length === 0) {
+    if (!recent_users || recent_users.length === 0) {
       listEl.innerHTML = '<p class="text-gray-400 text-sm">まだユーザーがいません</p>';
     } else {
       listEl.innerHTML = recent_users.map(u => \`
@@ -374,68 +599,322 @@ async function loadOverview() {
             </div>
             <div>
               <p class="font-medium text-gray-800">\${u.nickname || u.display_name || 'Unknown'}</p>
-              <p class="text-xs text-gray-500">\${u.last_active_at}</p>
+              <p class="text-xs text-gray-500">\${u.last_active_at || '-'}</p>
             </div>
           </div>
-          \${u.current_weight_kg ? '<span class="text-sm text-gray-600">' + u.current_weight_kg + 'kg</span>' : ''}
+          \${u.current_weight_kg ? '<span class="text-sm font-medium text-gray-600">' + u.current_weight_kg + 'kg</span>' : ''}
         </div>
       \`).join('');
     }
   } catch (err) {
-    console.error('Load overview error:', err);
+    console.error('loadOverview error:', err);
   }
 }
 
+// ===== ユーザー管理 =====
 async function loadUsers() {
   try {
-    const res = await axios.get(API_BASE + '/admin/users?account_id=' + ACCOUNT_ID, {
+    const res = await axios.get(API_BASE + '/admin/users', {
       headers: { Authorization: 'Bearer ' + authToken }
     });
-    const { users, total } = res.data.data;
-    const tableEl = document.getElementById('users-table');
-    if (users.length === 0) {
-      tableEl.innerHTML = '<p class="text-gray-400 text-sm">ユーザーがいません</p>';
-      return;
-    }
-    tableEl.innerHTML = \`
-      <table class="w-full text-sm">
-        <thead><tr class="border-b text-left text-gray-500">
-          <th class="pb-2">名前</th><th class="pb-2">最終アクティブ</th>
-          <th class="pb-2">体重</th><th class="pb-2">目標</th><th class="pb-2">操作</th>
-        </tr></thead>
-        <tbody>
-          \${users.map(u => \`<tr class="border-b hover:bg-gray-50">
-            <td class="py-3 font-medium">\${u.nickname || u.display_name || 'Unknown'}</td>
-            <td class="py-3 text-gray-500">\${u.last_active_at}</td>
-            <td class="py-3">\${u.current_weight_kg ? u.current_weight_kg + 'kg' : '-'}</td>
-            <td class="py-3">\${u.target_weight_kg ? u.target_weight_kg + 'kg' : '-'}</td>
-            <td class="py-3"><button class="text-green-600 hover:underline">詳細</button></td>
-          </tr>\`).join('')}
-        </tbody>
-      </table>
-      <p class="text-gray-400 text-xs mt-2">全 \${total} 件</p>
-    \`;
+    allUsers = res.data.data.users || [];
+    renderUsersTable(allUsers);
   } catch (err) {
-    console.error('Load users error:', err);
+    console.error('loadUsers error:', err);
+    document.getElementById('users-table').innerHTML = '<p class="text-red-400 text-sm">読み込みに失敗しました</p>';
   }
 }
 
+function filterUsers() {
+  const q = document.getElementById('user-search').value.toLowerCase();
+  const filtered = q ? allUsers.filter(u =>
+    (u.display_name || '').toLowerCase().includes(q) ||
+    (u.lineUserId || '').toLowerCase().includes(q)
+  ) : allUsers;
+  renderUsersTable(filtered);
+}
+
+function renderUsersTable(users) {
+  const tableEl = document.getElementById('users-table');
+  if (users.length === 0) {
+    tableEl.innerHTML = '<p class="text-gray-400 text-sm py-4 text-center">ユーザーがいません</p>';
+    return;
+  }
+  tableEl.innerHTML = \`
+    <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead><tr class="border-b text-left text-gray-500 bg-gray-50">
+        <th class="pb-3 pt-2 px-3">ユーザー</th>
+        <th class="pb-3 pt-2 px-3">参加日</th>
+        <th class="pb-3 pt-2 px-3 text-center">BOT</th>
+        <th class="pb-3 pt-2 px-3 text-center">記録</th>
+        <th class="pb-3 pt-2 px-3 text-center">相談</th>
+        <th class="pb-3 pt-2 px-3 text-center">問診</th>
+        <th class="pb-3 pt-2 px-3">操作</th>
+      </tr></thead>
+      <tbody>
+        \${users.map(u => \`
+        <tr class="border-b hover:bg-gray-50 cursor-pointer" onclick="openUserModal('\${u.lineUserId}')">
+          <td class="py-3 px-3">
+            <div class="flex items-center gap-2">
+              <div class="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center flex-shrink-0">
+                <i class="fas fa-user text-green-600 text-xs"></i>
+              </div>
+              <div>
+                <p class="font-medium text-gray-800">\${u.display_name || 'Unknown'}</p>
+                <p class="text-xs text-gray-400">\${(u.lineUserId||'').substring(0,12)}...</p>
+              </div>
+            </div>
+          </td>
+          <td class="py-3 px-3 text-gray-500 text-xs">\${(u.joinedAt||'').substring(0,10)}</td>
+          <td class="py-3 px-3 text-center">\${badge(u.botEnabled)}</td>
+          <td class="py-3 px-3 text-center">\${badge(u.recordEnabled)}</td>
+          <td class="py-3 px-3 text-center">\${badge(u.consultEnabled)}</td>
+          <td class="py-3 px-3 text-center">\${badge(u.intakeCompleted)}</td>
+          <td class="py-3 px-3">
+            <button onclick="event.stopPropagation();openUserModal('\${u.lineUserId}')"
+              class="text-xs bg-green-100 text-green-700 hover:bg-green-200 px-3 py-1 rounded-lg transition-colors">
+              詳細
+            </button>
+          </td>
+        </tr>
+        \`).join('')}
+      </tbody>
+    </table>
+    </div>
+    <p class="text-gray-400 text-xs mt-3 px-3">全 \${users.length} 件</p>
+  \`;
+}
+
+function badge(val) {
+  return val
+    ? '<span class="inline-block w-5 h-5 bg-green-400 rounded-full"></span>'
+    : '<span class="inline-block w-5 h-5 bg-gray-200 rounded-full"></span>';
+}
+
+async function openUserModal(lineUserId) {
+  document.getElementById('user-modal').classList.remove('hidden');
+  document.getElementById('modal-content').innerHTML = '<div class="text-center py-8"><i class="fas fa-spinner fa-spin text-gray-400 text-2xl"></i></div>';
+  try {
+    const res = await axios.get(API_BASE + '/admin/users/' + lineUserId, {
+      headers: { Authorization: 'Bearer ' + authToken }
+    });
+    const u = res.data.data;
+    const logs = (u.recentLogs || []).slice(0, 7);
+    document.getElementById('modal-username').textContent = u.display_name || 'ユーザー詳細';
+    document.getElementById('modal-content').innerHTML = \`
+      <div class="grid grid-cols-2 gap-4 mb-6 text-sm">
+        <div class="bg-gray-50 p-3 rounded-lg">
+          <p class="text-gray-500 text-xs mb-1">LINE User ID</p>
+          <p class="font-mono text-xs truncate">\${lineUserId}</p>
+        </div>
+        <div class="bg-gray-50 p-3 rounded-lg">
+          <p class="text-gray-500 text-xs mb-1">参加日</p>
+          <p class="font-medium">\${(u.joinedAt||'').substring(0,10)}</p>
+        </div>
+      </div>
+      <div class="mb-6">
+        <h3 class="font-semibold text-gray-700 mb-3">サービス設定</h3>
+        <div class="grid grid-cols-2 gap-3">
+          \${serviceToggle(lineUserId, 'bot_enabled', u.service?.bot_enabled, 'BOT有効')}
+          \${serviceToggle(lineUserId, 'record_enabled', u.service?.record_enabled, '記録機能')}
+          \${serviceToggle(lineUserId, 'consult_enabled', u.service?.consult_enabled, '相談機能')}
+          \${serviceToggle(lineUserId, 'intake_completed', u.service?.intake_completed, '問診完了')}
+        </div>
+      </div>
+      <div>
+        <h3 class="font-semibold text-gray-700 mb-3">直近の記録（7日分）</h3>
+        \${logs.length === 0
+          ? '<p class="text-gray-400 text-sm">記録なし</p>'
+          : \`<div class="space-y-2">\${logs.map(log => \`
+            <div class="flex items-center justify-between bg-gray-50 p-3 rounded-lg text-sm">
+              <span class="text-gray-600">\${log.log_date}</span>
+              <div class="flex gap-4 text-gray-500 text-xs">
+                \${log.total_calories_kcal ? '<span>🔥 '+log.total_calories_kcal+'kcal</span>' : ''}
+                \${log.weight_snapshot_kg ? '<span>⚖️ '+log.weight_snapshot_kg+'kg</span>' : ''}
+              </div>
+            </div>
+          \`).join('')}</div>\`
+        }
+      </div>
+    \`;
+  } catch {
+    document.getElementById('modal-content').innerHTML = '<p class="text-red-400">読み込みに失敗しました</p>';
+  }
+}
+
+function serviceToggle(lineUserId, key, val, label) {
+  const isOn = val === 1 || val === true;
+  return \`
+    <div class="flex items-center justify-between bg-gray-50 p-3 rounded-lg">
+      <span class="text-sm text-gray-700">\${label}</span>
+      <button onclick="toggleService('\${lineUserId}','\${key}',\${isOn})"
+        class="w-10 h-6 rounded-full transition-colors \${isOn ? 'bg-green-500' : 'bg-gray-300'} relative">
+        <span class="absolute top-0.5 \${isOn ? 'right-0.5' : 'left-0.5'} w-5 h-5 bg-white rounded-full shadow transition-all"></span>
+      </button>
+    </div>
+  \`;
+}
+
+async function toggleService(lineUserId, key, currentVal) {
+  try {
+    await axios.patch(API_BASE + '/admin/users/' + lineUserId + '/service',
+      { [key]: !currentVal },
+      { headers: { Authorization: 'Bearer ' + authToken } }
+    );
+    showToast('設定を更新しました', 'success');
+    openUserModal(lineUserId);
+  } catch {
+    showToast('更新に失敗しました', 'error');
+  }
+}
+
+function closeUserModal() {
+  document.getElementById('user-modal').classList.add('hidden');
+}
+
+// ===== アカウント設定 =====
+async function loadAccount() {
+  try {
+    const res = await axios.get(API_BASE + '/admin/auth/me', {
+      headers: { Authorization: 'Bearer ' + authToken }
+    });
+    const admin = res.data.data;
+    document.getElementById('admin-email').textContent = admin.email || '-';
+    document.getElementById('admin-role').textContent = admin.role || '-';
+    document.getElementById('admin-last-login').textContent = admin.lastLoginAt
+      ? admin.lastLoginAt.substring(0, 19).replace('T', ' ')
+      : '初回ログイン';
+  } catch { /* ignore */ }
+}
+
+async function handleChangePassword() {
+  const currentPw = document.getElementById('current-password').value;
+  const newPw = document.getElementById('new-password').value;
+  const confirmPw = document.getElementById('confirm-password').value;
+  const msgEl = document.getElementById('change-pw-msg');
+
+  if (!currentPw || !newPw || !confirmPw) { showMsg(msgEl, '全ての項目を入力してください', 'error'); return; }
+  if (newPw !== confirmPw) { showMsg(msgEl, '新しいパスワードが一致しません', 'error'); return; }
+  if (newPw.length < 8) { showMsg(msgEl, 'パスワードは8文字以上にしてください', 'error'); return; }
+
+  try {
+    await axios.post(API_BASE + '/admin/auth/change-password',
+      { currentPassword: currentPw, newPassword: newPw },
+      { headers: { Authorization: 'Bearer ' + authToken } }
+    );
+    showMsg(msgEl, 'パスワードを変更しました！', 'success');
+    document.getElementById('current-password').value = '';
+    document.getElementById('new-password').value = '';
+    document.getElementById('confirm-password').value = '';
+  } catch (err) {
+    const msg = err.response?.data?.error || 'パスワード変更に失敗しました';
+    showMsg(msgEl, msg, 'error');
+  }
+}
+
+// ===== 管理者登録 =====
+async function handleRegister() {
+  const email = document.getElementById('reg-email').value.trim();
+  const name = document.getElementById('reg-name').value.trim();
+  const password = document.getElementById('reg-password').value;
+  const msgEl = document.getElementById('reg-msg');
+
+  if (!email || !password) { showMsg(msgEl, 'メールアドレスとパスワードを入力してください', 'error'); return; }
+  if (password.length < 8) { showMsg(msgEl, 'パスワードは8文字以上にしてください', 'error'); return; }
+
+  try {
+    await axios.post(API_BASE + '/admin/auth/register', { email, name, password });
+    showMsg(msgEl, '登録しました！ログインしてください。', 'success');
+    showToast('管理者登録が完了しました', 'success');
+  } catch (err) {
+    const msg = err.response?.data?.error || '登録に失敗しました';
+    showMsg(msgEl, msg, 'error');
+  }
+}
+
+async function handleInvite() {
+  const email = document.getElementById('invite-email').value.trim();
+  const role = document.getElementById('invite-role').value;
+  const msgEl = document.getElementById('invite-msg');
+
+  if (!email) { showMsg(msgEl, 'メールアドレスを入力してください', 'error'); return; }
+
+  try {
+    const res = await axios.post(API_BASE + '/admin/auth/invite', { email, role },
+      { headers: { Authorization: 'Bearer ' + authToken } }
+    );
+    const inviteUrl = res.data.data.inviteUrl;
+    showMsg(msgEl, \`招待を送信しました！URL: \${inviteUrl}\`, 'success');
+    showToast('招待メールを送信しました', 'success');
+  } catch (err) {
+    const msg = err.response?.data?.error || '招待に失敗しました';
+    showMsg(msgEl, msg, 'error');
+  }
+}
+
+// ===== ページ切替 =====
 function showPage(page) {
-  ['overview', 'users', 'knowledge'].forEach(p => {
-    document.getElementById('page-' + p).classList.add('hidden');
-    document.getElementById('nav-' + p).classList.remove('bg-gray-700', 'text-white');
+  const pages = ['overview', 'users', 'account', 'register'];
+  pages.forEach(p => {
+    const el = document.getElementById('page-' + p);
+    if (el) el.classList.add('hidden');
+    const nav = document.getElementById('nav-' + p);
+    if (nav) {
+      nav.classList.remove('bg-gray-700', 'text-white');
+      nav.classList.add('text-gray-300');
+    }
   });
-  document.getElementById('page-' + page).classList.remove('hidden');
-  document.getElementById('nav-' + page).classList.add('bg-gray-700', 'text-white');
-  
-  if (page === 'users') loadUsers();
+  const pageEl = document.getElementById('page-' + page);
+  if (pageEl) pageEl.classList.remove('hidden');
+  const navEl = document.getElementById('nav-' + page);
+  if (navEl) {
+    navEl.classList.add('bg-gray-700', 'text-white');
+    navEl.classList.remove('text-gray-300');
+  }
+
+  if (!authToken && page !== 'register') {
+    document.getElementById('login-screen').classList.remove('hidden');
+    document.getElementById('dashboard-screen').classList.add('hidden');
+    return;
+  }
+
+  if (page === 'overview') loadOverview();
+  else if (page === 'users') loadUsers();
+  else if (page === 'account') loadAccount();
+  else if (page === 'register' && authToken) {
+    document.getElementById('invite-section').style.display = 'block';
+  }
+}
+
+// ===== ユーティリティ =====
+function showMsg(el, msg, type) {
+  el.textContent = msg;
+  el.classList.remove('hidden', 'bg-green-50', 'text-green-700', 'bg-red-50', 'text-red-600');
+  if (type === 'success') el.classList.add('bg-green-50', 'text-green-700');
+  else el.classList.add('bg-red-50', 'text-red-600');
+}
+
+function showToast(msg, type = 'success') {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = \`toast px-4 py-3 rounded-xl shadow-lg text-sm font-medium \${
+    type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
+  }\`;
+  toast.innerHTML = \`<i class="fas fa-\${type === 'success' ? 'check' : 'exclamation'} mr-2"></i>\${msg}\`;
+  container.appendChild(toast);
+  setTimeout(() => toast.remove(), 3500);
 }
 
 // 初期化
 window.addEventListener('load', () => {
   const savedToken = localStorage.getItem('diet_bot_token');
+  const savedAdmin = localStorage.getItem('diet_bot_admin');
   if (savedToken) {
     authToken = savedToken;
+    if (savedAdmin) {
+      try { currentAdmin = JSON.parse(savedAdmin); } catch {}
+    }
     showDashboard();
   }
 });
@@ -443,6 +922,7 @@ window.addEventListener('load', () => {
 </body>
 </html>`
 }
+
 
 /**
  * LIFF エントリー HTML

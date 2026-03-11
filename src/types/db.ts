@@ -31,6 +31,10 @@ export type AccountMembership = {
   role: 'superadmin' | 'admin' | 'staff'
   status: 'active' | 'inactive'
   created_at: string
+  password_hash?: string | null
+  password_reset_token?: string | null
+  password_reset_expires_at?: string | null
+  last_login_at?: string | null
 }
 
 export type Subscription = {

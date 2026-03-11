@@ -32,9 +32,14 @@ usersRouter.get('/', async (c) => {
   const users = await Promise.all(
     userAccounts.map(async (ua) => {
       const svc = await findUserServiceStatus(c.env.DB, accountId, ua.line_user_id)
+      // line_users テーブルから display_name を取得
+      const lineUser = await c.env.DB.prepare(
+        'SELECT display_name FROM line_users WHERE line_user_id = ?1 LIMIT 1'
+      ).bind(ua.line_user_id).first<{ display_name: string | null }>()
       return {
         userAccountId: ua.id,
         lineUserId: ua.line_user_id,
+        display_name: lineUser?.display_name ?? null,
         status: ua.status,
         joinedAt: ua.joined_at,
         botEnabled: svc?.bot_enabled === 1,
@@ -64,9 +69,15 @@ usersRouter.get('/:lineUserId', async (c) => {
   const svc = await findUserServiceStatus(c.env.DB, accountId, lineUserId)
   const recentLogs = await listRecentDailyLogs(c.env.DB, userAccount.id, 30)
 
+  const lineUser = await c.env.DB.prepare(
+    'SELECT display_name, picture_url FROM line_users WHERE line_user_id = ?1 LIMIT 1'
+  ).bind(lineUserId).first<{ display_name: string | null; picture_url: string | null }>()
+
   return ok(c, {
     userAccountId: userAccount.id,
     lineUserId,
+    display_name: lineUser?.display_name ?? null,
+    picture_url: lineUser?.picture_url ?? null,
     status: userAccount.status,
     joinedAt: userAccount.joined_at,
     service: svc ?? null,
