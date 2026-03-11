@@ -18,6 +18,7 @@ import { findActiveModeSession, upsertModeSession } from '../../repositories/mod
 import { ensureOpenThread, updateThreadMode } from '../../repositories/conversations-repo'
 import { upsertBodyMetrics } from '../../repositories/body-metrics-repo'
 import { ensureDailyLog } from '../../repositories/daily-logs-repo'
+import { checkServiceAccess } from '../../repositories/subscriptions-repo'
 
 // ===================================================================
 // 問診ステップ定義
@@ -50,11 +51,151 @@ const INTAKE_STEPS: IntakeStep[] = [
 ]
 
 // ===================================================================
-// 問診フロー開始
+// ステップ番号ヘルパー
 // ===================================================================
 
-/** 問診を開始してニックネームを聞く */
+/** IntakeStep → 表示用の質問番号 (1-based) */
+function stepToNumber(step: IntakeStep): number {
+  const idx = INTAKE_STEPS.indexOf(step)
+  return idx >= 0 ? idx + 1 : 1
+}
+
+/** IntakeStep → 表示用の質問テーマ */
+function stepToLabel(step: IntakeStep): string {
+  const labels: Record<string, string> = {
+    intake_nickname: 'ニックネーム',
+    intake_gender: '性別',
+    intake_age_range: '年代',
+    intake_height: '身長',
+    intake_current_weight: '現在の体重',
+    intake_target_weight: '目標体重',
+    intake_goal: '目標・理由',
+    intake_concerns: '気になること',
+    intake_activity: '活動レベル',
+  }
+  return labels[step] ?? ''
+}
+
+// ===================================================================
+// 問診フロー開始（新規 / 再開 / やり直し を統合制御）
+// ===================================================================
+
+/**
+ * 問診の開始制御（フォロー時 / 「問診」コマンド 共通エントリ）
+ *
+ * 判定ロジック:
+ *   1. intake_completed = 1 → 「完了済み。やり直しますか？」
+ *   2. mode_session に intake が残っている → 「前回の続き（質問 N/9）から再開しますか？」
+ *   3. どちらでもない → 新規開始
+ *
+ * @param source  'follow' | 'command' — フォロー時は新規開始のみ
+ */
 export async function startIntakeFlow(
+  replyToken: string,
+  lineUserId: string,
+  clientAccountId: string,
+  env: Bindings,
+  source: 'follow' | 'command' = 'follow'
+): Promise<void> {
+  // ----- 1. intake_completed チェック -----
+  const access = await checkServiceAccess(env.DB, {
+    accountId: clientAccountId,
+    lineUserId,
+  })
+
+  if (access?.intakeCompleted) {
+    if (source === 'follow') {
+      // フォロー(再フォロー)時: 問診済みなのでスキップ
+      await replyText(
+        replyToken,
+        `おかえりなさい！🌿\n\n引き続き diet-bot をご利用ください。\n📷 食事の写真を送ると自動解析\n⚖️ 体重も記録できます\n💬「相談」でAIに相談`,
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+      return
+    }
+    // コマンド時: 完了済み → やり直し確認
+    await replyWithQuickReplies(
+      replyToken,
+      `✅ 初回問診は既に完了しています。\n\nもう一度最初からやり直しますか？`,
+      [
+        { label: 'やり直す', text: '問診やり直し' },
+        { label: 'やめる', text: '戻る' },
+      ],
+      env.LINE_CHANNEL_ACCESS_TOKEN
+    )
+    return
+  }
+
+  // ----- 2. 途中セッション確認 -----
+  const session = await findActiveModeSession(env.DB, clientAccountId, lineUserId)
+
+  if (session?.current_mode === 'intake' && source === 'command') {
+    const step = session.current_step as IntakeStep
+    const num = stepToNumber(step)
+    const label = stepToLabel(step)
+
+    await replyWithQuickReplies(
+      replyToken,
+      `📋 前回の問診が途中です。\n\n【質問 ${num}/9: ${label}】\nから続けますか？それとも最初からやり直しますか？`,
+      [
+        { label: '続きから', text: '問診再開' },
+        { label: '最初から', text: '問診やり直し' },
+        { label: 'やめる', text: '戻る' },
+      ],
+      env.LINE_CHANNEL_ACCESS_TOKEN
+    )
+    return
+  }
+
+  // ----- 3. 未完了だが期限切れ (セッションなし) でコマンド → 前回ステップを復元 -----
+  if (source === 'command') {
+    const lastAnswer = await env.DB.prepare(
+      `SELECT question_key FROM intake_answers
+       WHERE user_account_id = (
+         SELECT id FROM user_accounts
+         WHERE line_user_id = ?1 AND client_account_id = ?2 LIMIT 1
+       )
+       ORDER BY answered_at DESC LIMIT 1`
+    ).bind(lineUserId, clientAccountId).first<{ question_key: string }>()
+
+    if (lastAnswer) {
+      // 最後に回答した質問の「次」のステップを割り出す
+      const resumeStep = getNextStepAfterAnswer(lastAnswer.question_key)
+      if (resumeStep && resumeStep !== 'intake_done') {
+        const num = stepToNumber(resumeStep)
+        const label = stepToLabel(resumeStep)
+
+        await replyWithQuickReplies(
+          replyToken,
+          `📋 以前の問診が途中のようです。\n\n【質問 ${num}/9: ${label}】\nから続けますか？`,
+          [
+            { label: '続きから', text: '問診再開' },
+            { label: '最初から', text: '問診やり直し' },
+            { label: 'やめる', text: '戻る' },
+          ],
+          env.LINE_CHANNEL_ACCESS_TOKEN
+        )
+        // resume 用に mode_session を復元
+        await upsertModeSession(env.DB, {
+          clientAccountId,
+          lineUserId,
+          currentMode: 'intake',
+          currentStep: resumeStep,
+        })
+        return
+      }
+    }
+  }
+
+  // ----- 4. 新規開始 -----
+  await beginIntakeFromStart(replyToken, lineUserId, clientAccountId, env)
+}
+
+/**
+ * 問診を質問1から開始する内部関数
+ * （startIntakeFlow / 「問診やり直し」コマンドから呼ばれる）
+ */
+export async function beginIntakeFromStart(
   replyToken: string,
   lineUserId: string,
   clientAccountId: string,
@@ -69,9 +210,155 @@ export async function startIntakeFlow(
 
   await replyText(
     replyToken,
-    `ようこそ！🌿 diet-bot へ！\n\nはじめに簡単なご登録（10問ほど）をお願いします。\n※いつでも「スキップ」と送れば省略できます。\n\n━━━━━━━━━━━━━━━\n【質問 1/9】\nお名前（ニックネームでOK）を教えてください！`,
+    `ようこそ！🌿 diet-bot へ！\n\nはじめに簡単なご登録（9問）をお願いします。\n※いつでも「スキップ」と送れば省略できます。\n\n━━━━━━━━━━━━━━━\n【質問 1/9】\nお名前（ニックネームでOK）を教えてください！`,
     env.LINE_CHANNEL_ACCESS_TOKEN
   )
+}
+
+/**
+ * 問診を途中のステップから再開する
+ * （「問診再開」コマンドから呼ばれる）
+ */
+export async function resumeIntakeFlow(
+  replyToken: string,
+  lineUserId: string,
+  clientAccountId: string,
+  env: Bindings
+): Promise<void> {
+  const session = await findActiveModeSession(env.DB, clientAccountId, lineUserId)
+  if (!session || session.current_mode !== 'intake') {
+    // セッションが見つからない場合は最初から
+    await beginIntakeFromStart(replyToken, lineUserId, clientAccountId, env)
+    return
+  }
+
+  const step = session.current_step as IntakeStep
+  await sendQuestionForStep(replyToken, step, env)
+}
+
+/** 指定ステップに対応する質問メッセージを送信 */
+async function sendQuestionForStep(
+  replyToken: string,
+  step: IntakeStep,
+  env: Bindings
+): Promise<void> {
+  const num = stepToNumber(step)
+
+  switch (step) {
+    case 'intake_nickname':
+      await replyText(
+        replyToken,
+        `━━━━━━━━━━━━━━━\n【質問 ${num}/9】\nお名前（ニックネームでOK）を教えてください！`,
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+      break
+    case 'intake_gender':
+      await replyWithQuickReplies(
+        replyToken,
+        `━━━━━━━━━━━━━━━\n【質問 ${num}/9】\n性別を教えてください。`,
+        [
+          { label: '男性', text: '男性' },
+          { label: '女性', text: '女性' },
+          { label: '答えない', text: 'スキップ' },
+        ],
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+      break
+    case 'intake_age_range':
+      await replyWithQuickReplies(
+        replyToken,
+        `━━━━━━━━━━━━━━━\n【質問 ${num}/9】\n年代を教えてください。`,
+        [
+          { label: '20代', text: '20s' },
+          { label: '30代', text: '30s' },
+          { label: '40代', text: '40s' },
+          { label: '50代', text: '50s' },
+          { label: '60代以上', text: '60s+' },
+          { label: 'スキップ', text: 'スキップ' },
+        ],
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+      break
+    case 'intake_height':
+      await replyText(
+        replyToken,
+        `━━━━━━━━━━━━━━━\n【質問 ${num}/9】\n身長を教えてください（cm）\n\n例：「165」や「165cm」`,
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+      break
+    case 'intake_current_weight':
+      await replyText(
+        replyToken,
+        `━━━━━━━━━━━━━━━\n【質問 ${num}/9】\n現在の体重を教えてください（kg）\n\n例：「68」や「68.5kg」`,
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+      break
+    case 'intake_target_weight':
+      await replyText(
+        replyToken,
+        `━━━━━━━━━━━━━━━\n【質問 ${num}/9】\n目標体重を教えてください（kg）\n\n例：「58」や「58.5kg」`,
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+      break
+    case 'intake_goal':
+      await replyText(
+        replyToken,
+        `━━━━━━━━━━━━━━━\n【質問 ${num}/9】\nダイエットの目標や理由を教えてください。\n\n例：「夏までに5kg痩せたい」「健康診断で引っかかった」\n（スキップしてもOKです）`,
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+      break
+    case 'intake_concerns':
+      await replyWithQuickReplies(
+        replyToken,
+        `━━━━━━━━━━━━━━━\n【質問 ${num}/9】\n気になることを教えてください。\n（複数回タップ→最後に「次へ」）`,
+        [
+          { label: 'お腹まわり', text: 'お腹まわり' },
+          { label: '体重が減らない', text: '体重が減らない' },
+          { label: '食べすぎ', text: '食べすぎ' },
+          { label: 'むくみ', text: 'むくみ' },
+          { label: '運動不足', text: '運動不足' },
+          { label: '次へ進む', text: '次へ' },
+        ],
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+      break
+    case 'intake_activity':
+      await replyWithQuickReplies(
+        replyToken,
+        `━━━━━━━━━━━━━━━\n【質問 ${num}/9】\n普段の活動レベルを教えてください。`,
+        [
+          { label: '座り仕事中心', text: 'sedentary' },
+          { label: '軽い運動あり', text: 'light' },
+          { label: '週3〜5回運動', text: 'moderate' },
+          { label: '毎日激しく運動', text: 'active' },
+          { label: 'スキップ', text: 'スキップ' },
+        ],
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+      break
+    default:
+      await replyText(
+        replyToken,
+        '問診を再開します。',
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+  }
+}
+
+/** question_key から次のステップを返す */
+function getNextStepAfterAnswer(questionKey: string): IntakeStep | null {
+  const keyToStep: Record<string, IntakeStep> = {
+    'nickname': 'intake_gender',
+    'gender': 'intake_age_range',
+    'age_range': 'intake_height',
+    'height_cm': 'intake_current_weight',
+    'current_weight_kg': 'intake_target_weight',
+    'target_weight_kg': 'intake_goal',
+    'goal_summary': 'intake_concerns',
+    'concern_tags': 'intake_activity',
+    'activity_level': 'intake_done',
+  }
+  return keyToStep[questionKey] ?? null
 }
 
 // ===================================================================

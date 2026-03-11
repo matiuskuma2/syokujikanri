@@ -20,7 +20,7 @@ import type {
 } from '../../types/bindings'
 
 import { getUserProfile, replyText, replyWithQuickReplies, getMessageContent } from './reply'
-import { startIntakeFlow, handleIntakeStep } from './intake-flow'
+import { startIntakeFlow, handleIntakeStep, beginIntakeFromStart, resumeIntakeFlow } from './intake-flow'
 import { upsertLineUser, ensureUserAccount } from '../../repositories/line-users-repo'
 import { upsertUserServiceStatus, checkServiceAccess } from '../../repositories/subscriptions-repo'
 import { ensureOpenThread, createConversationMessage, updateThreadMode } from '../../repositories/conversations-repo'
@@ -152,13 +152,14 @@ async function handleFollowEvent(
     userAccountId: userAccount.id,
   })
 
-  // 6. インテークフロー開始（初回問診）
+  // 6. インテークフロー開始（初回問診 / 再フォロー時はスキップ判定）
   if (event.replyToken) {
     await startIntakeFlow(
       event.replyToken,
       lineUserId,
       clientAccountId,
-      env
+      env,
+      'follow'
     )
   }
 
@@ -240,9 +241,27 @@ async function handleTextMessageEvent(
   // ------------------------------------------------------------------
   // 4. モード切替コマンド判定
   // ------------------------------------------------------------------
-  // インテーク再開コマンド
+  // インテーク開始 / 再開コマンド
   if (['問診', 'ヒアリング', '登録', '初期設定'].includes(textTrim)) {
-    await startIntakeFlow(event.replyToken, lineUserId, clientAccountId, env)
+    await startIntakeFlow(event.replyToken, lineUserId, clientAccountId, env, 'command')
+    return
+  }
+
+  // 「問診やり直し」→ 最初から新規開始
+  if (textTrim === '問診やり直し') {
+    // intake_completed を 0 にリセット
+    await upsertUserServiceStatus(env.DB, {
+      accountId: clientAccountId,
+      lineUserId,
+      intakeCompleted: 0,
+    })
+    await beginIntakeFromStart(event.replyToken, lineUserId, clientAccountId, env)
+    return
+  }
+
+  // 「問診再開」→ 途中のステップから続行
+  if (textTrim === '問診再開') {
+    await resumeIntakeFlow(event.replyToken, lineUserId, clientAccountId, env)
     return
   }
 
