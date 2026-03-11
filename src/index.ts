@@ -128,8 +128,13 @@ app.get('/dashboard', (c) => {
   return c.html(getUserDashboardHtml(liffId))
 })
 
-// ルートリダイレクト
-app.get('/', (c) => c.redirect('/admin'))
+// Welcome ページ（会員サイト — 認証不要）
+app.get('/welcome', (c) => {
+  return c.html(getWelcomeHtml())
+})
+
+// ルートリダイレクト → welcome ページへ
+app.get('/', (c) => c.redirect('/welcome'))
 
 // 404ハンドラー
 app.notFound((c) => {
@@ -1894,6 +1899,358 @@ function logoutUser() {
   location.href = '/liff';
 }
 </script>
+</body>
+</html>`
+}
+
+// ===================================================================
+// Welcome ページ HTML
+// ===================================================================
+
+function getWelcomeHtml(): string {
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>食事指導BOT — はじめての方へ</title>
+  <meta name="description" content="LINEで食事記録・AI栄養相談ができる食事指導BOT。友達追加して今日から健康管理を始めましょう。">
+  <meta property="og:title" content="食事指導BOT — AIで毎日の食事をサポート">
+  <meta property="og:description" content="LINEで写真を送るだけでカロリー自動計算。AIが栄養アドバイスをくれる食事管理ツール。">
+  <meta property="og:type" content="website">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;600;700;800&display=swap');
+    body { font-family: 'Noto Sans JP', 'Hiragino Sans', sans-serif; }
+    .hero-gradient {
+      background: linear-gradient(135deg, #22c55e 0%, #16a34a 50%, #15803d 100%);
+    }
+    .glass-card {
+      background: rgba(255,255,255,0.95);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.3);
+    }
+    .step-num {
+      width: 40px; height: 40px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 18px;
+      flex-shrink: 0;
+    }
+    .feature-icon {
+      width: 56px; height: 56px;
+      border-radius: 16px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 24px;
+      flex-shrink: 0;
+    }
+    .line-btn {
+      background: #06C755;
+      color: white;
+      font-weight: 700;
+      font-size: 17px;
+      padding: 16px 32px;
+      border-radius: 14px;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+      transition: transform 0.15s, box-shadow 0.15s;
+      box-shadow: 0 4px 14px rgba(6,199,85,0.4);
+    }
+    .line-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(6,199,85,0.5); }
+    .line-btn:active { transform: translateY(0); }
+    .qr-glow {
+      box-shadow: 0 0 0 8px rgba(34,197,94,0.1), 0 4px 20px rgba(0,0,0,0.08);
+    }
+    .fade-in { animation: fadeIn 0.6s ease-out forwards; opacity: 0; }
+    @keyframes fadeIn {
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .fade-in { transform: translateY(16px); }
+    .float-cta {
+      position: fixed; bottom: 0; left: 0; right: 0;
+      background: rgba(255,255,255,0.95);
+      backdrop-filter: blur(10px);
+      border-top: 1px solid #e5e7eb;
+      padding: 12px 16px;
+      z-index: 50;
+      display: flex; justify-content: center;
+    }
+    @media (min-width: 768px) { .float-cta { display: none; } }
+  </style>
+</head>
+<body class="bg-gray-50">
+
+<!-- ===== Hero ===== -->
+<section class="hero-gradient text-white">
+  <div class="max-w-4xl mx-auto px-5 pt-12 pb-16 md:pt-20 md:pb-24 text-center">
+    <div class="fade-in" style="animation-delay:0.1s;">
+      <div class="inline-flex items-center gap-2 bg-white/20 rounded-full px-4 py-1.5 text-sm font-medium mb-6">
+        <i class="fas fa-sparkles"></i>
+        <span>AI×LINE で食事管理</span>
+      </div>
+      <h1 class="text-3xl md:text-5xl font-extrabold leading-tight mb-4">
+        食事指導BOT
+      </h1>
+      <p class="text-lg md:text-xl text-green-100 max-w-xl mx-auto leading-relaxed mb-8">
+        LINEで写真を送るだけ。<br class="md:hidden">
+        AIがカロリー計算・栄養アドバイスを<br class="md:hidden">
+        毎日サポートします。
+      </p>
+    </div>
+
+    <!-- CTA -->
+    <div class="fade-in" style="animation-delay:0.25s;">
+      <a href="https://lin.ee/n4PoXrR" target="_blank" rel="noopener" class="line-btn text-lg">
+        <i class="fab fa-line text-2xl"></i>
+        友達追加して始める
+      </a>
+      <p class="text-green-200 text-sm mt-3">無料 &middot; 30秒で登録完了</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===== QR + ID ===== -->
+<section class="max-w-4xl mx-auto px-5 -mt-10 relative z-10">
+  <div class="glass-card rounded-2xl shadow-xl p-6 md:p-8 fade-in" style="animation-delay:0.35s;">
+    <div class="flex flex-col md:flex-row items-center gap-6 md:gap-10">
+      <div class="flex-shrink-0">
+        <img src="/static/qr-line-friend.png" alt="LINE友達追加QRコード" class="w-40 h-40 md:w-48 md:h-48 rounded-2xl qr-glow">
+      </div>
+      <div class="text-center md:text-left">
+        <h2 class="text-xl font-bold text-gray-800 mb-2">QRコードで友達追加</h2>
+        <p class="text-gray-500 text-sm mb-4">スマホのカメラまたはLINEの<br>「友だち追加」からスキャンしてください</p>
+        <div class="flex flex-col sm:flex-row items-center gap-3">
+          <a href="https://lin.ee/n4PoXrR" target="_blank" rel="noopener"
+            class="inline-flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white px-5 py-3 rounded-xl font-bold transition-colors text-sm">
+            <i class="fab fa-line text-lg"></i>友達追加リンク
+          </a>
+          <div class="flex items-center gap-2 bg-gray-100 rounded-xl px-4 py-3">
+            <span class="text-gray-500 text-sm">LINE ID:</span>
+            <code class="font-bold text-gray-800">@054eyzbj</code>
+            <button onclick="navigator.clipboard.writeText('@054eyzbj');this.innerHTML='<i class=\'fas fa-check text-green-500\'></i>';setTimeout(()=>this.innerHTML='<i class=\'fas fa-copy\'></i>',1500)" class="text-gray-400 hover:text-gray-600 ml-1" title="コピー">
+              <i class="fas fa-copy"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 使い方 3ステップ ===== -->
+<section class="max-w-4xl mx-auto px-5 py-16 md:py-20">
+  <div class="text-center mb-12">
+    <p class="text-green-600 font-bold text-sm mb-2">HOW TO USE</p>
+    <h2 class="text-2xl md:text-3xl font-extrabold text-gray-800">かんたん3ステップ</h2>
+  </div>
+
+  <div class="grid md:grid-cols-3 gap-6">
+    <!-- Step 1 -->
+    <div class="bg-white rounded-2xl shadow-sm p-6 fade-in" style="animation-delay:0.1s;">
+      <div class="step-num bg-green-100 text-green-700 mb-4">1</div>
+      <h3 class="font-bold text-gray-800 text-lg mb-2">友達追加</h3>
+      <p class="text-gray-500 text-sm leading-relaxed">
+        上のQRコード、またはLINE IDで<br>
+        <strong>食事指導BOT</strong> を友達追加します。
+      </p>
+    </div>
+
+    <!-- Step 2 -->
+    <div class="bg-white rounded-2xl shadow-sm p-6 fade-in" style="animation-delay:0.2s;">
+      <div class="step-num bg-blue-100 text-blue-700 mb-4">2</div>
+      <h3 class="font-bold text-gray-800 text-lg mb-2">初回問診に回答</h3>
+      <p class="text-gray-500 text-sm leading-relaxed">
+        性別・身長・体重・目標など<br>
+        <strong>9つの質問</strong>にLINEで答えるだけ。<br>
+        約2分で完了します。
+      </p>
+    </div>
+
+    <!-- Step 3 -->
+    <div class="bg-white rounded-2xl shadow-sm p-6 fade-in" style="animation-delay:0.3s;">
+      <div class="step-num bg-purple-100 text-purple-700 mb-4">3</div>
+      <h3 class="font-bold text-gray-800 text-lg mb-2">写真を送って記録開始</h3>
+      <p class="text-gray-500 text-sm leading-relaxed">
+        食事の写真を送るとAIが自動で<br>
+        <strong>カロリー＆栄養素</strong>を計算。<br>
+        体重はテキストで送ればOK。
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 機能紹介 ===== -->
+<section class="bg-white py-16 md:py-20">
+  <div class="max-w-4xl mx-auto px-5">
+    <div class="text-center mb-12">
+      <p class="text-green-600 font-bold text-sm mb-2">FEATURES</p>
+      <h2 class="text-2xl md:text-3xl font-extrabold text-gray-800">できること</h2>
+    </div>
+
+    <div class="grid sm:grid-cols-2 gap-6">
+      <div class="flex items-start gap-4 p-5 rounded-2xl bg-green-50">
+        <div class="feature-icon bg-green-100 text-green-600"><i class="fas fa-camera"></i></div>
+        <div>
+          <h3 class="font-bold text-gray-800 mb-1">写真で食事記録</h3>
+          <p class="text-gray-500 text-sm">食事の写真を送るだけでAIがカロリー・PFC（たんぱく質・脂質・炭水化物）を自動分析</p>
+        </div>
+      </div>
+      <div class="flex items-start gap-4 p-5 rounded-2xl bg-blue-50">
+        <div class="feature-icon bg-blue-100 text-blue-600"><i class="fas fa-weight-scale"></i></div>
+        <div>
+          <h3 class="font-bold text-gray-800 mb-1">体重記録</h3>
+          <p class="text-gray-500 text-sm">「72.5kg」とLINEに送るだけで記録完了。体重計の写真からも自動読み取り</p>
+        </div>
+      </div>
+      <div class="flex items-start gap-4 p-5 rounded-2xl bg-purple-50">
+        <div class="feature-icon bg-purple-100 text-purple-600"><i class="fas fa-comments"></i></div>
+        <div>
+          <h3 class="font-bold text-gray-800 mb-1">AI栄養相談</h3>
+          <p class="text-gray-500 text-sm">「相談」と送ると相談モードに切替。AIがあなたに合わせた食事アドバイスを提案</p>
+        </div>
+      </div>
+      <div class="flex items-start gap-4 p-5 rounded-2xl bg-amber-50">
+        <div class="feature-icon bg-amber-100 text-amber-600"><i class="fas fa-chart-line"></i></div>
+        <div>
+          <h3 class="font-bold text-gray-800 mb-1">ダッシュボード</h3>
+          <p class="text-gray-500 text-sm">体重推移グラフ、カロリー履歴、週次レポートでモチベーションをキープ</p>
+        </div>
+      </div>
+      <div class="flex items-start gap-4 p-5 rounded-2xl bg-rose-50">
+        <div class="feature-icon bg-rose-100 text-rose-600"><i class="fas fa-bell"></i></div>
+        <div>
+          <h3 class="font-bold text-gray-800 mb-1">リマインダー</h3>
+          <p class="text-gray-500 text-sm">記録を忘れた日は毎晩21時にLINEでやさしくリマインド</p>
+        </div>
+      </div>
+      <div class="flex items-start gap-4 p-5 rounded-2xl bg-teal-50">
+        <div class="feature-icon bg-teal-100 text-teal-600"><i class="fas fa-file-alt"></i></div>
+        <div>
+          <h3 class="font-bold text-gray-800 mb-1">週次レポート</h3>
+          <p class="text-gray-500 text-sm">毎週日曜日にAIが1週間の食事と体重を振り返り、パーソナルアドバイスを送信</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 使い方コマンド一覧 ===== -->
+<section class="max-w-4xl mx-auto px-5 py-16 md:py-20">
+  <div class="text-center mb-12">
+    <p class="text-green-600 font-bold text-sm mb-2">COMMANDS</p>
+    <h2 class="text-2xl md:text-3xl font-extrabold text-gray-800">LINE操作ガイド</h2>
+  </div>
+
+  <div class="bg-white rounded-2xl shadow-sm overflow-hidden">
+    <div class="divide-y divide-gray-100">
+      <div class="flex items-center gap-4 p-5">
+        <div class="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center flex-shrink-0">
+          <i class="fas fa-pen text-green-600"></i>
+        </div>
+        <div class="flex-1">
+          <p class="font-bold text-gray-800">体重を記録する</p>
+          <p class="text-sm text-gray-500 mt-0.5">例：<code class="bg-gray-100 px-2 py-0.5 rounded text-gray-700">72.5</code> または <code class="bg-gray-100 px-2 py-0.5 rounded text-gray-700">72.5kg</code></p>
+        </div>
+      </div>
+      <div class="flex items-center gap-4 p-5">
+        <div class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0">
+          <i class="fas fa-camera text-blue-600"></i>
+        </div>
+        <div class="flex-1">
+          <p class="font-bold text-gray-800">食事を記録する</p>
+          <p class="text-sm text-gray-500 mt-0.5">食事の写真を送信 → AIが自動でカロリー分析 → 「確定」で記録保存</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-4 p-5">
+        <div class="w-10 h-10 bg-purple-100 rounded-full flex items-center justify-center flex-shrink-0">
+          <i class="fas fa-comments text-purple-600"></i>
+        </div>
+        <div class="flex-1">
+          <p class="font-bold text-gray-800">AIに相談する</p>
+          <p class="text-sm text-gray-500 mt-0.5"><code class="bg-gray-100 px-2 py-0.5 rounded text-gray-700">相談</code> と送信 → 相談モードに切替 → 何でも聞いてみよう</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-4 p-5">
+        <div class="w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center flex-shrink-0">
+          <i class="fas fa-rotate text-amber-600"></i>
+        </div>
+        <div class="flex-1">
+          <p class="font-bold text-gray-800">モードを切替</p>
+          <p class="text-sm text-gray-500 mt-0.5"><code class="bg-gray-100 px-2 py-0.5 rounded text-gray-700">記録モード</code> で食事記録モードに戻る</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-4 p-5">
+        <div class="w-10 h-10 bg-teal-100 rounded-full flex items-center justify-center flex-shrink-0">
+          <i class="fas fa-gauge-high text-teal-600"></i>
+        </div>
+        <div class="flex-1">
+          <p class="font-bold text-gray-800">ダッシュボードを見る</p>
+          <p class="text-sm text-gray-500 mt-0.5">LINEメニューからダッシュボードを開くと、体重推移・カロリー・レポートを確認できます</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 最後の CTA ===== -->
+<section class="hero-gradient text-white py-16 md:py-20">
+  <div class="max-w-2xl mx-auto px-5 text-center">
+    <h2 class="text-2xl md:text-3xl font-extrabold mb-4">今日から始めてみませんか？</h2>
+    <p class="text-green-100 text-lg mb-8">友達追加するだけで、すぐに使い始められます。</p>
+    <a href="https://lin.ee/n4PoXrR" target="_blank" rel="noopener" class="line-btn text-lg">
+      <i class="fab fa-line text-2xl"></i>
+      友達追加して始める
+    </a>
+    <p class="text-green-200 text-sm mt-3">LINE ID: <strong>@054eyzbj</strong></p>
+  </div>
+</section>
+
+<!-- ===== フッター ===== -->
+<footer class="bg-gray-800 text-gray-400 py-8" style="padding-bottom:80px;">
+  <div class="max-w-4xl mx-auto px-5 text-center">
+    <div class="flex items-center justify-center gap-2 mb-3">
+      <div class="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center">
+        <i class="fas fa-leaf text-white text-sm"></i>
+      </div>
+      <span class="font-bold text-white">食事指導BOT</span>
+    </div>
+    <div class="space-x-4 text-sm mb-3">
+      <a href="/admin" class="hover:text-white transition-colors">管理者ログイン</a>
+    </div>
+    <p class="text-xs text-gray-500">&copy; 2026 diet-bot. All rights reserved.</p>
+  </div>
+</footer>
+
+<!-- ===== モバイル固定CTA ===== -->
+<div class="float-cta">
+  <a href="https://lin.ee/n4PoXrR" target="_blank" rel="noopener"
+    class="flex items-center justify-center gap-2 bg-green-500 hover:bg-green-600 text-white font-bold py-3.5 px-6 rounded-xl text-sm w-full max-w-sm transition-colors">
+    <i class="fab fa-line text-xl"></i>
+    友達追加して始める（無料）
+  </a>
+</div>
+
+<!-- Intersection Observer for fade-in -->
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        e.target.style.animationPlayState = 'running';
+        observer.unobserve(e.target);
+      }
+    });
+  }, { threshold: 0.1 });
+  document.querySelectorAll('.fade-in').forEach(el => {
+    el.style.animationPlayState = 'paused';
+    observer.observe(el);
+  });
+});
+</script>
+
 </body>
 </html>`
 }
