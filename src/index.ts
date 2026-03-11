@@ -333,6 +333,15 @@ function getAdminDashboardHtml(): string {
         class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-300 hover:bg-gray-700 transition-colors text-left">
         <i class="fas fa-cog w-5 text-center"></i><span>アカウント設定</span>
       </button>
+
+      <!-- Superadmin Only -->
+      <div id="nav-system-section" class="hidden">
+        <p class="text-gray-500 text-xs font-medium px-3 py-2 mt-3 uppercase tracking-wider">システム</p>
+        <button id="nav-system" onclick="showPage('system')"
+          class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-300 hover:bg-gray-700 transition-colors text-left">
+          <i class="fas fa-server w-5 text-center"></i><span>システム管理</span>
+        </button>
+      </div>
     </nav>
     <div class="p-4 border-t border-gray-700">
       <button onclick="handleLogout()"
@@ -572,6 +581,113 @@ function getAdminDashboardHtml(): string {
             class="bg-green-500 hover:bg-green-600 text-white px-6 py-3 rounded-xl font-medium transition-colors">
             <i class="fas fa-save mr-2"></i>パスワードを変更
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== システム管理ページ (Superadmin Only) ===== -->
+    <div id="page-system" class="hidden p-8">
+      <h1 class="text-2xl font-bold text-gray-800 mb-6"><i class="fas fa-server mr-2 text-gray-500"></i>システム管理</h1>
+
+      <!-- システム情報 -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div class="stat-card bg-white rounded-xl shadow p-6">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-gray-500 text-sm">API バージョン</p>
+              <p class="text-xl font-bold text-gray-800 mt-1">v1.0.0</p>
+            </div>
+            <div class="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
+              <i class="fas fa-code text-green-600"></i>
+            </div>
+          </div>
+        </div>
+        <div class="stat-card bg-white rounded-xl shadow p-6">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-gray-500 text-sm">ランタイム</p>
+              <p class="text-xl font-bold text-gray-800 mt-1">Cloudflare Workers</p>
+            </div>
+            <div class="w-12 h-12 bg-orange-100 rounded-full flex items-center justify-center">
+              <i class="fas fa-cloud text-orange-600"></i>
+            </div>
+          </div>
+        </div>
+        <div class="stat-card bg-white rounded-xl shadow p-6">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-gray-500 text-sm">データベース</p>
+              <p class="text-xl font-bold text-gray-800 mt-1">D1 SQLite</p>
+            </div>
+            <div class="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
+              <i class="fas fa-database text-blue-600"></i>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- テーブルサイズ -->
+      <div class="bg-white rounded-xl shadow p-6 mb-6">
+        <h2 class="font-bold text-gray-800 mb-4"><i class="fas fa-table mr-2 text-gray-500"></i>データベース統計</h2>
+        <div id="system-db-stats" class="text-gray-400 text-sm">読み込み中...</div>
+      </div>
+
+      <!-- Cron ジョブ情報 -->
+      <div class="bg-white rounded-xl shadow p-6 mb-6">
+        <h2 class="font-bold text-gray-800 mb-4"><i class="fas fa-clock mr-2 text-gray-500"></i>定期ジョブ</h2>
+        <div class="space-y-3 text-sm">
+          <div class="flex items-center justify-between bg-gray-50 p-4 rounded-lg">
+            <div>
+              <p class="font-medium text-gray-800">毎日リマインダー</p>
+              <p class="text-xs text-gray-500 mt-1">UTC 12:00 (JST 21:00)</p>
+            </div>
+            <span class="text-xs px-2 py-1 bg-green-100 text-green-700 rounded-full">毎日</span>
+          </div>
+          <div class="flex items-center justify-between bg-gray-50 p-4 rounded-lg">
+            <div>
+              <p class="font-medium text-gray-800">週次レポート生成</p>
+              <p class="text-xs text-gray-500 mt-1">UTC 11:00 日曜 (JST 20:00)</p>
+            </div>
+            <span class="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded-full">毎週日曜</span>
+          </div>
+          <div class="flex items-center justify-between bg-gray-50 p-4 rounded-lg">
+            <div>
+              <p class="font-medium text-gray-800">画像確認期限切れ / セッション清掃</p>
+              <p class="text-xs text-gray-500 mt-1">毎時 (0分)</p>
+            </div>
+            <span class="text-xs px-2 py-1 bg-purple-100 text-purple-700 rounded-full">毎時</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- API エンドポイント一覧 -->
+      <div class="bg-white rounded-xl shadow p-6">
+        <h2 class="font-bold text-gray-800 mb-4"><i class="fas fa-route mr-2 text-gray-500"></i>API エンドポイント</h2>
+        <div class="space-y-2 text-sm font-mono">
+          <div class="bg-gray-50 p-3 rounded-lg flex items-center gap-3">
+            <span class="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded font-sans font-medium">GET</span>
+            <span class="text-gray-700">/health</span>
+          </div>
+          <div class="bg-gray-50 p-3 rounded-lg flex items-center gap-3">
+            <span class="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded font-sans font-medium">POST</span>
+            <span class="text-gray-700">/api/webhooks/line</span>
+          </div>
+          <div class="bg-gray-50 p-3 rounded-lg flex items-center gap-3">
+            <span class="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded font-sans font-medium">POST</span>
+            <span class="text-gray-700">/api/auth/line</span>
+          </div>
+          <div class="bg-gray-50 p-3 rounded-lg flex items-center gap-3">
+            <span class="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded font-sans font-medium">GET</span>
+            <span class="text-gray-700">/api/admin/dashboard/stats</span>
+          </div>
+          <div class="bg-gray-50 p-3 rounded-lg flex items-center gap-3">
+            <span class="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded font-sans font-medium">GET</span>
+            <span class="text-gray-700">/api/admin/users</span>
+          </div>
+          <div class="bg-gray-50 p-3 rounded-lg flex items-center gap-3">
+            <span class="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded font-sans font-medium">GET</span>
+            <span class="text-gray-700">/api/users/me</span>
+          </div>
         </div>
       </div>
     </div>
@@ -1018,29 +1134,31 @@ async function loadModalPhotos() {
   const el = document.getElementById('modal-content');
   el.innerHTML = '<div class="text-center py-8"><i class="fas fa-spinner fa-spin text-gray-400 text-2xl"></i></div>';
   try {
-    // 画像添付ファイルを取得（conversation_messages + attachments 経由）
-    const res = await axios.get(API_BASE + '/admin/users/' + modalLineUserId + '/logs?limit=30', {
+    const res = await axios.get(API_BASE + '/admin/users/' + modalLineUserId + '/photos?limit=20', {
       headers: { Authorization: 'Bearer ' + authToken }
     });
-    // For now, show a message about photos being accessible via LINE
-    const logs = res.data.data.logs || [];
-    const hasAnyMealPhoto = logs.some(l => l.meals?.some(m => m.photo_count > 0));
-    
-    if (!hasAnyMealPhoto) {
-      el.innerHTML = '<div class="text-center py-8 text-gray-400"><i class="fas fa-images text-3xl mb-3"></i><p>写真データがありません</p></div>';
+    const photos = res.data.data.photos || [];
+
+    if (photos.length === 0) {
+      el.innerHTML = '<div class="text-center py-8 text-gray-400"><i class="fas fa-images text-3xl mb-3"></i><p>進捗写真がありません</p></div>';
       return;
     }
-    
+
+    const poseLabels = { front: '正面', side: '側面', mirror: 'ミラー', unknown: '-' };
+    const typeLabels = { before: 'ビフォー', progress: '途中経過', after: 'アフター' };
+
     el.innerHTML = \`
-      <div class="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4 text-sm text-blue-800">
-        <i class="fas fa-info-circle mr-2"></i>
-        写真付き食事記録があります。詳細な写真データは「食事記録」タブで各日の記録をご確認ください。
-      </div>
-      <div class="space-y-3">
-        \${logs.filter(l => l.meals?.some(m => m.photo_count > 0)).map(log => \`
-          <div class="bg-gray-50 p-3 rounded-lg flex items-center justify-between">
-            <span class="text-sm font-medium text-gray-700">\${esc(log.log_date)}</span>
-            <span class="text-xs text-gray-500">📷 \${log.meals.filter(m => m.photo_count > 0).length}件の写真付き記録</span>
+      <div class="grid grid-cols-3 gap-3">
+        \${photos.map(p => \`
+          <div class="photo-thumb bg-gray-50 rounded-lg overflow-hidden">
+            <div style="height:120px;display:flex;align-items:center;justify-content:center;background:#f3f4f6;">
+              <i class="fas fa-image text-gray-300 text-2xl"></i>
+            </div>
+            <div class="photo-label p-2">
+              <p class="text-xs font-medium text-gray-700">\${esc(p.photo_date)}</p>
+              <p class="text-xs text-gray-400">\${typeLabels[p.photo_type] || ''} \${poseLabels[p.pose_label] || ''}</p>
+              \${p.note ? '<p class="text-xs text-gray-500 mt-1 truncate">' + esc(p.note) + '</p>' : ''}
+            </div>
           </div>
         \`).join('')}
       </div>\`;
@@ -1054,61 +1172,50 @@ async function loadModalReports() {
   const el = document.getElementById('modal-content');
   el.innerHTML = '<div class="text-center py-8"><i class="fas fa-spinner fa-spin text-gray-400 text-2xl"></i></div>';
   try {
-    // Fetch user account to get userAccountId for weekly reports
-    const uaId = modalUser?.userAccountId;
-    if (!uaId) {
-      el.innerHTML = '<div class="text-center py-8 text-gray-400"><i class="fas fa-chart-bar text-3xl mb-3"></i><p>レポートデータがありません</p></div>';
-      return;
-    }
-    // Use admin logs endpoint to check recent activity (weekly reports require direct DB query)
-    const res = await axios.get(API_BASE + '/admin/users/' + modalLineUserId + '/logs?limit=7', {
+    const res = await axios.get(API_BASE + '/admin/users/' + modalLineUserId + '/reports?limit=12', {
       headers: { Authorization: 'Bearer ' + authToken }
     });
-    const logs = res.data.data.logs || [];
-    
-    if (logs.length === 0) {
-      el.innerHTML = '<div class="text-center py-8 text-gray-400"><i class="fas fa-chart-bar text-3xl mb-3"></i><p>まだ十分な記録がありません<br><span class="text-xs">7日間記録を続けると週次レポートが生成されます</span></p></div>';
+    const reports = res.data.data.reports || [];
+
+    if (reports.length === 0) {
+      el.innerHTML = '<div class="text-center py-8 text-gray-400"><i class="fas fa-chart-bar text-3xl mb-3"></i><p>週次レポートがありません<br><span class="text-xs">7日間記録を続けると自動生成されます</span></p></div>';
       return;
     }
 
-    // Show summary of recent activity
-    const totalMeals = logs.reduce((s, l) => s + (l.meals?.length || 0), 0);
-    const daysWithRecords = logs.filter(l => l.meals?.length > 0).length;
+    el.innerHTML = reports.map(r => {
+      const weightChange = r.weight_change != null
+        ? (r.weight_change >= 0 ? '+' : '') + Number(r.weight_change).toFixed(1) + 'kg'
+        : '-';
+      const changeColor = r.weight_change < 0 ? 'text-green-600' : r.weight_change > 0 ? 'text-red-600' : 'text-gray-600';
 
-    el.innerHTML = \`
-      <div class="mb-6">
-        <h3 class="font-semibold text-gray-700 mb-3"><i class="fas fa-chart-line text-purple-500 mr-1"></i>直近7日間のサマリー</h3>
-        <div class="grid grid-cols-3 gap-4">
-          <div class="bg-green-50 rounded-xl p-4 text-center">
-            <p class="text-2xl font-bold text-green-700">\${daysWithRecords}</p>
-            <p class="text-xs text-gray-500 mt-1">記録日数</p>
-          </div>
-          <div class="bg-blue-50 rounded-xl p-4 text-center">
-            <p class="text-2xl font-bold text-blue-700">\${totalMeals}</p>
-            <p class="text-xs text-gray-500 mt-1">食事記録</p>
-          </div>
-          <div class="bg-purple-50 rounded-xl p-4 text-center">
-            <p class="text-2xl font-bold text-purple-700">\${logs.length}</p>
-            <p class="text-xs text-gray-500 mt-1">ログ件数</p>
-          </div>
+      return \`<div class="bg-white border rounded-xl mb-4 overflow-hidden">
+        <div class="bg-gray-50 px-4 py-3 flex items-center justify-between">
+          <span class="font-semibold text-sm text-gray-800">\${esc(r.week_start)} 〜 \${esc(r.week_end)}</span>
+          \${r.sent_at ? '<span class="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">送信済</span>' : '<span class="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">未送信</span>'}
         </div>
-      </div>
-      <div>
-        <h3 class="font-semibold text-gray-700 mb-3">日別記録</h3>
-        <div class="space-y-2">
-          \${logs.map(log => \`
-            <div class="flex items-center justify-between bg-gray-50 p-3 rounded-lg text-sm">
-              <span class="text-gray-700 font-medium">\${esc(log.log_date)}</span>
-              <div class="flex gap-3 text-xs text-gray-500">
-                <span>🍽️ \${log.meals?.length || 0}食</span>
-                \${log.total_calories_kcal ? '<span>🔥 '+esc(log.total_calories_kcal)+'kcal</span>' : ''}
-                \${log.weight_snapshot_kg ? '<span>⚖️ '+esc(log.weight_snapshot_kg)+'kg</span>' : ''}
-              </div>
+        <div class="px-4 py-3">
+          <div class="grid grid-cols-4 gap-3 text-center mb-3">
+            <div>
+              <p class="text-lg font-bold text-gray-800">\${r.avg_weight_kg ? Number(r.avg_weight_kg).toFixed(1) : '-'}</p>
+              <p class="text-xs text-gray-500">平均体重(kg)</p>
             </div>
-          \`).join('')}
+            <div>
+              <p class="text-lg font-bold \${changeColor}">\${weightChange}</p>
+              <p class="text-xs text-gray-500">体重変化</p>
+            </div>
+            <div>
+              <p class="text-lg font-bold text-gray-800">\${r.meal_log_count ?? 0}</p>
+              <p class="text-xs text-gray-500">食事記録数</p>
+            </div>
+            <div>
+              <p class="text-lg font-bold text-gray-800">\${r.log_days ?? 0}</p>
+              <p class="text-xs text-gray-500">記録日数</p>
+            </div>
+          </div>
+          \${r.ai_summary ? '<div class="bg-purple-50 rounded-lg p-3 text-sm text-gray-700 whitespace-pre-wrap">' + esc(r.ai_summary) + '</div>' : ''}
         </div>
-      </div>
-    \`;
+      </div>\`;
+    }).join('');
   } catch {
     el.innerHTML = '<p class="text-red-400 text-sm">レポートデータの取得に失敗しました</p>';
   }
