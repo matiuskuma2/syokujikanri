@@ -213,6 +213,17 @@ function getAdminDashboardHtml(): string {
     .role-badge-superadmin { background:#fef3c7; color:#92400e; }
     .role-badge-admin { background:#dbeafe; color:#1e40af; }
     .role-badge-staff { background:#f3f4f6; color:#374151; }
+    .modal-tab {
+      padding: 10px 16px; font-size: 13px; font-weight: 500;
+      border-bottom: 2px solid transparent; color: #6b7280;
+      cursor: pointer; background: none; border-top: none; border-left: none; border-right: none;
+      transition: all 0.15s;
+    }
+    .modal-tab:hover { color: #374151; }
+    .modal-tab.active { color: #16a34a; border-bottom-color: #16a34a; font-weight: 600; }
+    .photo-thumb { border-radius: 8px; overflow: hidden; cursor: pointer; }
+    .photo-thumb img { width: 100%; height: 120px; object-fit: cover; display: block; }
+    .photo-thumb .photo-label { font-size: 11px; padding: 4px 8px; color: #6b7280; }
   </style>
 </head>
 <body class="bg-gray-50">
@@ -570,14 +581,29 @@ function getAdminDashboardHtml(): string {
 
 <!-- ========== ユーザー詳細モーダル ========== -->
 <div id="user-modal" class="hidden fixed inset-0 modal-bg z-50 flex items-center justify-center p-4">
-  <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-    <div class="flex items-center justify-between mb-6">
+  <div class="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
+    <div class="flex items-center justify-between p-6 pb-0">
       <h2 class="text-xl font-bold text-gray-800" id="modal-username">ユーザー詳細</h2>
       <button onclick="closeUserModal()" class="text-gray-400 hover:text-gray-600">
         <i class="fas fa-times text-xl"></i>
       </button>
     </div>
-    <div id="modal-content">読み込み中...</div>
+    <!-- タブナビ -->
+    <div class="flex border-b px-6 mt-4" id="modal-tabs">
+      <button class="modal-tab active" data-tab="overview" onclick="switchModalTab('overview')">
+        <i class="fas fa-id-card mr-1"></i>概要
+      </button>
+      <button class="modal-tab" data-tab="records" onclick="switchModalTab('records')">
+        <i class="fas fa-utensils mr-1"></i>食事記録
+      </button>
+      <button class="modal-tab" data-tab="photos" onclick="switchModalTab('photos')">
+        <i class="fas fa-images mr-1"></i>写真
+      </button>
+      <button class="modal-tab" data-tab="reports" onclick="switchModalTab('reports')">
+        <i class="fas fa-chart-bar mr-1"></i>レポート
+      </button>
+    </div>
+    <div id="modal-content" class="overflow-y-auto p-6 flex-1">読み込み中...</div>
   </div>
 </div>
 
