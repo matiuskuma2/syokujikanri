@@ -805,6 +805,11 @@ async function showDashboard() {
     const staffNavBtn = document.getElementById('nav-staff');
     if (staffNavBtn) staffNavBtn.style.opacity = '0.5';
   }
+  // superadminの場合はシステム管理メニューを表示
+  if (currentAdmin?.role === 'superadmin') {
+    const sysSection = document.getElementById('nav-system-section');
+    if (sysSection) sysSection.classList.remove('hidden');
+  }
   await showPage('overview');
 }
 
@@ -1354,6 +1359,60 @@ async function loadAccount() {
   } catch { /* ignore */ }
 }
 
+// ===== システム管理 (Superadmin Only) =====
+async function loadSystem() {
+  if (currentAdmin?.role !== 'superadmin') {
+    showToast('アクセス権限がありません', 'error');
+    showPage('overview');
+    return;
+  }
+  const el = document.getElementById('system-db-stats');
+  if (!el) return;
+  el.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>読み込み中...';
+  try {
+    const tables = ['line_users','user_accounts','user_service_statuses','user_profiles','intake_answers',
+                    'daily_logs','meal_entries','body_metrics','conversation_threads','conversation_messages',
+                    'message_attachments','image_analysis_jobs','image_intake_results','bot_mode_sessions',
+                    'progress_photos','weekly_reports','account_memberships'];
+    // Use the health endpoint to verify connectivity
+    await axios.get('/health');
+    
+    // For DB stats, we query a system endpoint
+    try {
+      const res = await axios.get(API_BASE + '/admin/dashboard/db-stats', {
+        headers: { Authorization: 'Bearer ' + authToken }
+      });
+      const stats = res.data.data?.tables || [];
+      if (stats.length > 0) {
+        el.innerHTML = \`
+          <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead><tr class="border-b text-left text-gray-500 bg-gray-50">
+              <th class="pb-2 pt-1 px-3">テーブル名</th>
+              <th class="pb-2 pt-1 px-3 text-right">行数</th>
+            </tr></thead>
+            <tbody>
+              \${stats.map(t => \`
+                <tr class="border-b hover:bg-gray-50">
+                  <td class="py-2 px-3 font-mono text-xs text-gray-700">\${esc(t.name)}</td>
+                  <td class="py-2 px-3 text-right text-gray-600">\${t.count?.toLocaleString()}</td>
+                </tr>
+              \`).join('')}
+            </tbody>
+          </table>
+          </div>
+        \`;
+      } else {
+        el.innerHTML = '<p class="text-gray-400">テーブル情報を取得できませんでした</p>';
+      }
+    } catch {
+      el.innerHTML = '<p class="text-gray-400">DB統計APIが未実装です。今後のアップデートで追加予定です。</p>';
+    }
+  } catch {
+    el.innerHTML = '<p class="text-red-400">システム情報の取得に失敗しました</p>';
+  }
+}
+
 async function handleChangePassword() {
   const currentPw = document.getElementById('current-password').value;
   const newPw = document.getElementById('new-password').value;
@@ -1382,7 +1441,7 @@ async function handleChangePassword() {
 
 // ===== ページ切替 =====
 function showPage(page) {
-  const pages = ['overview', 'users', 'staff', 'account'];
+  const pages = ['overview', 'users', 'staff', 'account', 'system'];
   pages.forEach(p => {
     const el = document.getElementById('page-' + p);
     if (el) el.classList.add('hidden');
@@ -1410,6 +1469,7 @@ function showPage(page) {
   else if (page === 'users') loadUsers();
   else if (page === 'staff') loadStaff();
   else if (page === 'account') loadAccount();
+  else if (page === 'system') loadSystem();
 }
 
 // ===== ユーティリティ =====

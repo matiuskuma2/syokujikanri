@@ -182,4 +182,39 @@ dashboardRouter.get('/conversations', async (c) => {
   return ok(c, { conversations: conversations.results })
 })
 
+// ===================================================================
+// DB テーブル行数統計 (Superadmin 用)
+// GET /api/admin/dashboard/db-stats
+// ===================================================================
+
+dashboardRouter.get('/db-stats', async (c) => {
+  const payload = c.get('jwtPayload')
+  if (payload.role !== 'superadmin') {
+    return c.json({ success: false, error: 'Superadmin access required' }, 403)
+  }
+
+  const tables = [
+    'accounts', 'account_memberships', 'subscriptions',
+    'line_users', 'user_accounts', 'user_service_statuses', 'user_profiles',
+    'intake_answers', 'daily_logs', 'meal_entries', 'body_metrics',
+    'conversation_threads', 'conversation_messages', 'message_attachments',
+    'image_analysis_jobs', 'image_intake_results', 'bot_mode_sessions',
+    'progress_photos', 'weekly_reports',
+  ]
+
+  const results: { name: string; count: number }[] = []
+  for (const table of tables) {
+    try {
+      const row = await c.env.DB.prepare(
+        `SELECT COUNT(*) as cnt FROM ${table}`
+      ).first<{ cnt: number }>()
+      results.push({ name: table, count: row?.cnt ?? 0 })
+    } catch {
+      results.push({ name: table, count: -1 })
+    }
+  }
+
+  return ok(c, { tables: results })
+})
+
 export default dashboardRouter
