@@ -142,14 +142,20 @@ async function initApp() {
       });
     });
 
-    // ==== 状態分岐 (M1-3) ====
+    // ==== 状態分岐 (L-1) ====
     const svc = state.profile.service || {};
-    if (svc.botEnabled === false) {
-      // BOT 停止中
-      showStatusBanner('suspended');
-    } else if (svc.intakeCompleted === false) {
-      // 問診未完了
+    state.serviceState = getServiceState(svc);
+
+    if (state.serviceState === 'suspended') {
+      // BOT 停止中 → 全画面ブロック
+      showSuspendedScreen();
+      return; // データ読み込みしない
+    }
+
+    if (state.serviceState === 'intake_pending') {
+      // 問診未完了 → バナー＋制限UI
       showStatusBanner('intake_pending');
+      disableDataPages();
     }
 
     // サービストグルの初期値を反映
@@ -158,7 +164,9 @@ async function initApp() {
     setToggleState('toggle-consult', svc.consultEnabled !== false);
 
     // 初期ページ読み込み
-    await loadHomePage();
+    if (state.serviceState === 'active') {
+      await loadHomePage();
+    }
   } catch (e) {
     console.error('[initApp]', e);
     showAuthError('データの読み込みに失敗しました。再度お試しください。');

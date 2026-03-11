@@ -1284,10 +1284,22 @@ function getLiffEntryHtml(liffId: string): string {
         \`;
         return;
       }
-      const msgs = {
-        INVALID_LINE_TOKEN: 'LINEトークンの検証に失敗しました。再ログインをお試しください。',
-      };
-      showError('ログインできませんでした', msgs[code] || data.message || code);
+      // INVALID_LINE_TOKEN: トークン無効・期限切れ → LIFF再ログイン
+      if (code === 'INVALID_LINE_TOKEN') {
+        document.getElementById('loading-screen').style.display = 'none';
+        const errScreen = document.getElementById('auth-error-screen');
+        errScreen.style.display = 'flex';
+        errScreen.innerHTML = \`
+          <i class="fas fa-key" style="font-size:48px;color:#f59e0b;margin-bottom:12px;"></i>
+          <p style="font-size:17px;font-weight:700;color:#1f2937;">認証の有効期限が切れました</p>
+          <p class="liff-msg">LINEに再ログインしてください</p>
+          <button class="retry-btn" onclick="if(typeof liff!=='undefined'&&liff.isLoggedIn()){liff.logout();}location.reload();" style="margin-top:16px;width:100%;max-width:320px;">
+            <i class="fab fa-line" style="margin-right:6px;"></i>LINEで再ログイン
+          </button>
+        \`;
+        return;
+      }
+      showError('ログインできませんでした', data.message || code);
       return;
     }
 
