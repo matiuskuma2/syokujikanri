@@ -33,16 +33,53 @@
 - **テキスト記録**: 体重（例: `72.5kg`）→ daily_logs・body_metrics に保存、即時返信
 - **相談モード**: `相談モード` で切替 → GPT-4o による AI 返信
 - **署名検証**: HMAC-SHA256 署名検証
+- **画像解析**: 食事写真/体重計/経過写真を R2 保存 → Queue → OpenAI Vision 解析 → 仮保存 → ユーザー確認後に正式登録
 
-### ✅ LIFF認証フロー
+### ✅ 問診 (Intake) フロー — M2-1
+- 9問の初回問診（ニックネーム/性別/年代/身長/体重/目標/理由/気になること/活動レベル）
+- `intake_completed` フラグで完了管理
+- 途中離脱後の再開: `問診再開` / `問診やり直し` コマンド対応
+- follow 時: 完了済みユーザーはスキップ、未完了は前回から再開
+
+### ✅ 画像確認フロー — M3-1/M3-2/M3-6/M3-7
+- 画像解析結果を `image_intake_results` に仮保存 (`applied_flag=0`)
+- LINE QuickReply で「確定」「取消」選択可能 (`pending_image_confirm` モード)
+- 確定 → meal_entries / body_metrics / progress_photos に正式登録
+- 取消 → `applied_flag=2` でマーク
+- 24時間未応答 → hourly cron で `applied_flag=3` (expired) に自動更新
+
+### ✅ LIFF認証フロー — M1-4
 - `/liff` → liff.init() → ID Token取得 → `/api/auth/line` → JWT発行 → `/dashboard`
+- `USER_NOT_REGISTERED`: 登録手順ガイド画面（友達追加→問診→再読み込み）
+- `ACCOUNT_NOT_FOUND`: アカウント紐付け待ち画面
+- `INVALID_LINE_TOKEN`: 再ログインボタン付き画面
 
-### ✅ 管理画面
-- `/admin` → ログイン（JWT）→ ダッシュボード（統計）・ユーザー一覧
+### ✅ ユーザーPWA — M1-3 / L-1
+- `/dashboard` で3状態分岐:
+  - **停止中** (`botEnabled=false`): 全画面ブロック + 再読み込みボタン
+  - **問診未完了** (`intakeCompleted=false`): 問診誘導画面 + LINE遷移ボタン + ナビ制限
+  - **通常**: フルダッシュボード（今日のサマリー/体重グラフ/食事/記録/写真/レポート/プロフィール）
+
+### ✅ 管理画面 — M1-5 / M2-2 / M2-3 / L-2
+- `/admin` → ログイン（JWT）→ ダッシュボード統計
+  - 総ユーザー数 / 今日の記録数 / 週間アクティブ / **問診未完了数**
+- ユーザー一覧: 5段階ステータスラベル（🚫ブロック/⏸停止中/📋問診未完了/🔵制限中/✅利用中）
+- ユーザー詳細モーダル（4タブ）:
+  - **概要**: プロフィール + 問診回答 + サービス設定 + 直近記録
+  - **記録**: 30日間の食事記録（タイプ別バッジ・カロリー表示）
+  - **写真**: 進捗写真グリッド（タイプ/ポーズラベル付き）
+  - **レポート**: 7日間サマリー（記録日数/食事数/ログ件数）
+
+### ✅ Superadmin画面 — L-3
+- `/admin` でsuperadmin限定「システム管理」メニュー
+  - API バージョン / ランタイム / データベース情報
+  - データベース統計（テーブルサイズ）
+  - 定期ジョブ一覧（リマインダー/週次レポート/期限切れ清掃）
+  - API エンドポイント一覧
 
 ### ✅ インフラ
 - Cloudflare Pages デプロイ済み
-- D1 (diet-bot-production) — 7件マイグレーション適用済み
+- D1 (diet-bot-production) — 9件マイグレーション適用済み
 - R2 (diet-bot-media) — 画像保存用
 - Queue (diet-bot-line-events + DLQ) — 画像解析ジョブ用
 
@@ -50,13 +87,17 @@
 ```
 accounts → line_channels → line_users → user_accounts
                                       ↓
+                            user_service_statuses (bot_enabled, intake_completed, ...)
+                            user_profiles (nickname, height, weight, goal, ...)
+                            intake_answers (question_key, answer_value, ...)
                             conversation_threads → conversation_messages
                                       ↓
                             daily_logs → body_metrics
                                        → meal_entries
-                            image_analysis_jobs → image_intake_results
+                            image_analysis_jobs → image_intake_results (pending → confirmed/discarded/expired)
                             progress_photos
                             weekly_reports
+                            bot_mode_sessions (intake/record/consult/pending_image_confirm)
 ```
 
 ## 環境変数（Cloudflare Pages Secrets設定済み）
