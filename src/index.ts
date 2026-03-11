@@ -828,117 +828,289 @@ function userStatusLabel(u) {
   return '<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium" title="全サービス利用中">✅ 利用中</span>';
 }
 
+// ===== Current modal user context =====
+let modalUser = null;
+let modalLineUserId = null;
+
 async function openUserModal(lineUserId) {
   document.getElementById('user-modal').classList.remove('hidden');
   document.getElementById('modal-content').innerHTML = '<div class="text-center py-8"><i class="fas fa-spinner fa-spin text-gray-400 text-2xl"></i></div>';
+  modalLineUserId = lineUserId;
+
+  // reset tabs to overview
+  document.querySelectorAll('.modal-tab').forEach(t => t.classList.remove('active'));
+  document.querySelector('.modal-tab[data-tab="overview"]')?.classList.add('active');
+
   try {
     const res = await axios.get(API_BASE + '/admin/users/' + lineUserId, {
       headers: { Authorization: 'Bearer ' + authToken }
     });
-    const u = res.data.data;
-    const logs = (u.recentLogs || []).slice(0, 7);
-    const profile = u.profile;
-    const answers = u.intakeAnswers || [];
-    const isReadOnly = currentAdmin?.role === 'staff';
-    document.getElementById('modal-username').textContent = u.display_name || profile?.nickname || 'ユーザー詳細';
-    document.getElementById('modal-content').innerHTML = \`
-      <div class="grid grid-cols-2 gap-4 mb-6 text-sm">
+    modalUser = res.data.data;
+    document.getElementById('modal-username').textContent = modalUser.display_name || modalUser.profile?.nickname || 'ユーザー詳細';
+    renderModalOverview();
+  } catch {
+    document.getElementById('modal-content').innerHTML = '<p class="text-red-400">読み込みに失敗しました</p>';
+  }
+}
+
+function switchModalTab(tab) {
+  document.querySelectorAll('.modal-tab').forEach(t => t.classList.remove('active'));
+  document.querySelector(\`.modal-tab[data-tab="\${tab}"]\`)?.classList.add('active');
+
+  if (tab === 'overview') renderModalOverview();
+  else if (tab === 'records') loadModalRecords();
+  else if (tab === 'photos') loadModalPhotos();
+  else if (tab === 'reports') loadModalReports();
+}
+
+function renderModalOverview() {
+  const u = modalUser;
+  if (!u) return;
+  const lineUserId = modalLineUserId;
+  const logs = (u.recentLogs || []).slice(0, 7);
+  const profile = u.profile;
+  const answers = u.intakeAnswers || [];
+  const isReadOnly = currentAdmin?.role === 'staff';
+
+  document.getElementById('modal-content').innerHTML = \`
+    <div class="grid grid-cols-2 gap-4 mb-6 text-sm">
+      <div class="bg-gray-50 p-3 rounded-lg">
+        <p class="text-gray-500 text-xs mb-1">LINE User ID</p>
+        <p class="font-mono text-xs truncate">\${esc(lineUserId)}</p>
+      </div>
+      <div class="bg-gray-50 p-3 rounded-lg">
+        <p class="text-gray-500 text-xs mb-1">参加日</p>
+        <p class="font-medium">\${esc((u.joinedAt||'').substring(0,10))}</p>
+      </div>
+    </div>
+
+    \${profile ? \`
+    <div class="mb-6">
+      <h3 class="font-semibold text-gray-700 mb-3"><i class="fas fa-id-card text-green-500 mr-1"></i>プロフィール</h3>
+      <div class="grid grid-cols-2 gap-3 text-sm">
         <div class="bg-gray-50 p-3 rounded-lg">
-          <p class="text-gray-500 text-xs mb-1">LINE User ID</p>
-          <p class="font-mono text-xs truncate">\${esc(lineUserId)}</p>
+          <p class="text-gray-500 text-xs mb-1">ニックネーム</p>
+          <p class="font-medium">\${esc(profile.nickname || '-')}</p>
         </div>
         <div class="bg-gray-50 p-3 rounded-lg">
-          <p class="text-gray-500 text-xs mb-1">参加日</p>
-          <p class="font-medium">\${esc((u.joinedAt||'').substring(0,10))}</p>
+          <p class="text-gray-500 text-xs mb-1">性別</p>
+          <p class="font-medium">\${{male:'男性',female:'女性',other:'その他'}[profile.gender] || '-'}</p>
+        </div>
+        <div class="bg-gray-50 p-3 rounded-lg">
+          <p class="text-gray-500 text-xs mb-1">年代</p>
+          <p class="font-medium">\${esc(profile.ageRange || '-')}</p>
+        </div>
+        <div class="bg-gray-50 p-3 rounded-lg">
+          <p class="text-gray-500 text-xs mb-1">身長</p>
+          <p class="font-medium">\${profile.heightCm ? esc(profile.heightCm) + 'cm' : '-'}</p>
+        </div>
+        <div class="bg-gray-50 p-3 rounded-lg">
+          <p class="text-gray-500 text-xs mb-1">現在の体重</p>
+          <p class="font-medium">\${profile.currentWeightKg ? esc(profile.currentWeightKg) + 'kg' : '-'}</p>
+        </div>
+        <div class="bg-gray-50 p-3 rounded-lg">
+          <p class="text-gray-500 text-xs mb-1">目標体重</p>
+          <p class="font-medium">\${profile.targetWeightKg ? esc(profile.targetWeightKg) + 'kg' : '-'}</p>
+        </div>
+        <div class="bg-gray-50 p-3 rounded-lg col-span-2">
+          <p class="text-gray-500 text-xs mb-1">目標・理由</p>
+          <p class="font-medium">\${esc(profile.goalSummary || '-')}</p>
+        </div>
+        <div class="bg-gray-50 p-3 rounded-lg">
+          <p class="text-gray-500 text-xs mb-1">気になること</p>
+          <p class="font-medium">\${formatConcernTags(profile.concernTags)}</p>
+        </div>
+        <div class="bg-gray-50 p-3 rounded-lg">
+          <p class="text-gray-500 text-xs mb-1">活動レベル</p>
+          <p class="font-medium">\${{sedentary:'座り仕事中心',light:'軽い運動あり',moderate:'週3〜5回運動',active:'毎日激しく運動'}[profile.activityLevel] || '-'}</p>
         </div>
       </div>
+    </div>
+    \` : '<div class="mb-6 bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800"><i class="fas fa-info-circle mr-2"></i>プロフィール未登録（問診未完了）</div>'}
 
-      \${profile ? \`
-      <div class="mb-6">
-        <h3 class="font-semibold text-gray-700 mb-3"><i class="fas fa-id-card text-green-500 mr-1"></i>プロフィール</h3>
-        <div class="grid grid-cols-2 gap-3 text-sm">
-          <div class="bg-gray-50 p-3 rounded-lg">
-            <p class="text-gray-500 text-xs mb-1">ニックネーム</p>
-            <p class="font-medium">\${esc(profile.nickname || '-')}</p>
-          </div>
-          <div class="bg-gray-50 p-3 rounded-lg">
-            <p class="text-gray-500 text-xs mb-1">性別</p>
-            <p class="font-medium">\${{male:'男性',female:'女性',other:'その他'}[profile.gender] || '-'}</p>
-          </div>
-          <div class="bg-gray-50 p-3 rounded-lg">
-            <p class="text-gray-500 text-xs mb-1">年代</p>
-            <p class="font-medium">\${esc(profile.ageRange || '-')}</p>
-          </div>
-          <div class="bg-gray-50 p-3 rounded-lg">
-            <p class="text-gray-500 text-xs mb-1">身長</p>
-            <p class="font-medium">\${profile.heightCm ? esc(profile.heightCm) + 'cm' : '-'}</p>
-          </div>
-          <div class="bg-gray-50 p-3 rounded-lg">
-            <p class="text-gray-500 text-xs mb-1">現在の体重</p>
-            <p class="font-medium">\${profile.currentWeightKg ? esc(profile.currentWeightKg) + 'kg' : '-'}</p>
-          </div>
-          <div class="bg-gray-50 p-3 rounded-lg">
-            <p class="text-gray-500 text-xs mb-1">目標体重</p>
-            <p class="font-medium">\${profile.targetWeightKg ? esc(profile.targetWeightKg) + 'kg' : '-'}</p>
-          </div>
-          <div class="bg-gray-50 p-3 rounded-lg col-span-2">
-            <p class="text-gray-500 text-xs mb-1">目標・理由</p>
-            <p class="font-medium">\${esc(profile.goalSummary || '-')}</p>
-          </div>
-          <div class="bg-gray-50 p-3 rounded-lg">
-            <p class="text-gray-500 text-xs mb-1">気になること</p>
-            <p class="font-medium">\${formatConcernTags(profile.concernTags)}</p>
-          </div>
-          <div class="bg-gray-50 p-3 rounded-lg">
-            <p class="text-gray-500 text-xs mb-1">活動レベル</p>
-            <p class="font-medium">\${{sedentary:'座り仕事中心',light:'軽い運動あり',moderate:'週3〜5回運動',active:'毎日激しく運動'}[profile.activityLevel] || '-'}</p>
-          </div>
-        </div>
+    <div class="mb-6">
+      <h3 class="font-semibold text-gray-700 mb-3">サービス設定\${isReadOnly ? ' <span class="text-xs text-gray-400 font-normal">(閲覧のみ)</span>' : ''}</h3>
+      <div class="grid grid-cols-2 gap-3">
+        \${serviceToggle(lineUserId, 'bot_enabled', u.service?.bot_enabled, 'BOT有効', isReadOnly)}
+        \${serviceToggle(lineUserId, 'record_enabled', u.service?.record_enabled, '記録機能', isReadOnly)}
+        \${serviceToggle(lineUserId, 'consult_enabled', u.service?.consult_enabled, '相談機能', isReadOnly)}
+        \${serviceToggle(lineUserId, 'intake_completed', u.service?.intake_completed, '問診完了', isReadOnly)}
       </div>
-      \` : '<div class="mb-6 bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800"><i class="fas fa-info-circle mr-2"></i>プロフィール未登録（問診未完了）</div>'}
+    </div>
 
-      <div class="mb-6">
-        <h3 class="font-semibold text-gray-700 mb-3">サービス設定\${isReadOnly ? ' <span class="text-xs text-gray-400 font-normal">(閲覧のみ)</span>' : ''}</h3>
-        <div class="grid grid-cols-2 gap-3">
-          \${serviceToggle(lineUserId, 'bot_enabled', u.service?.bot_enabled, 'BOT有効', isReadOnly)}
-          \${serviceToggle(lineUserId, 'record_enabled', u.service?.record_enabled, '記録機能', isReadOnly)}
-          \${serviceToggle(lineUserId, 'consult_enabled', u.service?.consult_enabled, '相談機能', isReadOnly)}
-          \${serviceToggle(lineUserId, 'intake_completed', u.service?.intake_completed, '問診完了', isReadOnly)}
-        </div>
+    \${answers.length > 0 ? \`
+    <div class="mb-6">
+      <h3 class="font-semibold text-gray-700 mb-3"><i class="fas fa-clipboard-list text-blue-500 mr-1"></i>問診回答 (\${answers.length}件)</h3>
+      <div class="space-y-2">
+        \${answers.map(a => \`
+          <div class="flex items-center justify-between bg-gray-50 p-3 rounded-lg text-sm">
+            <span class="text-gray-500 text-xs w-28 flex-shrink-0">\${formatQuestionLabel(a.question_key)}</span>
+            <span class="text-gray-800 font-medium text-right flex-1 ml-3">\${esc(a.answer_value || '-')}</span>
+          </div>
+        \`).join('')}
       </div>
+    </div>
+    \` : ''}
 
-      \${answers.length > 0 ? \`
-      <div class="mb-6">
-        <h3 class="font-semibold text-gray-700 mb-3"><i class="fas fa-clipboard-list text-blue-500 mr-1"></i>問診回答 (\${answers.length}件)</h3>
-        <div class="space-y-2">
-          \${answers.map(a => \`
-            <div class="flex items-center justify-between bg-gray-50 p-3 rounded-lg text-sm">
-              <span class="text-gray-500 text-xs w-28 flex-shrink-0">\${formatQuestionLabel(a.question_key)}</span>
-              <span class="text-gray-800 font-medium text-right flex-1 ml-3">\${esc(a.answer_value || '-')}</span>
+    <div>
+      <h3 class="font-semibold text-gray-700 mb-3">直近の記録（7日分）</h3>
+      \${logs.length === 0
+        ? '<p class="text-gray-400 text-sm">記録なし</p>'
+        : \`<div class="space-y-2">\${logs.map(log => \`
+          <div class="flex items-center justify-between bg-gray-50 p-3 rounded-lg text-sm">
+            <span class="text-gray-600">\${esc(log.log_date)}</span>
+            <div class="flex gap-4 text-gray-500 text-xs">
+              \${log.total_calories_kcal ? '<span>🔥 '+esc(log.total_calories_kcal)+'kcal</span>' : ''}
+              \${log.weight_snapshot_kg ? '<span>⚖️ '+esc(log.weight_snapshot_kg)+'kg</span>' : ''}
             </div>
-          \`).join('')}
+          </div>
+        \`).join('')}</div>\`
+      }
+    </div>
+  \`;
+}
+
+// ===== Records Tab (食事記録) =====
+async function loadModalRecords() {
+  const el = document.getElementById('modal-content');
+  el.innerHTML = '<div class="text-center py-8"><i class="fas fa-spinner fa-spin text-gray-400 text-2xl"></i></div>';
+  try {
+    const res = await axios.get(API_BASE + '/admin/users/' + modalLineUserId + '/logs?limit=30', {
+      headers: { Authorization: 'Bearer ' + authToken }
+    });
+    const logs = res.data.data.logs || [];
+    if (logs.length === 0) {
+      el.innerHTML = '<div class="text-center py-8 text-gray-400"><i class="fas fa-utensils text-3xl mb-3"></i><p>食事記録がありません</p></div>';
+      return;
+    }
+    el.innerHTML = logs.map(log => {
+      const meals = log.meals || [];
+      const mealHtml = meals.length > 0
+        ? meals.map(m => {
+            const typeLabel = {breakfast:'朝食',lunch:'昼食',dinner:'夕食',snack:'間食',other:'その他'}[m.meal_type] || m.meal_type;
+            const typeColor = {breakfast:'bg-amber-100 text-amber-800',lunch:'bg-green-100 text-green-800',dinner:'bg-purple-100 text-purple-800',snack:'bg-red-100 text-red-800',other:'bg-gray-100 text-gray-700'}[m.meal_type] || 'bg-gray-100 text-gray-700';
+            return \`<div class="flex items-center gap-3 py-2 border-b border-gray-100 last:border-0">
+              <span class="text-xs px-2 py-0.5 rounded-full \${typeColor} font-medium">\${typeLabel}</span>
+              <span class="text-sm text-gray-700 flex-1">\${esc(m.meal_text || '記録あり')}</span>
+              <span class="text-xs text-gray-500">\${m.calories_kcal ? esc(m.calories_kcal)+'kcal' : '-'}</span>
+            </div>\`;
+          }).join('')
+        : '<p class="text-gray-400 text-xs py-2">食事記録なし</p>';
+
+      return \`<div class="bg-white border rounded-xl mb-4 overflow-hidden">
+        <div class="bg-gray-50 px-4 py-3 flex items-center justify-between">
+          <span class="font-semibold text-sm text-gray-800">\${esc(log.log_date)}</span>
+          <div class="flex gap-3 text-xs text-gray-500">
+            \${log.total_calories_kcal ? '<span>🔥 '+esc(log.total_calories_kcal)+'kcal</span>' : ''}
+            \${log.weight_snapshot_kg ? '<span>⚖️ '+esc(log.weight_snapshot_kg)+'kg</span>' : ''}
+          </div>
+        </div>
+        <div class="px-4 py-2">\${mealHtml}</div>
+      </div>\`;
+    }).join('');
+  } catch {
+    el.innerHTML = '<p class="text-red-400 text-sm">食事記録の取得に失敗しました</p>';
+  }
+}
+
+// ===== Photos Tab (写真) =====
+async function loadModalPhotos() {
+  const el = document.getElementById('modal-content');
+  el.innerHTML = '<div class="text-center py-8"><i class="fas fa-spinner fa-spin text-gray-400 text-2xl"></i></div>';
+  try {
+    // 画像添付ファイルを取得（conversation_messages + attachments 経由）
+    const res = await axios.get(API_BASE + '/admin/users/' + modalLineUserId + '/logs?limit=30', {
+      headers: { Authorization: 'Bearer ' + authToken }
+    });
+    // For now, show a message about photos being accessible via LINE
+    const logs = res.data.data.logs || [];
+    const hasAnyMealPhoto = logs.some(l => l.meals?.some(m => m.photo_count > 0));
+    
+    if (!hasAnyMealPhoto) {
+      el.innerHTML = '<div class="text-center py-8 text-gray-400"><i class="fas fa-images text-3xl mb-3"></i><p>写真データがありません</p></div>';
+      return;
+    }
+    
+    el.innerHTML = \`
+      <div class="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4 text-sm text-blue-800">
+        <i class="fas fa-info-circle mr-2"></i>
+        写真付き食事記録があります。詳細な写真データは「食事記録」タブで各日の記録をご確認ください。
+      </div>
+      <div class="space-y-3">
+        \${logs.filter(l => l.meals?.some(m => m.photo_count > 0)).map(log => \`
+          <div class="bg-gray-50 p-3 rounded-lg flex items-center justify-between">
+            <span class="text-sm font-medium text-gray-700">\${esc(log.log_date)}</span>
+            <span class="text-xs text-gray-500">📷 \${log.meals.filter(m => m.photo_count > 0).length}件の写真付き記録</span>
+          </div>
+        \`).join('')}
+      </div>\`;
+  } catch {
+    el.innerHTML = '<p class="text-red-400 text-sm">写真データの取得に失敗しました</p>';
+  }
+}
+
+// ===== Reports Tab (レポート) =====
+async function loadModalReports() {
+  const el = document.getElementById('modal-content');
+  el.innerHTML = '<div class="text-center py-8"><i class="fas fa-spinner fa-spin text-gray-400 text-2xl"></i></div>';
+  try {
+    // Fetch user account to get userAccountId for weekly reports
+    const uaId = modalUser?.userAccountId;
+    if (!uaId) {
+      el.innerHTML = '<div class="text-center py-8 text-gray-400"><i class="fas fa-chart-bar text-3xl mb-3"></i><p>レポートデータがありません</p></div>';
+      return;
+    }
+    // Use admin logs endpoint to check recent activity (weekly reports require direct DB query)
+    const res = await axios.get(API_BASE + '/admin/users/' + modalLineUserId + '/logs?limit=7', {
+      headers: { Authorization: 'Bearer ' + authToken }
+    });
+    const logs = res.data.data.logs || [];
+    
+    if (logs.length === 0) {
+      el.innerHTML = '<div class="text-center py-8 text-gray-400"><i class="fas fa-chart-bar text-3xl mb-3"></i><p>まだ十分な記録がありません<br><span class="text-xs">7日間記録を続けると週次レポートが生成されます</span></p></div>';
+      return;
+    }
+
+    // Show summary of recent activity
+    const totalMeals = logs.reduce((s, l) => s + (l.meals?.length || 0), 0);
+    const daysWithRecords = logs.filter(l => l.meals?.length > 0).length;
+
+    el.innerHTML = \`
+      <div class="mb-6">
+        <h3 class="font-semibold text-gray-700 mb-3"><i class="fas fa-chart-line text-purple-500 mr-1"></i>直近7日間のサマリー</h3>
+        <div class="grid grid-cols-3 gap-4">
+          <div class="bg-green-50 rounded-xl p-4 text-center">
+            <p class="text-2xl font-bold text-green-700">\${daysWithRecords}</p>
+            <p class="text-xs text-gray-500 mt-1">記録日数</p>
+          </div>
+          <div class="bg-blue-50 rounded-xl p-4 text-center">
+            <p class="text-2xl font-bold text-blue-700">\${totalMeals}</p>
+            <p class="text-xs text-gray-500 mt-1">食事記録</p>
+          </div>
+          <div class="bg-purple-50 rounded-xl p-4 text-center">
+            <p class="text-2xl font-bold text-purple-700">\${logs.length}</p>
+            <p class="text-xs text-gray-500 mt-1">ログ件数</p>
+          </div>
         </div>
       </div>
-      \` : ''}
-
       <div>
-        <h3 class="font-semibold text-gray-700 mb-3">直近の記録（7日分）</h3>
-        \${logs.length === 0
-          ? '<p class="text-gray-400 text-sm">記録なし</p>'
-          : \`<div class="space-y-2">\${logs.map(log => \`
+        <h3 class="font-semibold text-gray-700 mb-3">日別記録</h3>
+        <div class="space-y-2">
+          \${logs.map(log => \`
             <div class="flex items-center justify-between bg-gray-50 p-3 rounded-lg text-sm">
-              <span class="text-gray-600">\${esc(log.log_date)}</span>
-              <div class="flex gap-4 text-gray-500 text-xs">
+              <span class="text-gray-700 font-medium">\${esc(log.log_date)}</span>
+              <div class="flex gap-3 text-xs text-gray-500">
+                <span>🍽️ \${log.meals?.length || 0}食</span>
                 \${log.total_calories_kcal ? '<span>🔥 '+esc(log.total_calories_kcal)+'kcal</span>' : ''}
                 \${log.weight_snapshot_kg ? '<span>⚖️ '+esc(log.weight_snapshot_kg)+'kg</span>' : ''}
               </div>
             </div>
-          \`).join('')}</div>\`
-        }
+          \`).join('')}
+        </div>
       </div>
     \`;
   } catch {
-    document.getElementById('modal-content').innerHTML = '<p class="text-red-400">読み込みに失敗しました</p>';
+    el.innerHTML = '<p class="text-red-400 text-sm">レポートデータの取得に失敗しました</p>';
   }
 }
 

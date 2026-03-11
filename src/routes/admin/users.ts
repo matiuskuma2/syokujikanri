@@ -177,4 +177,64 @@ usersRouter.get('/:lineUserId/logs', async (c) => {
   return ok(c, { logs: logsWithMeals })
 })
 
+// ===================================================================
+// L-2: ユーザーの写真一覧（管理者閲覧）
+// GET /api/admin/users/:lineUserId/photos?limit=20
+// ===================================================================
+
+usersRouter.get('/:lineUserId/photos', async (c) => {
+  const payload = c.get('jwtPayload')
+  const lineUserId = c.req.param('lineUserId')
+  const accountId = payload.accountId
+  const limit = parseInt(c.req.query('limit') || '20', 10)
+
+  const userAccount = await findUserAccount(c.env.DB, lineUserId, accountId)
+  if (!userAccount) return notFound(c, 'User not found')
+
+  const { results: photos } = await c.env.DB.prepare(`
+    SELECT id, photo_date, photo_type, storage_key, pose_label, body_part_label, note, created_at
+    FROM progress_photos
+    WHERE user_account_id = ?1
+    ORDER BY photo_date DESC, created_at DESC
+    LIMIT ?2
+  `).bind(userAccount.id, limit).all<{
+    id: string
+    photo_date: string
+    photo_type: string
+    storage_key: string
+    pose_label: string | null
+    body_part_label: string | null
+    note: string | null
+    created_at: string
+  }>()
+
+  return ok(c, { photos })
+})
+
+// ===================================================================
+// L-2: ユーザーの週次レポート一覧（管理者閲覧）
+// GET /api/admin/users/:lineUserId/reports?limit=12
+// ===================================================================
+
+usersRouter.get('/:lineUserId/reports', async (c) => {
+  const payload = c.get('jwtPayload')
+  const lineUserId = c.req.param('lineUserId')
+  const accountId = payload.accountId
+  const limit = parseInt(c.req.query('limit') || '12', 10)
+
+  const userAccount = await findUserAccount(c.env.DB, lineUserId, accountId)
+  if (!userAccount) return notFound(c, 'User not found')
+
+  const { results: reports } = await c.env.DB.prepare(`
+    SELECT id, week_start, week_end, avg_weight_kg, min_weight_kg, max_weight_kg,
+           weight_change, meal_log_count, log_days, ai_summary, sent_at, created_at
+    FROM weekly_reports
+    WHERE user_account_id = ?1
+    ORDER BY week_start DESC
+    LIMIT ?2
+  `).bind(userAccount.id, limit).all()
+
+  return ok(c, { reports })
+})
+
 export default usersRouter
