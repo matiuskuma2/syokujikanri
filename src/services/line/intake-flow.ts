@@ -506,6 +506,19 @@ async function processActivity(
 // ヘルパー関数
 // ===================================================================
 
+/** saveProfileField で許可するカラム名（SQLインジェクション防止） */
+const ALLOWED_PROFILE_COLUMNS = new Set([
+  'nickname',
+  'gender',
+  'age_range',
+  'height_cm',
+  'current_weight_kg',
+  'target_weight_kg',
+  'goal_summary',
+  'concern_tags',
+  'activity_level',
+])
+
 /** user_profiles テーブルに部分更新 */
 async function saveProfileField(
   db: D1Database,
@@ -520,9 +533,9 @@ async function saveProfileField(
     VALUES (?1, ?2, ?3, ?4)
   `).bind(generateId(), userAccountId, now, now).run()
 
-  // 各フィールドを個別に更新（nullも含む）
+  // 各フィールドを個別に更新（nullも含む）— allowlist で安全なカラムのみ許可
   for (const [key, value] of Object.entries(fields)) {
-    if (value !== undefined) {
+    if (value !== undefined && ALLOWED_PROFILE_COLUMNS.has(key)) {
       await db.prepare(
         `UPDATE user_profiles SET ${key} = ?1, updated_at = ?2 WHERE user_account_id = ?3`
       ).bind(value, now, userAccountId).run()
