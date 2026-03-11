@@ -21,8 +21,7 @@
 import { Hono } from 'hono'
 import type { HonoEnv } from '../../middleware/auth'
 import { authMiddleware } from '../../middleware/auth'
-import { findUserAccountById } from '../../repositories/line-users-repo'
-import { findLineUser } from '../../repositories/line-users-repo'
+import { findUserAccountById, findLineUser } from '../../repositories/line-users-repo'
 import {
   ensureDailyLog,
   listRecentDailyLogs,
@@ -32,7 +31,7 @@ import { findMealEntriesByDailyLog } from '../../repositories/meal-entries-repo'
 import { findBodyMetricsByDailyLog } from '../../repositories/body-metrics-repo'
 import { listProgressPhotosByUser } from '../../repositories/progress-photos-repo'
 import { listWeeklyReportsByUser } from '../../repositories/weekly-reports-repo'
-import { upsertUserServiceStatus } from '../../repositories/subscriptions-repo'
+import { upsertUserServiceStatus, findUserServiceStatus } from '../../repositories/subscriptions-repo'
 import { ok, badRequest, notFound } from '../../utils/response'
 import { todayJst } from '../../utils/id'
 
@@ -48,12 +47,16 @@ meRouter.use('*', authMiddleware)
 meRouter.get('/', async (c) => {
   const payload = c.get('jwtPayload')
   const userAccountId = payload.sub
+  const accountId = payload.accountId
 
   const userAccount = await findUserAccountById(c.env.DB, userAccountId)
   if (!userAccount) return notFound(c, 'User account not found')
 
-  // LINE ユーザー情報を追加取得
-  const lineUser = await findLineUser(c.env.DB, c.env.LINE_CHANNEL_ID, userAccount.line_user_id)
+  // LINE ユーザー情報 + サービスステータスを並行取得
+  const [lineUser, serviceStatus] = await Promise.all([
+    findLineUser(c.env.DB, c.env.LINE_CHANNEL_ID, userAccount.line_user_id),
+    findUserServiceStatus(c.env.DB, accountId, userAccount.line_user_id),
+  ])
 
   return ok(c, {
     userAccountId: userAccount.id,
@@ -62,6 +65,12 @@ meRouter.get('/', async (c) => {
     pictureUrl: lineUser?.picture_url ?? null,
     status: userAccount.status,
     joinedAt: userAccount.joined_at,
+    service: {
+      botEnabled: serviceStatus?.bot_enabled === 1,
+      recordEnabled: serviceStatus?.record_enabled === 1,
+      consultEnabled: serviceStatus?.consult_enabled === 1,
+      intakeCompleted: serviceStatus?.intake_completed === 1,
+    },
   })
 })
 
