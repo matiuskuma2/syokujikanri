@@ -8,13 +8,16 @@
 ## 本番URL
 | 用途 | URL |
 |------|-----|
-| **本番サイト** | https://diet-bot.pages.dev |
+| **ウェルカムページ（会員サイト）** | https://diet-bot.pages.dev/welcome |
+| **LINE友達追加** | https://lin.ee/n4PoXrR |
 | **管理画面** | https://diet-bot.pages.dev/admin |
 | **LIFF** | https://diet-bot.pages.dev/liff |
 | **ユーザーダッシュボード** | https://diet-bot.pages.dev/dashboard |
 | **LINE LIFF URL** | https://liff.line.me/2009409790-DekZRh4t |
 | **API Health** | https://diet-bot.pages.dev/api/health |
 | **Webhook** | https://diet-bot.pages.dev/api/webhooks/line |
+
+> **Note**: `/` (ルート) は `/welcome` にリダイレクトされます
 
 ## LINE チャンネル情報
 | 種別 | ID |
@@ -113,11 +116,14 @@ accounts → line_channels → line_users → user_accounts
 | JWT_SECRET | (auto-generated secure key) |
 
 ## ユーザーガイド
-1. LINE で `@054eyzbj` を友だち追加
-2. `72.5kg` のように体重を送信 → 自動記録
-3. `相談モード` → AI 相談に切替
-4. `記録モード` → 記録に戻る
-5. LIFF URL: https://liff.line.me/2009409790-DekZRh4t → ダッシュボード表示
+1. **ウェルカムページ** https://diet-bot.pages.dev/welcome でQRコード・使い方を確認
+2. LINE で `@054eyzbj` を友だち追加（または https://lin.ee/n4PoXrR ）
+3. 初回問診（9問）に回答 → 約2分で完了
+4. `72.5kg` のように体重を送信 → 自動記録
+5. 食事の写真を送信 → AI がカロリー・PFC を自動分析 → 「確定」で保存
+6. `相談` → AI 栄養相談モードに切替
+7. `記録モード` → 記録モードに戻る
+8. LIFF URL: https://liff.line.me/2009409790-DekZRh4t → ダッシュボード表示
 
 ## LINE Developers での追加設定（手動）
 > **重要**: 以下はLINE Developersコンソールで手動設定が必要
