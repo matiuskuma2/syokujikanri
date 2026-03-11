@@ -219,3 +219,54 @@ export async function listUserAccountsByClientAccount(
     .all<UserAccount>()
   return results
 }
+
+// ===================================================================
+// N+1 解消: ユーザー一覧（JOIN 版）
+// user_accounts + line_users + user_service_statuses を 1 クエリで取得
+// ===================================================================
+
+export interface UserListRow {
+  userAccountId: string
+  lineUserId: string
+  display_name: string | null
+  status: string
+  joinedAt: string | null
+  bot_enabled: number | null
+  record_enabled: number | null
+  consult_enabled: number | null
+  intake_completed: number | null
+}
+
+/** アカウントに紐付くユーザー一覧を 1 クエリで取得（N+1 解消） */
+export async function listUserAccountsWithDetails(
+  db: D1Database,
+  clientAccountId: string,
+  limit = 100,
+  offset = 0
+): Promise<UserListRow[]> {
+  const { results } = await db
+    .prepare(`
+      SELECT
+        ua.id           AS userAccountId,
+        ua.line_user_id AS lineUserId,
+        lu.display_name AS display_name,
+        ua.status       AS status,
+        ua.joined_at    AS joinedAt,
+        uss.bot_enabled,
+        uss.record_enabled,
+        uss.consult_enabled,
+        uss.intake_completed
+      FROM user_accounts ua
+      LEFT JOIN line_users lu
+        ON lu.line_user_id = ua.line_user_id
+      LEFT JOIN user_service_statuses uss
+        ON uss.account_id = ua.client_account_id
+        AND uss.line_user_id = ua.line_user_id
+      WHERE ua.client_account_id = ?1 AND ua.status = 'active'
+      ORDER BY ua.joined_at DESC
+      LIMIT ?2 OFFSET ?3
+    `)
+    .bind(clientAccountId, limit, offset)
+    .all<UserListRow>()
+  return results
+}

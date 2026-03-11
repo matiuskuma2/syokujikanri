@@ -7,7 +7,7 @@
 
 import { Hono } from 'hono'
 import type { HonoEnv } from '../../middleware/auth'
-import { listUserAccountsByClientAccount, findUserAccount } from '../../repositories/line-users-repo'
+import { listUserAccountsWithDetails, findUserAccount } from '../../repositories/line-users-repo'
 import { listRecentDailyLogs } from '../../repositories/daily-logs-repo'
 import { findMealEntriesByDailyLog } from '../../repositories/meal-entries-repo'
 import { upsertUserServiceStatus, findUserServiceStatus } from '../../repositories/subscriptions-repo'
@@ -26,29 +26,20 @@ usersRouter.get('/', async (c) => {
   const limit = parseInt(c.req.query('limit') || '20', 10)
   const offset = parseInt(c.req.query('offset') || '0', 10)
 
-  const userAccounts = await listUserAccountsByClientAccount(c.env.DB, accountId, limit, offset)
+  // N+1 解消: 1 クエリで user_accounts + line_users + user_service_statuses を JOIN
+  const rows = await listUserAccountsWithDetails(c.env.DB, accountId, limit, offset)
 
-  // 各ユーザーのサービスステータスを付与
-  const users = await Promise.all(
-    userAccounts.map(async (ua) => {
-      const svc = await findUserServiceStatus(c.env.DB, accountId, ua.line_user_id)
-      // line_users テーブルから display_name を取得
-      const lineUser = await c.env.DB.prepare(
-        'SELECT display_name FROM line_users WHERE line_user_id = ?1 LIMIT 1'
-      ).bind(ua.line_user_id).first<{ display_name: string | null }>()
-      return {
-        userAccountId: ua.id,
-        lineUserId: ua.line_user_id,
-        display_name: lineUser?.display_name ?? null,
-        status: ua.status,
-        joinedAt: ua.joined_at,
-        botEnabled: svc?.bot_enabled === 1,
-        recordEnabled: svc?.record_enabled === 1,
-        consultEnabled: svc?.consult_enabled === 1,
-        intakeCompleted: svc?.intake_completed === 1,
-      }
-    })
-  )
+  const users = rows.map((r) => ({
+    userAccountId: r.userAccountId,
+    lineUserId: r.lineUserId,
+    display_name: r.display_name,
+    status: r.status,
+    joinedAt: r.joinedAt,
+    botEnabled: r.bot_enabled === 1,
+    recordEnabled: r.record_enabled === 1,
+    consultEnabled: r.consult_enabled === 1,
+    intakeCompleted: r.intake_completed === 1,
+  }))
 
   return ok(c, { users, limit, offset })
 })
