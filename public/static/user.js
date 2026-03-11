@@ -173,6 +173,13 @@ async function initApp() {
   }
 }
 
+/** サービス状態を判定 */
+function getServiceState(svc) {
+  if (svc.botEnabled === false) return 'suspended';
+  if (svc.intakeCompleted === false) return 'intake_pending';
+  return 'active';
+}
+
 /** 状態バナー表示 (M1-3) */
 function showStatusBanner(status) {
   const banner = document.getElementById('status-banner');
@@ -197,6 +204,68 @@ function showStatusBanner(status) {
   }
 }
 
+/** 停止中の全画面ブロック (L-1) */
+function showSuspendedScreen() {
+  const app = document.getElementById('app');
+  if (!app) return;
+  // ヘッダーは残し、中身を差し替え
+  const sections = app.querySelectorAll('.page-section, .bottom-nav');
+  sections.forEach(el => el.style.display = 'none');
+
+  const banner = document.getElementById('status-banner');
+  if (banner) {
+    banner.style.display = 'block';
+    banner.className = 'status-banner suspended';
+    banner.style.margin = '40px 16px';
+    banner.innerHTML = `
+      <i class="fas fa-pause-circle" style="font-size:40px;"></i>
+      <div>
+        <div class="banner-title" style="font-size:18px;">サービス停止中</div>
+        <div class="banner-desc" style="font-size:14px;margin-top:8px;">
+          管理者によりサービスが一時停止されています。<br>
+          再開をお待ちください。<br><br>
+          お急ぎの場合は管理者にお問い合わせください。
+        </div>
+      </div>`;
+  }
+}
+
+/** 問診未完了時にデータページを無効化 (L-1) */
+function disableDataPages() {
+  // ホームページのデータ表示をガイドに差し替え
+  const homeSection = document.getElementById('page-home');
+  if (homeSection) {
+    homeSection.innerHTML = `
+      <div class="card" style="margin-top:8px;">
+        <div class="card-body" style="text-align:center;padding:32px 16px;">
+          <i class="fas fa-clipboard-list" style="font-size:48px;color:#f59e0b;margin-bottom:16px;"></i>
+          <p style="font-size:16px;font-weight:700;color:#92400e;margin-bottom:8px;">初回問診を完了してください</p>
+          <p style="font-size:13px;color:#6b7280;line-height:1.8;">
+            LINEで「問診」と送ると9問の簡単なアンケートが始まります。<br>
+            完了すると以下の機能が使えるようになります：
+          </p>
+          <div style="text-align:left;max-width:260px;margin:16px auto;">
+            <p style="font-size:13px;color:#374151;line-height:2;">
+              📝 毎日の体重・食事記録<br>
+              📷 食事写真のAI自動解析<br>
+              💬 AIダイエット相談<br>
+              📊 週次レポート
+            </p>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  // ナビのrecords, photos, reportを半透明にしてバッジ付き
+  ['records', 'photos', 'report'].forEach(page => {
+    const navItem = document.querySelector(`.nav-item[data-page="${page}"]`);
+    if (navItem) {
+      navItem.style.opacity = '0.4';
+      navItem.style.pointerEvents = 'none';
+    }
+  });
+}
+
 /** チェックボックス初期値設定 */
 function setToggleState(id, checked) {
   const el = document.getElementById(id);
@@ -205,6 +274,12 @@ function setToggleState(id, checked) {
 
 /** ページ切り替え */
 function switchPage(page) {
+  // 問診未完了時はデータページへの遷移をブロック
+  if (state.serviceState === 'intake_pending' && ['records', 'photos', 'report'].includes(page)) {
+    showToast('問診を完了してからご利用ください');
+    return;
+  }
+
   document.querySelectorAll('.page-section').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
 
