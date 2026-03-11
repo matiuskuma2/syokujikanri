@@ -726,10 +726,10 @@ function renderUsersTable(users) {
       <thead><tr class="border-b text-left text-gray-500 bg-gray-50">
         <th class="pb-3 pt-2 px-3">ユーザー</th>
         <th class="pb-3 pt-2 px-3">参加日</th>
+        <th class="pb-3 pt-2 px-3 text-center">状態</th>
         <th class="pb-3 pt-2 px-3 text-center">BOT</th>
         <th class="pb-3 pt-2 px-3 text-center">記録</th>
         <th class="pb-3 pt-2 px-3 text-center">相談</th>
-        <th class="pb-3 pt-2 px-3 text-center">問診</th>
         <th class="pb-3 pt-2 px-3">操作</th>
       </tr></thead>
       <tbody>
@@ -747,10 +747,10 @@ function renderUsersTable(users) {
             </div>
           </td>
           <td class="py-3 px-3 text-gray-500 text-xs">\${esc((u.joinedAt||'').substring(0,10))}</td>
+          <td class="py-3 px-3 text-center">\${userStatusLabel(u)}</td>
           <td class="py-3 px-3 text-center">\${badge(u.botEnabled)}</td>
           <td class="py-3 px-3 text-center">\${badge(u.recordEnabled)}</td>
           <td class="py-3 px-3 text-center">\${badge(u.consultEnabled)}</td>
-          <td class="py-3 px-3 text-center">\${badge(u.intakeCompleted)}</td>
           <td class="py-3 px-3">
             <button onclick="event.stopPropagation();openUserModal('\${esc(u.lineUserId)}')"
               class="text-xs bg-green-100 text-green-700 hover:bg-green-200 px-3 py-1 rounded-lg transition-colors">
@@ -770,6 +770,16 @@ function badge(val) {
   return val
     ? '<span class="inline-block w-5 h-5 bg-green-400 rounded-full"></span>'
     : '<span class="inline-block w-5 h-5 bg-gray-200 rounded-full"></span>';
+}
+
+function userStatusLabel(u) {
+  if (!u.botEnabled) {
+    return '<span class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">停止中</span>';
+  }
+  if (!u.intakeCompleted) {
+    return '<span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-medium">問診中</span>';
+  }
+  return '<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">利用中</span>';
 }
 
 async function openUserModal(lineUserId) {
@@ -1126,9 +1136,27 @@ function getLiffEntryHtml(liffId: string): string {
       const code = data.error || 'UNKNOWN_ERROR';
       const msgs = {
         INVALID_LINE_TOKEN: 'LINEトークンの検証に失敗しました。再ログインをお試しください。',
-        USER_NOT_REGISTERED: 'このLINEアカウントはまだ登録されていません。まずBOTを友達追加してください。',
-        ACCOUNT_NOT_FOUND: 'アカウント情報が見つかりません。管理者にお問い合わせください。',
+        USER_NOT_REGISTERED: 'このLINEアカウントはまだ登録されていません。\\nまずBOTを友達追加し、問診を完了してください。',
+        ACCOUNT_NOT_FOUND: 'アカウント情報が見つかりません。BOTを友達追加してからお試しください。',
       };
+      // USER_NOT_REGISTERED の場合は特別な画面を表示
+      if (code === 'USER_NOT_REGISTERED') {
+        document.getElementById('loading-screen').style.display = 'none';
+        const errScreen = document.getElementById('auth-error-screen');
+        errScreen.style.display = 'flex';
+        errScreen.innerHTML = \`
+          <i class="fas fa-user-plus" style="font-size:48px;color:#22c55e;margin-bottom:12px;"></i>
+          <p style="font-size:15px;font-weight:600;">まだ登録が完了していません</p>
+          <p class="liff-msg">LINEで以下の手順を行ってください:</p>
+          <ol style="text-align:left;font-size:13px;color:#4b5563;line-height:2;margin:12px 0;">
+            <li>diet-bot を友達追加する</li>
+            <li>初回問診（9問）に回答する</li>
+            <li>完了後にこのページを再読み込み</li>
+          </ol>
+          <button class="retry-btn" onclick="location.reload()">再試行</button>
+        \`;
+        return;
+      }
       showError('ログインできませんでした', msgs[code] || data.message || code);
       return;
     }
@@ -1186,6 +1214,9 @@ function getUserDashboardHtml(liffId: string): string {
 
 <!-- アプリ本体 -->
 <div id="app">
+  <!-- ステータスバナー (M1-3: 問診未完了 / 停止中) -->
+  <div id="status-banner" class="status-banner" style="display:none;"></div>
+
   <!-- ヘッダー -->
   <header class="app-header">
     <div class="logo">

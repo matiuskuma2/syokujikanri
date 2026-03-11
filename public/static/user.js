@@ -142,12 +142,57 @@ async function initApp() {
       });
     });
 
+    // ==== 状態分岐 (M1-3) ====
+    const svc = state.profile.service || {};
+    if (svc.botEnabled === false) {
+      // BOT 停止中
+      showStatusBanner('suspended');
+    } else if (svc.intakeCompleted === false) {
+      // 問診未完了
+      showStatusBanner('intake_pending');
+    }
+
+    // サービストグルの初期値を反映
+    setToggleState('toggle-bot',     svc.botEnabled !== false);
+    setToggleState('toggle-record',  svc.recordEnabled !== false);
+    setToggleState('toggle-consult', svc.consultEnabled !== false);
+
     // 初期ページ読み込み
     await loadHomePage();
   } catch (e) {
     console.error('[initApp]', e);
     showAuthError('データの読み込みに失敗しました。再度お試しください。');
   }
+}
+
+/** 状態バナー表示 (M1-3) */
+function showStatusBanner(status) {
+  const banner = document.getElementById('status-banner');
+  if (!banner) return;
+  banner.style.display = 'block';
+  if (status === 'suspended') {
+    banner.className = 'status-banner suspended';
+    banner.innerHTML = `
+      <i class="fas fa-pause-circle"></i>
+      <div>
+        <div class="banner-title">BOT が停止中です</div>
+        <div class="banner-desc">管理者によりサービスが一時停止されています。<br>再開をお待ちください。</div>
+      </div>`;
+  } else if (status === 'intake_pending') {
+    banner.className = 'status-banner intake-pending';
+    banner.innerHTML = `
+      <i class="fas fa-clipboard-list"></i>
+      <div>
+        <div class="banner-title">初回問診が未完了です</div>
+        <div class="banner-desc">LINEで「問診」と送って初回登録を完了してください。<br>完了すると全機能をご利用いただけます。</div>
+      </div>`;
+  }
+}
+
+/** チェックボックス初期値設定 */
+function setToggleState(id, checked) {
+  const el = document.getElementById(id);
+  if (el) el.checked = checked;
 }
 
 /** ページ切り替え */

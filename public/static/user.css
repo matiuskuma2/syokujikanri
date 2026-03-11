@@ -414,3 +414,47 @@ html, body {
   .bottom-nav { padding-bottom: env(safe-area-inset-bottom); }
   #app { padding-bottom: calc(var(--bottom-bar) + env(safe-area-inset-bottom)); }
 }
+
+/* ================================================================
+   Status Banner (M1-3: 問診未完了 / 停止中)
+   ================================================================ */
+.status-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 8px 0 0;
+  padding: 14px 16px;
+  border-radius: var(--radius-card);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.status-banner i {
+  font-size: 24px;
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+.status-banner .banner-title {
+  font-weight: 700;
+  font-size: 14px;
+  margin-bottom: 2px;
+}
+.status-banner .banner-desc {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.status-banner.intake-pending {
+  background: #fffbeb;
+  border: 1px solid #fbbf24;
+  color: #92400e;
+}
+.status-banner.intake-pending i { color: #f59e0b; }
+.status-banner.intake-pending .banner-desc { color: #a16207; }
+
+.status-banner.suspended {
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
+  color: #991b1b;
+}
+.status-banner.suspended i { color: #ef4444; }
+.status-banner.suspended .banner-desc { color: #b91c1c; }
