@@ -11,6 +11,7 @@ import { listUserAccountsWithDetails, findUserAccount } from '../../repositories
 import { listRecentDailyLogs } from '../../repositories/daily-logs-repo'
 import { listMealEntriesByDailyLogIds } from '../../repositories/meal-entries-repo'
 import { upsertUserServiceStatus, findUserServiceStatus } from '../../repositories/subscriptions-repo'
+import type { UserProfile } from '../../types/db'
 import { ok, badRequest, notFound } from '../../utils/response'
 
 const usersRouter = new Hono<HonoEnv>()
@@ -64,6 +65,23 @@ usersRouter.get('/:lineUserId', async (c) => {
     'SELECT display_name, picture_url FROM line_users WHERE line_user_id = ?1 LIMIT 1'
   ).bind(lineUserId).first<{ display_name: string | null; picture_url: string | null }>()
 
+  // プロフィール取得
+  const profile = await c.env.DB.prepare(
+    'SELECT * FROM user_profiles WHERE user_account_id = ?1 LIMIT 1'
+  ).bind(userAccount.id).first<UserProfile>()
+
+  // 問診回答取得
+  const { results: intakeAnswers } = await c.env.DB.prepare(
+    `SELECT question_key, answer_value, answered_at
+     FROM intake_answers
+     WHERE user_account_id = ?1
+     ORDER BY answered_at ASC`
+  ).bind(userAccount.id).all<{
+    question_key: string
+    answer_value: string | null
+    answered_at: string
+  }>()
+
   return ok(c, {
     userAccountId: userAccount.id,
     lineUserId,
@@ -72,6 +90,19 @@ usersRouter.get('/:lineUserId', async (c) => {
     status: userAccount.status,
     joinedAt: userAccount.joined_at,
     service: svc ?? null,
+    profile: profile ? {
+      nickname: profile.nickname,
+      gender: profile.gender,
+      ageRange: profile.age_range,
+      heightCm: profile.height_cm,
+      currentWeightKg: profile.current_weight_kg,
+      targetWeightKg: profile.target_weight_kg,
+      goalSummary: profile.goal_summary,
+      concernTags: profile.concern_tags,
+      activityLevel: profile.activity_level,
+      updatedAt: profile.updated_at,
+    } : null,
+    intakeAnswers: intakeAnswers ?? [],
     recentLogs,
   })
 })

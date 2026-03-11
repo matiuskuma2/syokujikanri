@@ -9,22 +9,22 @@ import { Hono } from 'hono'
 import type { HonoEnv } from '../../middleware/auth'
 import { ok } from '../../utils/response'
 import { todayJst } from '../../utils/id'
+import type { Context } from 'hono'
 
 const dashboardRouter = new Hono<HonoEnv>()
 
 // ===================================================================
-// ダッシュボードサマリー
-// GET /api/admin/dashboard/stats
+// 共通: ダッシュボード統計データ取得
 // ===================================================================
 
-dashboardRouter.get('/stats', async (c) => {
+async function fetchDashboardData(c: Context<HonoEnv>) {
   const payload = c.get('jwtPayload')
   const accountId = payload.accountId
   const today = todayJst()
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
     .toISOString().substring(0, 10)
 
-  const [totalUsersRow, todayLogsRow, weeklyActiveRow] = await Promise.all([
+  const [totalUsersRow, todayLogsRow, weeklyActiveRow, intakeIncompleteRow] = await Promise.all([
     // 総ユーザー数（アクティブな user_accounts）
     c.env.DB.prepare(`
       SELECT COUNT(*) as cnt FROM user_accounts
@@ -42,12 +42,18 @@ dashboardRouter.get('/stats', async (c) => {
       SELECT COUNT(DISTINCT user_account_id) as cnt FROM daily_logs
       WHERE client_account_id = ?1 AND log_date >= ?2
     `).bind(accountId, sevenDaysAgo).first<{ cnt: number }>(),
+
+    // M2-3: 問診未完了ユーザー数
+    c.env.DB.prepare(`
+      SELECT COUNT(*) as cnt FROM user_service_statuses
+      WHERE account_id = ?1 AND intake_completed = 0 AND bot_enabled = 1
+    `).bind(accountId).first<{ cnt: number }>(),
   ])
 
   // 最近アクティブなユーザー5件
   const recentUsers = await c.env.DB.prepare(`
     SELECT
-      ua.id       AS userAccountId,
+      ua.id           AS userAccountId,
       ua.line_user_id AS lineUserId,
       lu.display_name AS displayName,
       bm.weight_kg    AS latestWeight,
@@ -71,13 +77,68 @@ dashboardRouter.get('/stats', async (c) => {
     lastLogDate: string | null
   }>()
 
+  return {
+    totalUsers: totalUsersRow?.cnt ?? 0,
+    todayLogs: todayLogsRow?.cnt ?? 0,
+    weeklyActive: weeklyActiveRow?.cnt ?? 0,
+    incompleteIntake: intakeIncompleteRow?.cnt ?? 0,
+    recentUsers: recentUsers.results,
+  }
+}
+
+// ===================================================================
+// ダッシュボードサマリー
+// GET /api/admin/dashboard/stats
+// ===================================================================
+
+dashboardRouter.get('/stats', async (c) => {
+  const data = await fetchDashboardData(c)
   return ok(c, {
     stats: {
-      totalActiveUsers: totalUsersRow?.cnt ?? 0,
-      todayLogCount: todayLogsRow?.cnt ?? 0,
-      weeklyActiveUsers: weeklyActiveRow?.cnt ?? 0,
+      totalActiveUsers: data.totalUsers,
+      todayLogCount: data.todayLogs,
+      weeklyActiveUsers: data.weeklyActive,
+      intakeIncompleteCount: data.incompleteIntake,
     },
-    recentUsers: recentUsers.results,
+    recentUsers: data.recentUsers,
+    // 後方互換 — フロント側が summary / recent_users を参照する場合にも対応
+    summary: {
+      total_users: data.totalUsers,
+      today_logs: data.todayLogs,
+      weekly_active: data.weeklyActive,
+      incomplete_intake: data.incompleteIntake,
+    },
+    recent_users: data.recentUsers.map((u) => ({
+      ...u,
+      nickname: u.displayName,
+      display_name: u.displayName,
+      current_weight_kg: u.latestWeight,
+      last_active_at: u.lastLogDate,
+    })),
+  })
+})
+
+// ===================================================================
+// /summary → /stats 互換エイリアス
+// フロントエンドが /admin/dashboard/summary を呼ぶ場合に対応
+// ===================================================================
+
+dashboardRouter.get('/summary', async (c) => {
+  const data = await fetchDashboardData(c)
+  return ok(c, {
+    summary: {
+      total_users: data.totalUsers,
+      today_logs: data.todayLogs,
+      weekly_active: data.weeklyActive,
+      incomplete_intake: data.incompleteIntake,
+    },
+    recent_users: data.recentUsers.map((u) => ({
+      ...u,
+      nickname: u.displayName,
+      display_name: u.displayName,
+      current_weight_kg: u.latestWeight,
+      last_active_at: u.lastLogDate,
+    })),
   })
 })
 

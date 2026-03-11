@@ -337,7 +337,7 @@ function getAdminDashboardHtml(): string {
     <!-- ===== ダッシュボードページ ===== -->
     <div id="page-overview" class="p-8">
       <h1 class="text-2xl font-bold text-gray-800 mb-6">ダッシュボード</h1>
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
         <div class="stat-card bg-white rounded-xl shadow p-6">
           <div class="flex items-center justify-between">
             <div>
@@ -368,6 +368,17 @@ function getAdminDashboardHtml(): string {
             </div>
             <div class="w-14 h-14 bg-purple-100 rounded-full flex items-center justify-center">
               <i class="fas fa-fire text-purple-600 text-xl"></i>
+            </div>
+          </div>
+        </div>
+        <div class="stat-card bg-white rounded-xl shadow p-6">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-gray-500 text-sm">問診未完了</p>
+              <p class="text-3xl font-bold text-gray-800 mt-1" id="stat-intake-incomplete">-</p>
+            </div>
+            <div class="w-14 h-14 bg-amber-100 rounded-full flex items-center justify-center">
+              <i class="fas fa-clipboard-question text-amber-600 text-xl"></i>
             </div>
           </div>
         </div>
@@ -658,30 +669,31 @@ async function showDashboard() {
 // ===== 概要 =====
 async function loadOverview() {
   try {
-    const res = await axios.get(API_BASE + '/admin/dashboard/summary', {
+    const res = await axios.get(API_BASE + '/admin/dashboard/stats', {
       headers: { Authorization: 'Bearer ' + authToken }
     });
-    const { summary, recent_users } = res.data.data;
-    document.getElementById('stat-total-users').textContent = summary.total_users ?? 0;
-    document.getElementById('stat-today-logs').textContent = summary.today_logs ?? 0;
-    document.getElementById('stat-weekly-active').textContent = summary.weekly_active ?? 0;
+    const { stats, recentUsers } = res.data.data;
+    document.getElementById('stat-total-users').textContent = stats.totalActiveUsers ?? 0;
+    document.getElementById('stat-today-logs').textContent = stats.todayLogCount ?? 0;
+    document.getElementById('stat-weekly-active').textContent = stats.weeklyActiveUsers ?? 0;
+    document.getElementById('stat-intake-incomplete').textContent = stats.intakeIncompleteCount ?? 0;
 
     const listEl = document.getElementById('recent-users-list');
-    if (!recent_users || recent_users.length === 0) {
+    if (!recentUsers || recentUsers.length === 0) {
       listEl.innerHTML = '<p class="text-gray-400 text-sm">まだLINEユーザーがいません</p>';
     } else {
-      listEl.innerHTML = recent_users.map(u => \`
+      listEl.innerHTML = recentUsers.map(u => \`
         <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
           <div class="flex items-center space-x-3">
             <div class="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
               <i class="fas fa-user text-green-600"></i>
             </div>
             <div>
-              <p class="font-medium text-gray-800">\${esc(u.nickname || u.display_name || 'Unknown')}</p>
-              <p class="text-xs text-gray-500">\${esc(u.last_active_at || '-')}</p>
+              <p class="font-medium text-gray-800">\${esc(u.displayName || 'Unknown')}</p>
+              <p class="text-xs text-gray-500">\${esc(u.lastLogDate || '-')}</p>
             </div>
           </div>
-          \${u.current_weight_kg ? '<span class="text-sm font-medium text-gray-600">' + esc(u.current_weight_kg) + 'kg</span>' : ''}
+          \${u.latestWeight ? '<span class="text-sm font-medium text-gray-600">' + esc(u.latestWeight) + 'kg</span>' : ''}
         </div>
       \`).join('');
     }
@@ -768,18 +780,26 @@ function renderUsersTable(users) {
 
 function badge(val) {
   return val
-    ? '<span class="inline-block w-5 h-5 bg-green-400 rounded-full"></span>'
-    : '<span class="inline-block w-5 h-5 bg-gray-200 rounded-full"></span>';
+    ? '<span class="inline-flex items-center justify-center w-5 h-5 bg-green-400 rounded-full" title="有効"><i class="fas fa-check text-white" style="font-size:9px"></i></span>'
+    : '<span class="inline-flex items-center justify-center w-5 h-5 bg-gray-200 rounded-full" title="無効"><i class="fas fa-minus text-gray-400" style="font-size:9px"></i></span>';
 }
 
 function userStatusLabel(u) {
+  // M1-5: 複合ステータスラベル — 優先度順に判定
+  if (u.status === 'blocked') {
+    return '<span class="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-600 font-medium" title="ブロック済み">🚫 ブロック</span>';
+  }
   if (!u.botEnabled) {
-    return '<span class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">停止中</span>';
+    return '<span class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium" title="管理者によりBOTが停止中">⏸ 停止中</span>';
   }
   if (!u.intakeCompleted) {
-    return '<span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-medium">問診中</span>';
+    return '<span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-medium" title="初回問診が未完了">📋 問診未完了</span>';
   }
-  return '<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">利用中</span>';
+  // 全サービス無効チェック
+  if (!u.recordEnabled && !u.consultEnabled) {
+    return '<span class="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium" title="BOT有効・記録/相談は無効">🔵 制限中</span>';
+  }
+  return '<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium" title="全サービス利用中">✅ 利用中</span>';
 }
 
 async function openUserModal(lineUserId) {
@@ -791,8 +811,10 @@ async function openUserModal(lineUserId) {
     });
     const u = res.data.data;
     const logs = (u.recentLogs || []).slice(0, 7);
+    const profile = u.profile;
+    const answers = u.intakeAnswers || [];
     const isReadOnly = currentAdmin?.role === 'staff';
-    document.getElementById('modal-username').textContent = u.display_name || 'ユーザー詳細';
+    document.getElementById('modal-username').textContent = u.display_name || profile?.nickname || 'ユーザー詳細';
     document.getElementById('modal-content').innerHTML = \`
       <div class="grid grid-cols-2 gap-4 mb-6 text-sm">
         <div class="bg-gray-50 p-3 rounded-lg">
@@ -804,8 +826,53 @@ async function openUserModal(lineUserId) {
           <p class="font-medium">\${esc((u.joinedAt||'').substring(0,10))}</p>
         </div>
       </div>
+
+      \${profile ? \`
       <div class="mb-6">
-        <h3 class="font-semibold text-gray-700 mb-3">サービス設定\${isReadOnly ? ' <span class=\"text-xs text-gray-400 font-normal\">(閲覧のみ)</span>' : ''}</h3>
+        <h3 class="font-semibold text-gray-700 mb-3"><i class="fas fa-id-card text-green-500 mr-1"></i>プロフィール</h3>
+        <div class="grid grid-cols-2 gap-3 text-sm">
+          <div class="bg-gray-50 p-3 rounded-lg">
+            <p class="text-gray-500 text-xs mb-1">ニックネーム</p>
+            <p class="font-medium">\${esc(profile.nickname || '-')}</p>
+          </div>
+          <div class="bg-gray-50 p-3 rounded-lg">
+            <p class="text-gray-500 text-xs mb-1">性別</p>
+            <p class="font-medium">\${{male:'男性',female:'女性',other:'その他'}[profile.gender] || '-'}</p>
+          </div>
+          <div class="bg-gray-50 p-3 rounded-lg">
+            <p class="text-gray-500 text-xs mb-1">年代</p>
+            <p class="font-medium">\${esc(profile.ageRange || '-')}</p>
+          </div>
+          <div class="bg-gray-50 p-3 rounded-lg">
+            <p class="text-gray-500 text-xs mb-1">身長</p>
+            <p class="font-medium">\${profile.heightCm ? esc(profile.heightCm) + 'cm' : '-'}</p>
+          </div>
+          <div class="bg-gray-50 p-3 rounded-lg">
+            <p class="text-gray-500 text-xs mb-1">現在の体重</p>
+            <p class="font-medium">\${profile.currentWeightKg ? esc(profile.currentWeightKg) + 'kg' : '-'}</p>
+          </div>
+          <div class="bg-gray-50 p-3 rounded-lg">
+            <p class="text-gray-500 text-xs mb-1">目標体重</p>
+            <p class="font-medium">\${profile.targetWeightKg ? esc(profile.targetWeightKg) + 'kg' : '-'}</p>
+          </div>
+          <div class="bg-gray-50 p-3 rounded-lg col-span-2">
+            <p class="text-gray-500 text-xs mb-1">目標・理由</p>
+            <p class="font-medium">\${esc(profile.goalSummary || '-')}</p>
+          </div>
+          <div class="bg-gray-50 p-3 rounded-lg">
+            <p class="text-gray-500 text-xs mb-1">気になること</p>
+            <p class="font-medium">\${formatConcernTags(profile.concernTags)}</p>
+          </div>
+          <div class="bg-gray-50 p-3 rounded-lg">
+            <p class="text-gray-500 text-xs mb-1">活動レベル</p>
+            <p class="font-medium">\${{sedentary:'座り仕事中心',light:'軽い運動あり',moderate:'週3〜5回運動',active:'毎日激しく運動'}[profile.activityLevel] || '-'}</p>
+          </div>
+        </div>
+      </div>
+      \` : '<div class="mb-6 bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800"><i class="fas fa-info-circle mr-2"></i>プロフィール未登録（問診未完了）</div>'}
+
+      <div class="mb-6">
+        <h3 class="font-semibold text-gray-700 mb-3">サービス設定\${isReadOnly ? ' <span class="text-xs text-gray-400 font-normal">(閲覧のみ)</span>' : ''}</h3>
         <div class="grid grid-cols-2 gap-3">
           \${serviceToggle(lineUserId, 'bot_enabled', u.service?.bot_enabled, 'BOT有効', isReadOnly)}
           \${serviceToggle(lineUserId, 'record_enabled', u.service?.record_enabled, '記録機能', isReadOnly)}
@@ -813,6 +880,21 @@ async function openUserModal(lineUserId) {
           \${serviceToggle(lineUserId, 'intake_completed', u.service?.intake_completed, '問診完了', isReadOnly)}
         </div>
       </div>
+
+      \${answers.length > 0 ? \`
+      <div class="mb-6">
+        <h3 class="font-semibold text-gray-700 mb-3"><i class="fas fa-clipboard-list text-blue-500 mr-1"></i>問診回答 (\${answers.length}件)</h3>
+        <div class="space-y-2">
+          \${answers.map(a => \`
+            <div class="flex items-center justify-between bg-gray-50 p-3 rounded-lg text-sm">
+              <span class="text-gray-500 text-xs w-28 flex-shrink-0">\${formatQuestionLabel(a.question_key)}</span>
+              <span class="text-gray-800 font-medium text-right flex-1 ml-3">\${esc(a.answer_value || '-')}</span>
+            </div>
+          \`).join('')}
+        </div>
+      </div>
+      \` : ''}
+
       <div>
         <h3 class="font-semibold text-gray-700 mb-3">直近の記録（7日分）</h3>
         \${logs.length === 0
@@ -832,6 +914,29 @@ async function openUserModal(lineUserId) {
   } catch {
     document.getElementById('modal-content').innerHTML = '<p class="text-red-400">読み込みに失敗しました</p>';
   }
+}
+
+function formatConcernTags(tags) {
+  if (!tags) return '-';
+  try {
+    const arr = JSON.parse(tags);
+    return Array.isArray(arr) ? arr.map(t => esc(t)).join(', ') : esc(tags);
+  } catch { return esc(tags); }
+}
+
+function formatQuestionLabel(key) {
+  const labels = {
+    nickname: 'ニックネーム',
+    gender: '性別',
+    age_range: '年代',
+    height_cm: '身長',
+    current_weight_kg: '現在体重',
+    target_weight_kg: '目標体重',
+    goal_summary: '目標・理由',
+    concern_tags: '気になること',
+    activity_level: '活動レベル',
+  };
+  return labels[key] || key;
 }
 
 function serviceToggle(lineUserId, key, val, label, isReadOnly) {
@@ -1134,11 +1239,6 @@ function getLiffEntryHtml(liffId: string): string {
 
     if (!res.ok || !data.success) {
       const code = data.error || 'UNKNOWN_ERROR';
-      const msgs = {
-        INVALID_LINE_TOKEN: 'LINEトークンの検証に失敗しました。再ログインをお試しください。',
-        USER_NOT_REGISTERED: 'このLINEアカウントはまだ登録されていません。\\nまずBOTを友達追加し、問診を完了してください。',
-        ACCOUNT_NOT_FOUND: 'アカウント情報が見つかりません。BOTを友達追加してからお試しください。',
-      };
       // USER_NOT_REGISTERED の場合は特別な画面を表示
       if (code === 'USER_NOT_REGISTERED') {
         document.getElementById('loading-screen').style.display = 'none';
@@ -1146,17 +1246,47 @@ function getLiffEntryHtml(liffId: string): string {
         errScreen.style.display = 'flex';
         errScreen.innerHTML = \`
           <i class="fas fa-user-plus" style="font-size:48px;color:#22c55e;margin-bottom:12px;"></i>
-          <p style="font-size:15px;font-weight:600;">まだ登録が完了していません</p>
-          <p class="liff-msg">LINEで以下の手順を行ってください:</p>
-          <ol style="text-align:left;font-size:13px;color:#4b5563;line-height:2;margin:12px 0;">
-            <li>diet-bot を友達追加する</li>
-            <li>初回問診（9問）に回答する</li>
-            <li>完了後にこのページを再読み込み</li>
-          </ol>
-          <button class="retry-btn" onclick="location.reload()">再試行</button>
+          <p style="font-size:17px;font-weight:700;color:#1f2937;">まだ登録が完了していません</p>
+          <p class="liff-msg" style="margin:8px 0 4px;">LINEで以下の手順を行ってください:</p>
+          <div style="text-align:left;background:#f0fdf4;border-radius:12px;padding:16px 20px;margin:12px 0;max-width:320px;">
+            <ol style="font-size:13px;color:#374151;line-height:2.2;margin:0;padding-left:20px;">
+              <li><strong>diet-bot</strong> を友達追加する</li>
+              <li>初回問診（9問）に回答する</li>
+              <li>完了後にこのページを再読み込み</li>
+            </ol>
+          </div>
+          <button class="retry-btn" onclick="location.reload()" style="margin-top:8px;">
+            <i class="fas fa-redo-alt" style="margin-right:6px;"></i>再読み込み
+          </button>
+          <p style="font-size:11px;color:#9ca3af;margin-top:12px;">問題が続く場合は管理者にお問い合わせください</p>
         \`;
         return;
       }
+      // ACCOUNT_NOT_FOUND の場合もカスタム表示
+      if (code === 'ACCOUNT_NOT_FOUND') {
+        document.getElementById('loading-screen').style.display = 'none';
+        const errScreen = document.getElementById('auth-error-screen');
+        errScreen.style.display = 'flex';
+        errScreen.innerHTML = \`
+          <i class="fas fa-link-slash" style="font-size:48px;color:#f59e0b;margin-bottom:12px;"></i>
+          <p style="font-size:17px;font-weight:700;color:#1f2937;">アカウントが見つかりません</p>
+          <div style="text-align:left;background:#fffbeb;border-radius:12px;padding:16px 20px;margin:12px 0;max-width:320px;">
+            <p style="font-size:13px;color:#92400e;line-height:1.6;margin:0;">
+              LINEの友達追加は確認できましたが、サービスアカウントへの紐付けが完了していません。
+            </p>
+            <p style="font-size:13px;color:#92400e;line-height:1.6;margin:8px 0 0;">
+              しばらく待ってから再試行するか、管理者にお問い合わせください。
+            </p>
+          </div>
+          <button class="retry-btn" onclick="location.reload()" style="margin-top:8px;">
+            <i class="fas fa-redo-alt" style="margin-right:6px;"></i>再読み込み
+          </button>
+        \`;
+        return;
+      }
+      const msgs = {
+        INVALID_LINE_TOKEN: 'LINEトークンの検証に失敗しました。再ログインをお試しください。',
+      };
       showError('ログインできませんでした', msgs[code] || data.message || code);
       return;
     }
