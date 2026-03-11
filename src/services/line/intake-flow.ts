@@ -393,9 +393,15 @@ async function processConcerns(
       `SELECT answer_value FROM intake_answers WHERE user_account_id = ?1 AND question_key = 'concern_tags'`
     ).bind(userAccountId).first<{ answer_value: string }>()
 
-    const tags: string[] = existing?.answer_value
-      ? JSON.parse(existing.answer_value).catch?.() ?? []
-      : []
+    let tags: string[] = []
+    if (existing?.answer_value) {
+      try {
+        const parsed = JSON.parse(existing.answer_value)
+        tags = Array.isArray(parsed) ? parsed : []
+      } catch {
+        tags = []
+      }
+    }
 
     if (!tags.includes(text)) tags.push(text)
 
