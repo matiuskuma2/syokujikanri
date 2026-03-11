@@ -8,6 +8,8 @@
  *   createEmbedding      - text-embedding-3-small
  */
 
+import { fetchWithTimeout, TIMEOUT } from '../../utils/fetch-with-timeout'
+
 // ===================================================================
 // 型定義
 // ===================================================================
@@ -77,14 +79,18 @@ export class OpenAIClient {
       body.response_format = { type: 'json_object' }
     }
 
-    const res = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
+    const res = await fetchWithTimeout(
+      `${this.baseUrl}/chat/completions`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify(body),
       },
-      body: JSON.stringify(body),
-    })
+      TIMEOUT.OPENAI_CHAT
+    )
 
     if (!res.ok) {
       const err = await res.text().catch(() => '')
@@ -141,14 +147,18 @@ export class OpenAIClient {
     text: string,
     model = 'text-embedding-3-small'
   ): Promise<number[]> {
-    const res = await fetch(`${this.baseUrl}/embeddings`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
+    const res = await fetchWithTimeout(
+      `${this.baseUrl}/embeddings`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({ model, input: text }),
       },
-      body: JSON.stringify({ model, input: text }),
-    })
+      TIMEOUT.OPENAI_EMBEDDINGS
+    )
 
     if (!res.ok) {
       const err = await res.text().catch(() => '')

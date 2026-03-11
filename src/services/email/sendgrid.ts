@@ -3,6 +3,8 @@
  * SendGrid メール送信サービス
  */
 
+import { fetchWithTimeout, TIMEOUT } from '../../utils/fetch-with-timeout'
+
 export interface EmailOptions {
   to: string
   toName?: string
@@ -18,24 +20,28 @@ export async function sendEmail(
   fromName: string
 ): Promise<boolean> {
   try {
-    const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
+    const res = await fetchWithTimeout(
+      'https://api.sendgrid.com/v3/mail/send',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          personalizations: [
+            { to: [{ email: opts.to, name: opts.toName ?? opts.to }] },
+          ],
+          from: { email: fromEmail, name: fromName },
+          subject: opts.subject,
+          content: [
+            { type: 'text/plain', value: opts.text ?? opts.subject },
+            { type: 'text/html',  value: opts.html },
+          ],
+        }),
       },
-      body: JSON.stringify({
-        personalizations: [
-          { to: [{ email: opts.to, name: opts.toName ?? opts.to }] },
-        ],
-        from: { email: fromEmail, name: fromName },
-        subject: opts.subject,
-        content: [
-          { type: 'text/plain', value: opts.text ?? opts.subject },
-          { type: 'text/html',  value: opts.html },
-        ],
-      }),
-    })
+      TIMEOUT.SENDGRID
+    )
     if (!res.ok) {
       const err = await res.text().catch(() => '')
       console.error(`[SendGrid] send failed ${res.status}: ${err}`)

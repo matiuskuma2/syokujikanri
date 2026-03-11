@@ -4,6 +4,8 @@
  * 対応カテゴリ: meal（食事）/ scale（体重計）/ progress（体型写真）/ nutrition_label（栄養ラベル）
  */
 
+import { fetchWithTimeout, TIMEOUT } from '../../utils/fetch-with-timeout'
+
 export type ImageCategory = 'meal' | 'scale' | 'progress' | 'nutrition_label' | 'unknown'
 
 export interface MealAnalysis {
@@ -77,19 +79,23 @@ Rules:
     : { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageBase64OrUrl}`, detail: 'high' } }
 
   try {
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: [imageContent, { type: 'text', text: '画像を解析してJSONを返してください' }] },
-        ],
-        max_tokens: 800,
-        response_format: { type: 'json_object' },
-      }),
-    })
+    const res = await fetchWithTimeout(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: [imageContent, { type: 'text', text: '画像を解析してJSONを返してください' }] },
+          ],
+          max_tokens: 800,
+          response_format: { type: 'json_object' },
+        }),
+      },
+      TIMEOUT.OPENAI_CHAT
+    )
 
     if (!res.ok) {
       const err = await res.text().catch(() => '')

@@ -26,6 +26,7 @@ import { Hono } from 'hono'
 import type { Bindings } from '../../types/bindings'
 import { findLineUser, findUserAccount } from '../../repositories/line-users-repo'
 import { signJwt } from '../../utils/jwt'
+import { fetchWithTimeout, TIMEOUT } from '../../utils/fetch-with-timeout'
 
 type HonoEnv = { Bindings: Bindings }
 
@@ -132,14 +133,18 @@ async function verifyLineIdToken(
   liffChannelId: string
 ): Promise<string | null> {
   try {
-    const res = await fetch('https://api.line.me/oauth2/v2.1/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        id_token: idToken,
-        client_id: liffChannelId,  // LINE Login の Channel ID（数字10桁）
-      }),
-    })
+    const res = await fetchWithTimeout(
+      'https://api.line.me/oauth2/v2.1/verify',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          id_token: idToken,
+          client_id: liffChannelId,  // LINE Login の Channel ID（数字10桁）
+        }),
+      },
+      TIMEOUT.LINE_VERIFY
+    )
 
     if (!res.ok) {
       const err = await res.text().catch(() => '')

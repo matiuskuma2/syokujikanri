@@ -6,6 +6,7 @@
 import type { Bindings } from '../../types/bindings'
 import { replyText } from '../line/reply'
 import { createOpenAIClient } from '../ai/openai-client'
+import { fetchWithTimeout, TIMEOUT } from '../../utils/fetch-with-timeout'
 import { listActiveUserServiceStatuses } from '../../repositories/subscriptions-repo'
 import { findUserAccountById } from '../../repositories/line-users-repo'
 import { nowIso } from '../../utils/id'
@@ -158,18 +159,12 @@ async function generateWeeklySummary(
 食事記録数: ${stats.mealCount}回`
 
   try {
-    const client = createOpenAIClient(env.OPENAI_API_KEY)
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.OPENAI_API_KEY}` },
-      body: JSON.stringify({
-        model: env.OPENAI_MODEL ?? 'gpt-4o',
-        messages: [{ role: 'user', content: prompt }],
-        max_tokens: 200,
-      }),
-    })
-    const data = await res.json<any>()
-    return data.choices?.[0]?.message?.content?.trim() ?? '今週もお疲れ様でした！'
+    const client = createOpenAIClient(env)
+    const content = await client.createResponse(
+      [{ role: 'user', content: prompt }],
+      { maxTokens: 200, temperature: 0.7 }
+    )
+    return content.trim() || '今週もお疲れ様でした！'
   } catch {
     return '今週もお疲れ様でした！記録を続けることが大切です。'
   }
@@ -191,17 +186,21 @@ function buildWeeklyReportMessage(stats: WeeklyStats, summary: string, name: str
 }
 
 async function pushMessage(lineUserId: string, text: string, accessToken: string): Promise<void> {
-  await fetch('https://api.line.me/v2/bot/message/push', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${accessToken}`,
+  await fetchWithTimeout(
+    'https://api.line.me/v2/bot/message/push',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        to: lineUserId,
+        messages: [{ type: 'text', text }],
+      }),
     },
-    body: JSON.stringify({
-      to: lineUserId,
-      messages: [{ type: 'text', text }],
-    }),
-  })
+    TIMEOUT.LINE_API
+  )
 }
 
 function toJstDateString(date: Date): string {

@@ -7,6 +7,8 @@
  * push:  userId 宛に任意のタイミングで送信（課金対象）
  */
 
+import { fetchWithTimeout, TIMEOUT } from '../../utils/fetch-with-timeout'
+
 const LINE_API = 'https://api.line.me/v2/bot'
 
 // ===================================================================
@@ -42,14 +44,18 @@ async function callLineApi(
   accessToken: string,
   body: unknown
 ): Promise<{ ok: boolean; status: number }> {
-  const res = await fetch(`${LINE_API}${endpoint}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${accessToken}`,
+  const res = await fetchWithTimeout(
+    `${LINE_API}${endpoint}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-  })
+    TIMEOUT.LINE_API
+  )
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     console.error(`[LINE API] ${endpoint} failed: ${res.status} ${text}`)
@@ -141,9 +147,10 @@ export async function getMessageContent(
   messageId: string,
   accessToken: string
 ): Promise<{ data: ArrayBuffer; contentType: string } | null> {
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `https://api-data.line.me/v2/bot/message/${messageId}/content`,
-    { headers: { Authorization: `Bearer ${accessToken}` } }
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+    TIMEOUT.LINE_CONTENT
   )
   if (!res.ok) return null
   const data = await res.arrayBuffer()
@@ -167,9 +174,11 @@ export async function getUserProfile(
   lineUserId: string,
   accessToken: string
 ): Promise<LineProfile | null> {
-  const res = await fetch(`${LINE_API}/profile/${lineUserId}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  })
+  const res = await fetchWithTimeout(
+    `${LINE_API}/profile/${lineUserId}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+    TIMEOUT.LINE_API
+  )
   if (!res.ok) return null
   return res.json() as Promise<LineProfile>
 }
@@ -201,17 +210,21 @@ export async function replyWithQuickReplies(
     })),
   }
 
-  const res = await fetch(`${LINE_API}/message/reply`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${accessToken}`,
+  const res = await fetchWithTimeout(
+    `${LINE_API}/message/reply`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        replyToken,
+        messages: [{ type: 'text', text, quickReply }],
+      }),
     },
-    body: JSON.stringify({
-      replyToken,
-      messages: [{ type: 'text', text, quickReply }],
-    }),
-  })
+    TIMEOUT.LINE_API
+  )
 
   if (!res.ok) {
     const err = await res.text().catch(() => '')
@@ -237,17 +250,21 @@ export async function pushWithQuickReplies(
     })),
   }
 
-  const res = await fetch(`${LINE_API}/message/push`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${accessToken}`,
+  const res = await fetchWithTimeout(
+    `${LINE_API}/message/push`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        to: lineUserId,
+        messages: [{ type: 'text', text, quickReply }],
+      }),
     },
-    body: JSON.stringify({
-      to: lineUserId,
-      messages: [{ type: 'text', text, quickReply }],
-    }),
-  })
+    TIMEOUT.LINE_API
+  )
 
   if (!res.ok) {
     const err = await res.text().catch(() => '')
