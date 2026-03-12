@@ -24,10 +24,62 @@ const usersRouter = new Hono<HonoEnv>()
 usersRouter.get('/', async (c) => {
   const payload = c.get('jwtPayload')
   const accountId = payload.accountId
-  const limit = parseInt(c.req.query('limit') || '20', 10)
+  const isSuperadmin = payload.role === 'superadmin'
+  const limit = parseInt(c.req.query('limit') || '100', 10)
   const offset = parseInt(c.req.query('offset') || '0', 10)
 
-  // N+1 解消: 1 クエリで user_accounts + line_users + user_service_statuses を JOIN
+  if (isSuperadmin) {
+    // Superadmin: 全ユーザーを取得し、所属admin情報も含める
+    const { results: rows } = await c.env.DB.prepare(`
+      SELECT
+        ua.id           AS userAccountId,
+        ua.line_user_id AS lineUserId,
+        lu.display_name AS display_name,
+        ua.status       AS status,
+        ua.joined_at    AS joinedAt,
+        ua.client_account_id AS clientAccountId,
+        uss.bot_enabled,
+        uss.record_enabled,
+        uss.consult_enabled,
+        uss.intake_completed,
+        a.name          AS accountName,
+        am.email        AS adminEmail
+      FROM user_accounts ua
+      LEFT JOIN line_users lu
+        ON lu.line_user_id = ua.line_user_id
+      LEFT JOIN user_service_statuses uss
+        ON uss.account_id = ua.client_account_id
+        AND uss.line_user_id = ua.line_user_id
+      LEFT JOIN accounts a
+        ON a.id = ua.client_account_id
+      LEFT JOIN account_memberships am
+        ON am.account_id = ua.client_account_id
+        AND am.role = 'admin'
+        AND am.status = 'active'
+      WHERE ua.status = 'active'
+      ORDER BY ua.joined_at DESC
+      LIMIT ?1 OFFSET ?2
+    `).bind(limit, offset).all<any>()
+
+    const users = rows.map((r: any) => ({
+      userAccountId: r.userAccountId,
+      lineUserId: r.lineUserId,
+      display_name: r.display_name,
+      status: r.status,
+      joinedAt: r.joinedAt,
+      clientAccountId: r.clientAccountId,
+      accountName: r.accountName,
+      adminEmail: r.adminEmail,
+      botEnabled: r.bot_enabled === 1,
+      recordEnabled: r.record_enabled === 1,
+      consultEnabled: r.consult_enabled === 1,
+      intakeCompleted: r.intake_completed === 1,
+    }))
+
+    return ok(c, { users, limit, offset })
+  }
+
+  // Admin: 自分のアカウントのユーザーのみ
   const rows = await listUserAccountsWithDetails(c.env.DB, accountId, limit, offset)
 
   const users = rows.map((r) => ({

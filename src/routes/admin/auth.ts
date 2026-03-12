@@ -297,6 +297,15 @@ authRouter.post('/accept-invite', async (c) => {
 })
 
 // ───────────────────────────────────────────────
+// GET /api/admin/auth/setup-status
+// superadmin 未登録時のみ true を返す（認証不要）
+// ───────────────────────────────────────────────
+authRouter.get('/setup-status', async (c) => {
+  const needsSetup = await isNoAdminYet(c.env.DB)
+  return ok(c, { needsSetup })
+})
+
+// ───────────────────────────────────────────────
 // GET /api/admin/auth/me
 // ───────────────────────────────────────────────
 authRouter.get('/me', async (c) => {

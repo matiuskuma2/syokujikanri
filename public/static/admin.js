@@ -10,6 +10,7 @@ let allUsers = [];
 let allMembers = [];
 let modalUser = null;
 let modalLineUserId = null;
+let currentUserTab = 'all';
 const API_BASE = '/api';
 
 // ===== ユーティリティ =====
@@ -73,11 +74,8 @@ function fmtDateTime(iso) {
 // ================================================================
 async function checkSetupNeeded() {
   try {
-    // 初回セットアップ用のエンドポイントをチェック
-    // register API は superadmin がいない時だけ新規作成を許可する
-    // ここではログイン画面を表示してユーザーが register を手動で呼べるようにする
-    // Setup チェックは login 失敗時に案内する方式
-    return false;
+    const res = await axios.get(API_BASE + '/admin/auth/setup-status');
+    return res.data?.data?.needsSetup === true;
   } catch {
     return false;
   }
@@ -148,9 +146,13 @@ async function handleLogin() {
     const msg = err.response?.data?.error || 'ログインに失敗しました';
     errEl.textContent = msg;
     errEl.classList.remove('hidden');
-    // 「Registration requires an invitation」以外で「Invalid credentials」の場合、初回セットアップを案内
+    // superadmin未登録の場合はセットアップへ案内
     if (msg.includes('Invalid credentials')) {
-      errEl.innerHTML = msg + '<br><span class="text-xs">初回の場合は<button onclick="showSetupScreen()" class="text-green-600 underline font-bold">こちら</button>から管理者アカウントを作成してください</span>';
+      checkSetupNeeded().then(needs => {
+        if (needs) {
+          errEl.innerHTML = msg + '<br><span class="text-xs">管理者が未登録です。<button onclick="showSetupScreen()" class="text-green-600 underline font-bold">初回セットアップ</button>から作成してください</span>';
+        }
+      });
     }
   }
 }
@@ -191,9 +193,17 @@ async function showDashboard() {
   if (currentAdmin) {
     document.getElementById('sidebar-email').textContent = currentAdmin.email || '-';
     const roleBadge = document.getElementById('sidebar-role-badge');
-    const roleLabel = { superadmin: 'スーパー管理者', admin: '管理者', staff: 'スタッフ' }[currentAdmin.role] || currentAdmin.role;
-    roleBadge.textContent = roleLabel;
-    roleBadge.className = 'text-xs px-2 py-0.5 rounded-full role-badge-' + (currentAdmin.role || 'staff');
+    const roleLabel = document.getElementById('sidebar-role-label');
+    const roleLabelMap = { superadmin: 'スーパー管理者', admin: '管理者', staff: 'スタッフ' };
+    if (roleLabel) roleLabel.textContent = roleLabelMap[currentAdmin.role] || currentAdmin.role;
+    if (roleBadge) {
+      const badgeClasses = {
+        superadmin: 'text-xs px-3 py-1 rounded-full font-bold inline-flex items-center gap-1 bg-amber-100 text-amber-800',
+        admin: 'text-xs px-3 py-1 rounded-full font-bold inline-flex items-center gap-1 bg-blue-100 text-blue-800',
+        staff: 'text-xs px-3 py-1 rounded-full font-bold inline-flex items-center gap-1 bg-gray-200 text-gray-600',
+      };
+      roleBadge.className = badgeClasses[currentAdmin.role] || badgeClasses.staff;
+    }
   }
 
   // ロール別メニュー表示制御
@@ -250,7 +260,7 @@ function dismissGuide() {
 // ページ切替
 // ================================================================
 function showPage(page) {
-  const pages = ['overview', 'users', 'invite-codes', 'members', 'line-guide', 'account', 'system'];
+  const pages = ['overview', 'users', 'invite-codes', 'members', 'line-guide', 'checklist', 'account', 'system'];
   pages.forEach(p => {
     const el = document.getElementById('page-' + p);
     if (el) el.classList.add('hidden');
@@ -280,6 +290,7 @@ function showPage(page) {
   else if (page === 'members') loadMembers();
   else if (page === 'account') loadAccount();
   else if (page === 'system') loadSystem();
+  else if (page === 'checklist') updateChecklistProgress();
   // line-guide は静的なので読み込み不要
 }
 
@@ -327,7 +338,8 @@ async function loadUsers() {
   try {
     const res = await axios.get(API_BASE + '/admin/users', { headers: apiHeaders() });
     allUsers = res.data.data.users || [];
-    renderUsersTable(allUsers);
+    updateUserCounts();
+    filterUsers();
   } catch (err) {
     console.error('loadUsers error:', err);
     document.getElementById('users-table').innerHTML = '<p class="text-red-400 text-sm">読み込みに失敗しました</p>';
@@ -336,12 +348,53 @@ async function loadUsers() {
 
 function filterUsers() {
   const q = document.getElementById('user-search').value.toLowerCase();
-  const filtered = q
-    ? allUsers.filter(u =>
-        (u.display_name || '').toLowerCase().includes(q) ||
-        (u.lineUserId || '').toLowerCase().includes(q))
-    : allUsers;
+  let filtered = allUsers;
+
+  // タブでフィルタ
+  if (currentUserTab === 'intake') {
+    filtered = filtered.filter(u => !u.intakeCompleted && u.botEnabled);
+  } else if (currentUserTab === 'active') {
+    filtered = filtered.filter(u => u.botEnabled && u.intakeCompleted);
+  } else if (currentUserTab === 'stopped') {
+    filtered = filtered.filter(u => !u.botEnabled || u.status === 'blocked');
+  }
+
+  // テキスト検索
+  if (q) {
+    filtered = filtered.filter(u =>
+      (u.display_name || '').toLowerCase().includes(q) ||
+      (u.lineUserId || '').toLowerCase().includes(q) ||
+      (u.adminEmail || '').toLowerCase().includes(q));
+  }
   renderUsersTable(filtered);
+}
+
+function setUserTab(tab) {
+  currentUserTab = tab;
+  const tabs = ['all', 'intake', 'active', 'stopped'];
+  tabs.forEach(t => {
+    const btn = document.getElementById('user-tab-' + t);
+    if (btn) {
+      if (t === tab) {
+        btn.className = 'px-4 py-2 rounded-xl text-sm font-medium bg-green-500 text-white transition-colors';
+      } else {
+        btn.className = 'px-4 py-2 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors';
+      }
+    }
+  });
+  filterUsers();
+}
+
+function updateUserCounts() {
+  const all = allUsers.length;
+  const intake = allUsers.filter(u => !u.intakeCompleted && u.botEnabled).length;
+  const active = allUsers.filter(u => u.botEnabled && u.intakeCompleted).length;
+  const stopped = allUsers.filter(u => !u.botEnabled || u.status === 'blocked').length;
+  const setCount = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  setCount('user-count-all', all);
+  setCount('user-count-intake', intake);
+  setCount('user-count-active', active);
+  setCount('user-count-stopped', stopped);
 }
 
 function renderUsersTable(users) {
@@ -358,12 +411,14 @@ function renderUsersTable(users) {
       </div>`;
     return;
   }
+  const isSuperadmin = currentAdmin?.role === 'superadmin';
   const isReadOnly = currentAdmin?.role === 'staff';
   tableEl.innerHTML = `
     <div class="overflow-x-auto">
     <table class="w-full text-sm">
       <thead><tr class="border-b text-left text-gray-500 bg-gray-50">
         <th class="pb-3 pt-2 px-3">ユーザー</th>
+        ${isSuperadmin ? '<th class="pb-3 pt-2 px-3">所属admin</th>' : ''}
         <th class="pb-3 pt-2 px-3">参加日</th>
         <th class="pb-3 pt-2 px-3 text-center">状態</th>
         <th class="pb-3 pt-2 px-3 text-center">BOT</th>
@@ -385,6 +440,13 @@ function renderUsersTable(users) {
               </div>
             </div>
           </td>
+          ${isSuperadmin ? `<td class="py-3 px-3">
+            <div class="flex items-center gap-1">
+              <i class="fas fa-user-shield text-blue-400 text-xs"></i>
+              <span class="text-xs text-blue-600 font-medium">${esc(u.adminEmail || '-')}</span>
+            </div>
+            ${u.accountName ? '<p class="text-xs text-gray-400">' + esc(u.accountName) + '</p>' : ''}
+          </td>` : ''}
           <td class="py-3 px-3 text-gray-500 text-xs">${fmtDate(u.joinedAt)}</td>
           <td class="py-3 px-3 text-center">${userStatusLabel(u)}</td>
           <td class="py-3 px-3 text-center">${badge(u.botEnabled)}</td>
@@ -742,22 +804,16 @@ function closeUserModal() {
 async function loadMembers() {
   const role = currentAdmin?.role;
 
-  // 作成フォームの表示制御
+  // superadminのみ作成フォームを表示
   const addSection = document.getElementById('add-member-section');
   const noCreateMsg = document.getElementById('members-no-create');
 
-  if (role === 'staff') {
-    if (addSection) addSection.classList.add('hidden');
-    if (noCreateMsg) noCreateMsg.classList.remove('hidden');
-  } else {
+  if (role === 'superadmin') {
     if (addSection) addSection.classList.remove('hidden');
     if (noCreateMsg) noCreateMsg.classList.add('hidden');
-
-    // superadminのみ「admin」ロールを選択可能
-    const adminOption = document.getElementById('add-member-role-admin');
-    if (adminOption) {
-      adminOption.style.display = role === 'superadmin' ? '' : 'none';
-    }
+  } else {
+    if (addSection) addSection.classList.add('hidden');
+    if (noCreateMsg) noCreateMsg.classList.remove('hidden');
   }
 
   // 管理者一覧を読み込み
@@ -848,7 +904,7 @@ function renderMembersTable(members) {
 async function handleAddMember() {
   const email = document.getElementById('add-member-email').value.trim();
   const password = document.getElementById('add-member-password').value;
-  const role = document.getElementById('add-member-role').value;
+  const role = 'admin'; // always admin — superadmin creates admins only
   const msgEl = document.getElementById('add-member-msg');
 
   if (!email || !password) { showMsg(msgEl, 'メールアドレスとパスワードを入力してください', 'error'); return; }
@@ -856,11 +912,10 @@ async function handleAddMember() {
 
   try {
     await axios.post(API_BASE + '/admin/dashboard/members', { email, password, role }, { headers: apiHeaders() });
-    showMsg(msgEl, `${email} を ${role === 'admin' ? '管理者' : 'スタッフ'}として作成しました！`, 'success');
+    showMsg(msgEl, `${email} を管理者(admin)として作成しました！`, 'success');
     document.getElementById('add-member-email').value = '';
     document.getElementById('add-member-password').value = '';
     showToast('管理者を作成しました', 'success');
-    // 一覧を再読み込み
     loadMembers();
   } catch (err) {
     const msg = err.response?.data?.error || '作成に失敗しました';
@@ -1068,6 +1123,20 @@ async function revokeInviteCode(codeId) {
 }
 
 // ================================================================
+// フローチェックリスト
+// ================================================================
+function updateChecklistProgress() {
+  const checkboxes = document.querySelectorAll('#page-checklist input[type="checkbox"]');
+  const total = checkboxes.length;
+  const checked = [...checkboxes].filter(c => c.checked).length;
+  const pct = total > 0 ? Math.round((checked / total) * 100) : 0;
+  const bar = document.getElementById('checklist-progress-bar');
+  if (bar) bar.style.width = pct + '%';
+  const text = document.getElementById('checklist-progress-text');
+  if (text) text.textContent = `${checked} / ${total} 完了 (${pct}%)`;
+}
+
+// ================================================================
 // システム管理 (Superadmin Only)
 // ================================================================
 async function loadSystem() {
@@ -1111,7 +1180,7 @@ async function loadSystem() {
 // ================================================================
 // 初期化
 // ================================================================
-window.addEventListener('load', () => {
+window.addEventListener('load', async () => {
   const savedToken = localStorage.getItem('diet_bot_token');
   const savedAdmin = localStorage.getItem('diet_bot_admin');
   if (savedToken) {
@@ -1120,5 +1189,12 @@ window.addEventListener('load', () => {
       try { currentAdmin = JSON.parse(savedAdmin); } catch {}
     }
     showDashboard();
+  } else {
+    // ログイン画面表示時にセットアップ状態を確認
+    const needsSetup = await checkSetupNeeded();
+    const setupLink = document.getElementById('setup-link');
+    if (setupLink) {
+      setupLink.classList.toggle('hidden', !needsSetup);
+    }
   }
 });
