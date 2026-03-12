@@ -191,6 +191,11 @@ async function showDashboard() {
   document.getElementById('dashboard-screen').classList.remove('hidden');
 
   if (currentAdmin) {
+    // アカウント名を左上に目立つように表示
+    const accountNameEl = document.getElementById('sidebar-account-name');
+    if (accountNameEl) {
+      accountNameEl.textContent = currentAdmin.accountName || currentAdmin.email?.split('@')[0] || 'diet-bot';
+    }
     document.getElementById('sidebar-email').textContent = currentAdmin.email || '-';
     const roleBadge = document.getElementById('sidebar-role-badge');
     const roleLabel = document.getElementById('sidebar-role-label');
@@ -198,11 +203,17 @@ async function showDashboard() {
     if (roleLabel) roleLabel.textContent = roleLabelMap[currentAdmin.role] || currentAdmin.role;
     if (roleBadge) {
       const badgeClasses = {
-        superadmin: 'text-xs px-3 py-1 rounded-full font-bold inline-flex items-center gap-1 bg-amber-100 text-amber-800',
-        admin: 'text-xs px-3 py-1 rounded-full font-bold inline-flex items-center gap-1 bg-blue-100 text-blue-800',
-        staff: 'text-xs px-3 py-1 rounded-full font-bold inline-flex items-center gap-1 bg-gray-200 text-gray-600',
+        superadmin: 'text-xs px-3 py-1.5 rounded-full font-bold inline-flex items-center gap-1.5 bg-amber-100 text-amber-800',
+        admin: 'text-xs px-3 py-1.5 rounded-full font-bold inline-flex items-center gap-1.5 bg-blue-100 text-blue-800',
+        staff: 'text-xs px-3 py-1.5 rounded-full font-bold inline-flex items-center gap-1.5 bg-gray-200 text-gray-600',
+      };
+      const badgeIcons = {
+        superadmin: '<i class="fas fa-crown text-[10px]"></i>',
+        admin: '<i class="fas fa-shield-halved text-[10px]"></i>',
+        staff: '<i class="fas fa-user text-[10px]"></i>',
       };
       roleBadge.className = badgeClasses[currentAdmin.role] || badgeClasses.staff;
+      roleBadge.innerHTML = (badgeIcons[currentAdmin.role] || '') + ' <span id="sidebar-role-label">' + (roleLabelMap[currentAdmin.role] || currentAdmin.role) + '</span>';
     }
   }
 

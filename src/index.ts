@@ -360,14 +360,14 @@ function getAdminDashboardHtml(): string {
           <i class="fas fa-leaf text-white"></i>
         </div>
         <div class="min-w-0">
-          <h1 class="font-bold text-white text-sm">diet-bot</h1>
-          <p class="text-gray-400 text-xs truncate" id="sidebar-email">-</p>
+          <h1 class="font-bold text-white text-sm truncate" id="sidebar-account-name">diet-bot</h1>
+          <p class="text-gray-500 text-xs truncate" id="sidebar-email">-</p>
         </div>
       </div>
       <!-- ロールバッジ（目立つように） -->
       <div class="mt-3">
-        <span id="sidebar-role-badge" class="text-xs px-3 py-1 rounded-full bg-gray-600 text-gray-300 font-bold inline-flex items-center gap-1">
-          <i class="fas fa-circle text-[6px]"></i>
+        <span id="sidebar-role-badge" class="text-xs px-3 py-1.5 rounded-full bg-gray-600 text-gray-300 font-bold inline-flex items-center gap-1.5">
+          <i class="fas fa-shield-halved text-[10px]"></i>
           <span id="sidebar-role-label">-</span>
         </span>
       </div>

@@ -54,6 +54,11 @@ authRouter.post('/login', async (c) => {
     'UPDATE account_memberships SET last_login_at = ?1 WHERE id = ?2'
   ).bind(nowIso(), membership.id).run()
 
+  // アカウント名を取得
+  const account = await c.env.DB.prepare(
+    'SELECT name FROM accounts WHERE id = ?1'
+  ).bind(membership.account_id).first<{ name: string | null }>()
+
   const token = await signJwt(
     { sub: membership.id, accountId: membership.account_id, role: membership.role === 'superadmin' ? 'superadmin' : 'admin' },
     c.env.JWT_SECRET,
@@ -62,7 +67,13 @@ authRouter.post('/login', async (c) => {
 
   return ok(c, {
     token,
-    admin: { id: membership.id, email: membership.email, role: membership.role, accountId: membership.account_id },
+    admin: {
+      id: membership.id,
+      email: membership.email,
+      role: membership.role,
+      accountId: membership.account_id,
+      accountName: account?.name ?? null,
+    },
   })
 })
 
@@ -315,11 +326,17 @@ authRouter.get('/me', async (c) => {
   if (!payload?.sub) return unauthorized(c, 'Unauthorized')
   const membership = await findMembershipById(c.env.DB, payload.sub)
   if (!membership) return notFound(c, 'Admin not found')
+
+  const account = await c.env.DB.prepare(
+    'SELECT name FROM accounts WHERE id = ?1'
+  ).bind(membership.account_id).first<{ name: string | null }>()
+
   return ok(c, {
     id: membership.id,
     email: membership.email,
     role: membership.role,
     accountId: membership.account_id,
+    accountName: account?.name ?? null,
     lastLoginAt: membership.last_login_at ?? null,
   })
 })
