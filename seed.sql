@@ -206,6 +206,98 @@ VALUES (
 );
 
 -- ===================================================================
+-- 6.5 ナレッジドキュメント（初期知識データ）
+-- ===================================================================
+
+-- 共通知識: PFCバランス基礎
+INSERT OR IGNORE INTO knowledge_documents (
+  id, knowledge_base_id, title, content, is_active, priority, created_at, updated_at
+) VALUES (
+  'kd_common_0000000000000000000000000001',
+  'kb_common_000000000000000000000000000001',
+  'PFCバランスの基礎',
+  'PFCバランスとは、タンパク質(Protein)・脂質(Fat)・炭水化物(Carbohydrate)の摂取比率のこと。一般的なダイエットの推奨比率はP:F:C=30:20:50。タンパク質は体重×1.2〜2.0g/日（運動量により変動）。脂質は総カロリーの20〜25%。炭水化物は残りで調整。極端な糖質制限は長期的にリバウンドリスクが高い。',
+  1, 10, datetime('now'), datetime('now')
+);
+
+-- 共通知識: 基礎代謝と消費カロリー
+INSERT OR IGNORE INTO knowledge_documents (
+  id, knowledge_base_id, title, content, is_active, priority, created_at, updated_at
+) VALUES (
+  'kd_common_0000000000000000000000000002',
+  'kb_common_000000000000000000000000000001',
+  '基礎代謝と消費カロリー計算',
+  '基礎代謝(BMR)の計算式（Harris-Benedict改良版）: 男性=13.397×体重kg+4.799×身長cm-5.677×年齢+88.362。女性=9.247×体重kg+3.098×身長cm-4.330×年齢+447.593。活動代謝(TDEE)=BMR×活動係数。活動係数: 座り仕事中心=1.2、軽い運動=1.375、週3-5回運動=1.55、毎日激しく運動=1.725。減量には1日あたりTDEE-500kcal程度の摂取カロリーが目安（週0.5kg減ペース）。',
+  1, 10, datetime('now'), datetime('now')
+);
+
+-- 共通知識: 食事タイミングと頻度
+INSERT OR IGNORE INTO knowledge_documents (
+  id, knowledge_base_id, title, content, is_active, priority, created_at, updated_at
+) VALUES (
+  'kd_common_0000000000000000000000000003',
+  'kb_common_000000000000000000000000000001',
+  '食事タイミングと頻度のポイント',
+  '1日3食を基本とし規則正しい時間に食べる。朝食を抜くと昼食での過食リスクが上がる。夕食は就寝3時間前までに済ませるのが理想。間食は200kcal以内を目安にし、タンパク質を含むもの（ヨーグルト、ナッツ等）が望ましい。空腹時間が長すぎると筋肉分解が進むため、6時間以上空けないことを推奨。水分は1日2L以上を目安に（水・お茶が中心）。',
+  1, 8, datetime('now'), datetime('now')
+);
+
+-- 共通知識: 運動とダイエット
+INSERT OR IGNORE INTO knowledge_documents (
+  id, knowledge_base_id, title, content, is_active, priority, created_at, updated_at
+) VALUES (
+  'kd_common_0000000000000000000000000004',
+  'kb_common_000000000000000000000000000001',
+  '運動とダイエットの関係',
+  '有酸素運動（ウォーキング、ジョギング、水泳等）は脂肪燃焼に効果的。週150分以上の中程度の有酸素運動が推奨。筋トレは基礎代謝の維持・向上に不可欠。食事制限のみでは筋肉量が減少し、リバウンドしやすくなる。NEAT（非運動性活動熱産生）の増加も重要：階段を使う、歩く距離を増やす等。運動後30分以内のタンパク質摂取が筋肉回復に効果的。',
+  1, 8, datetime('now'), datetime('now')
+);
+
+-- 共通知識: 体重の変動について
+INSERT OR IGNORE INTO knowledge_documents (
+  id, knowledge_base_id, title, content, is_active, priority, created_at, updated_at
+) VALUES (
+  'kd_common_0000000000000000000000000005',
+  'kb_common_000000000000000000000000000001',
+  '体重の日内変動と正しい測り方',
+  '体重は1日で1〜2kg変動するのが正常。水分、食事、排泄、運動で変わる。毎日同じ条件（朝起きてトイレ後、食事前）で測定するのがベスト。週単位の平均値で推移を見ることが重要。生理周期（女性）では2〜3kg増えることもある。1日で1kg体重が増えても、それは脂肪ではなく水分の可能性が高い。1kgの脂肪を蓄えるには約7200kcalの過剰摂取が必要。',
+  1, 9, datetime('now'), datetime('now')
+);
+
+-- 共通知識: 日本食のカロリー目安
+INSERT OR IGNORE INTO knowledge_documents (
+  id, knowledge_base_id, title, content, is_active, priority, created_at, updated_at
+) VALUES (
+  'kd_common_0000000000000000000000000006',
+  'kb_common_000000000000000000000000000001',
+  '日本食の一般的なカロリー目安',
+  '白米1膳(150g)=234kcal。食パン1枚(6枚切り)=158kcal。味噌汁1杯=50kcal。焼き魚(鮭1切れ)=130kcal。鶏胸肉100g=120kcal。牛丼=700kcal前後。カレーライス=750kcal前後。ラーメン=500〜800kcal。サラダ(ドレッシング込み)=100〜200kcal。コンビニおにぎり1個=170〜250kcal。コンビニサンドイッチ=250〜350kcal。コンビニサラダ=70〜150kcal。',
+  1, 9, datetime('now'), datetime('now')
+);
+
+-- 共通知識: 外食・コンビニメニューの選び方
+INSERT OR IGNORE INTO knowledge_documents (
+  id, knowledge_base_id, title, content, is_active, priority, created_at, updated_at
+) VALUES (
+  'kd_common_0000000000000000000000000007',
+  'kb_common_000000000000000000000000000001',
+  '外食・コンビニでのヘルシー選択',
+  'コンビニ: サラダチキン(110kcal/高タンパク)、ゆで卵(80kcal)、豆腐(60kcal)がおすすめ。揚げ物・菓子パンは避ける。ファミレス: グリルチキン、魚定食を選択。ご飯は少なめに。ファストフード: セットよりも単品＋サラダ。ドリンクは水かお茶。居酒屋: 枝豆、冷奴、刺身、焼き鳥（塩）がダイエット向き。ビールは1杯140kcal、ハイボール70kcal。',
+  1, 7, datetime('now'), datetime('now')
+);
+
+-- 共通知識: よくある質問
+INSERT OR IGNORE INTO knowledge_documents (
+  id, knowledge_base_id, title, content, is_active, priority, created_at, updated_at
+) VALUES (
+  'kd_common_0000000000000000000000000008',
+  'kb_common_000000000000000000000000000001',
+  'ダイエットFAQ',
+  'Q:停滞期はどうすれば？ A:体重が2〜4週間変わらないのは正常。食事内容を見直し、運動の種類を変えてみる。チートデイ（週1回普通に食べる日）も有効。Q:お酒は飲んでいい？ A:週2日以下、1回2杯以内なら大きな影響は少ない。蒸留酒（ハイボール、焼酎）が低カロリー。Q:夜食は太る？ A:時間帯より総カロリーが重要。ただし就寝前の食事は消化不良の原因に。Q:サプリメントは必要？ A:バランスの良い食事が基本。不足しがちなのはビタミンD、鉄分、食物繊維。',
+  1, 7, datetime('now'), datetime('now')
+);
+
+-- ===================================================================
 -- 7. テスト用 LINE ユーザー・UserAccount
 -- ===================================================================
 

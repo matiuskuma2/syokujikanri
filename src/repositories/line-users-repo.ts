@@ -190,15 +190,27 @@ export async function createUserAccount(
 /**
  * UserAccount をupsertし、確実に1件返す
  * follow イベント時の必須処理
+ * ON CONFLICT で安全にupsert（並行フォローイベント対応）
  */
 export async function ensureUserAccount(
   db: D1Database,
   lineUserId: string,
   clientAccountId: string
 ): Promise<UserAccount> {
-  const existing = await findUserAccount(db, lineUserId, clientAccountId)
-  if (existing) return existing
-  return createUserAccount(db, { lineUserId, clientAccountId })
+  const id = generateId()
+  const now = nowIso()
+  await db
+    .prepare(`
+      INSERT INTO user_accounts
+        (id, line_user_id, client_account_id, status, joined_at, created_at, updated_at)
+      VALUES (?1, ?2, ?3, 'active', ?4, ?4, ?4)
+      ON CONFLICT(line_user_id, client_account_id) DO UPDATE SET
+        status = 'active',
+        updated_at = ?4
+    `)
+    .bind(id, lineUserId, clientAccountId, now)
+    .run()
+  return (await findUserAccount(db, lineUserId, clientAccountId))!
 }
 
 /** アカウントに紐付く全 UserAccount 一覧 */

@@ -19,9 +19,9 @@ import type {
   LineMessageEvent,
 } from '../../types/bindings'
 
-import { getUserProfile, replyText, replyWithQuickReplies, getMessageContent } from './reply'
+import { getUserProfile, replyText, replyTextWithQuickReplies, replyWithQuickReplies, getMessageContent } from './reply'
 import { startIntakeFlow, handleIntakeStep, beginIntakeFromStart, resumeIntakeFlow } from './intake-flow'
-import { upsertLineUser, ensureUserAccount } from '../../repositories/line-users-repo'
+import { upsertLineUser, ensureUserAccount, findUserAccount } from '../../repositories/line-users-repo'
 import { upsertUserServiceStatus, checkServiceAccess } from '../../repositories/subscriptions-repo'
 import { ensureOpenThread, createConversationMessage, updateThreadMode } from '../../repositories/conversations-repo'
 import { findActiveModeSession, upsertModeSession, deleteModeSession } from '../../repositories/mode-sessions-repo'
@@ -205,14 +205,16 @@ async function handleFollowEvent(
     intakeCompleted: 0,
   })
 
-  // 5. 会話スレッド作成
-  const userAccount = await ensureUserAccount(env.DB, lineUserId, clientAccountId)
-  await ensureOpenThread(env.DB, {
-    lineChannelId,
-    lineUserId,
-    clientAccountId,
-    userAccountId: userAccount.id,
-  })
+  // 5. 会話スレッド作成（ensureUserAccount は上のステップ3で既に呼ばれているため再利用）
+  const existingUA = await findUserAccount(env.DB, lineUserId, clientAccountId)
+  if (existingUA) {
+    await ensureOpenThread(env.DB, {
+      lineChannelId,
+      lineUserId,
+      clientAccountId,
+      userAccountId: existingUA.id,
+    })
+  }
 
   // 6. 招待コード入力を促すメッセージを送信
   //    コードが入力されたら handleInviteCode で正しいアカウントに紐付けられる
@@ -575,12 +577,45 @@ async function handleConsultText(
         content: m.raw_text ?? '',
       }))
 
-    const systemPrompt = `あなたはダイエット専門のAIアシスタントです。
+    // ---------------------------------------------------------------
+    // 1. DB から system_prompt を取得（なければハードコードフォールバック）
+    // ---------------------------------------------------------------
+    const { getPublishedSystemPrompt, searchKnowledgeForBot, buildUserContext } =
+      await import('../../repositories/knowledge-repo')
+
+    let basePrompt = await getPublishedSystemPrompt(env.DB, ctx.clientAccountId)
+    if (!basePrompt) {
+      basePrompt = `あなたはダイエット専門のAIアシスタントです。
 ユーザーの食事・運動・体重管理をサポートし、科学的根拠に基づいたアドバイスを提供します。
 - 常に励ましながら、具体的で実践的なアドバイスをしてください
 - 医療診断は行わず、気になる症状は専門医への相談を促してください
 - 日本語で、丁寧かつ親しみやすい口調で応答してください
 - 回答は200文字以内で簡潔にまとめてください`
+    }
+
+    // ---------------------------------------------------------------
+    // 2. ナレッジ検索（ユーザーの質問に関連する知識を取得）
+    // ---------------------------------------------------------------
+    const knowledgeDocs = await searchKnowledgeForBot(env.DB, ctx.clientAccountId, text, 3)
+    let knowledgeContext = ''
+    if (knowledgeDocs.length > 0) {
+      knowledgeContext = '\n\n【参考ナレッジ】\n' +
+        knowledgeDocs.map(d => `[${d.title}] ${d.content}`).join('\n---\n')
+    }
+
+    // ---------------------------------------------------------------
+    // 3. ユーザー個人コンテキスト（プロフィール・体重推移・食事記録）
+    // ---------------------------------------------------------------
+    const userContext = await buildUserContext(env.DB, userAccountId)
+    let personalContext = ''
+    if (userContext.trim()) {
+      personalContext = '\n\n' + userContext
+    }
+
+    // ---------------------------------------------------------------
+    // 4. system prompt を組み立て
+    // ---------------------------------------------------------------
+    const systemPrompt = basePrompt + personalContext + knowledgeContext
 
     const response = await ai.createResponse(
       [
