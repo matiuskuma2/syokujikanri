@@ -878,17 +878,48 @@ async function handleInviteCode(
 
   // ---------------------------------------------------------------
   // 1. 既に同じアカウントに紐付け済みか先にチェック
-  //    (useInviteCode の ALREADY_USED 判定に加え、user_service_statuses で確認)
+  //    問診が未完了なら問診を案内する
   // ---------------------------------------------------------------
   const { findInviteCodeUsageByLineUser } = await import('../../repositories/invite-codes-repo')
   const existingUsage = await findInviteCodeUsageByLineUser(env.DB, lineUserId)
   if (existingUsage) {
-    // 既に招待コードを使用済み → 「登録済み」として案内
-    await replyText(
-      replyToken,
-      'ℹ️ このコードは既に登録済みです。\nそのままご利用いただけます！\n\n食事の写真を送ったり、「相談モード」と入力してご利用ください。',
-      env.LINE_CHANNEL_ACCESS_TOKEN
-    )
+    // 既に招待コードを使用済み → 問診状態を確認
+    const access = await checkServiceAccess(env.DB, { accountId: clientAccountId, lineUserId })
+    const effectiveAccountId = access?.accountId ?? clientAccountId
+
+    if (access?.intakeCompleted) {
+      // 問診完了済み → 通常利用を案内
+      await replyText(
+        replyToken,
+        'ℹ️ 既に登録済みです。\nそのままご利用いただけます！\n\n📷 食事の写真を送ると自動解析\n⚖️ 体重を入力すると記録\n💬「相談モード」と入力でAIに相談',
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+    } else {
+      // 問診未完了 → 問診を開始/再開する
+      await replyText(
+        replyToken,
+        'ℹ️ 既に登録済みです！\n\n初回ヒアリングがまだ完了していないようですので、続けましょう 😊',
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+
+      // pushで問診開始（replyTokenは使用済み）
+      try {
+        const ua = await ensureUA(env.DB, lineUserId, effectiveAccountId)
+        await upsertModeSession(env.DB, {
+          clientAccountId: effectiveAccountId,
+          lineUserId,
+          currentMode: 'intake',
+          currentStep: 'intake_nickname',
+        })
+        await pushText(
+          lineUserId,
+          '📋 初回ヒアリングを開始します！\n\n━━━━━━━━━━━━━━━\n【質問 1/9】\nお名前（ニックネームでOK）を教えてください！',
+          env.LINE_CHANNEL_ACCESS_TOKEN
+        )
+      } catch (err) {
+        console.warn(`[LINE] intake push after existing code failed:`, err)
+      }
+    }
     console.log(`[LINE] invite code skipped (already registered): ${code} by ${lineUserId}`)
     return
   }
@@ -959,11 +990,11 @@ async function handleInviteCode(
       clientAccountId: targetAccountId,
       lineUserId,
       currentMode: 'intake',
-      currentStep: 'nickname',
+      currentStep: 'intake_nickname',
     })
     await pushMsg(
       lineUserId,
-      '📋 初回ヒアリングを開始します！\n\nまずは、お名前（ニックネーム）を教えてください 😊\n\n例: たなか、タロウ',
+      '📋 初回ヒアリングを開始します！\n\n━━━━━━━━━━━━━━━\n【質問 1/9】\nお名前（ニックネームでOK）を教えてください！',
       env.LINE_CHANNEL_ACCESS_TOKEN
     )
   } catch (err) {
