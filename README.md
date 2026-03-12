@@ -29,9 +29,51 @@
 | **LIFF Channel ID (Login)** | 2009409790 |
 | **LIFF ID** | 2009409790-DekZRh4t |
 
+---
+
+## 操作開始ガイド
+
+### ロール別責務（確定版）
+
+| ロール | 責務 | できること |
+|--------|------|-----------|
+| **superadmin** | adminの作成・無効化、全体監視 | admin作成/停止（カスケード停止）、全LINEユーザーの所属admin確認、システム管理 |
+| **admin** | LINE登録案内の送信、ユーザーの閲覧・管理 | 招待コード発行、LINE案内文コピー、ユーザー一覧（ステータスタブ）、ユーザー詳細閲覧、サービスON/OFF |
+| **user（LINE）** | LINEで記録、LIFFダッシュボード閲覧 | 招待コード入力、問診回答、体重記録、食事写真送信、AI相談、ダッシュボード閲覧 |
+
+### Superadmin → Admin → User 完全フロー
+
+```
+1. 【superadmin】 /admin にアクセス
+   ↓ 初回: 「初回セットアップはこちら（superadmin用）」リンクをクリック
+   ↓ → メール+パスワードでsuperadminアカウント作成
+   ↓ → ログイン画面に自動で戻り、入力済み
+   
+2. 【superadmin】 ログイン → 「管理者管理」でadminを作成
+   ↓ → メール+仮パスワードで即時作成
+   ↓ → 新しいadminアカウントが自動生成される
+
+3. 【admin】 仮パスワードでログイン → ウェルカムガイド表示
+   ↓ → 「招待コード」で顧客用コードを発行（例: ABC-1234）
+   ↓ → 「LINE案内文」でテンプレートをコピーし、顧客に送信
+
+4. 【user】 顧客がLINE友達追加 → BOTが「招待コードを送信してください」
+   ↓ → 顧客がコード送信 → 自動でadminに紐付け
+   ↓ → 問診開始 → 9問回答 → 完了
+
+5. 【user】 日常利用開始
+   ↓ → 体重記録、食事写真、AI相談、LIFFダッシュボード
+   ↓ → adminは「LINEユーザー管理」で記録を確認
+```
+
+### 実機テストチェックリスト（管理画面内に組み込み済み）
+`/admin` → サイドバー「フローチェック」ページで全18項目のインタラクティブチェックリストを利用できます。
+
+---
+
 ## 動作確認済み機能（Phase 1）
 
-### ✅ 招待コードによるユーザー識別（重要）
+### 招待コードによるユーザー識別
 
 **問題**: LINE公式アカウントを友達追加しただけでは、そのユーザーがどのadminの顧客か区別できない。
 **解決策**: 招待コード方式でユーザーを正しいアカウント（admin）に紐付ける。
@@ -43,10 +85,6 @@
 4. 顧客がコードを送信 → `user_accounts.client_account_id` が該当adminのaccountに紐付け
 5. 紐付け完了後、初回問診（9問）が自動開始
 
-**DBテーブル**:
-- `invite_codes`: コード管理（code, account_id, max_uses, use_count, expires_at, status）
-- `invite_code_usages`: 使用履歴（invite_code_id, line_user_id, used_at）
-
 **API**:
 | メソッド | エンドポイント | 説明 |
 |----------|---------------|------|
@@ -54,90 +92,47 @@
 | POST | `/api/admin/invite-codes` | 招待コード発行 |
 | PATCH | `/api/admin/invite-codes/:id/revoke` | 招待コード無効化 |
 
-### ✅ カスケード停止（admin停止 → 従属ユーザー自動停止）
+### カスケード停止（admin停止 → 従属ユーザー自動停止）
 
-**重要な設計方針**: 支払いを止めたadminに紐づくユーザーは全員利用停止になる。
+- superadmin が admin を「停止」→ `accounts.status=suspended` + 全従属ユーザー `bot_enabled=0`
+- superadmin が「有効化」→ 全て復帰
 
-**仕組み**:
-- superadmin が管理者（admin）を「停止」にすると:
-  1. `account_memberships.status` → `suspended`
-  2. `accounts.status` → `suspended`
-  3. そのアカウントに紐づく全 `user_service_statuses.bot_enabled` → `0`
-  4. → 従属ユーザーはLINE BOTからメッセージを送っても「このサービスは現在ご利用いただけません」と返される
-- superadmin が「有効化」すると全て復帰
+### 管理画面 — 最新機能
 
-**コード**: `PATCH /api/admin/dashboard/members/:id` (dashboard.ts)
+| 機能 | 説明 |
+|------|------|
+| **初回セットアップフロー** | ログイン画面に「初回セットアップはこちら」リンク表示（`/api/admin/auth/setup-status` でsuperadmin未登録時のみ表示） |
+| **ステータスタブ** | LINEユーザー一覧に「全件/未問診/利用中/停止中」タブフィルター |
+| **ロール表示強化** | サイドバーに色付きロールバッジ（amber: superadmin, blue: admin） |
+| **所属admin表示** | superadminのLINEユーザー一覧で各ユーザーの所属admin（メール）を表示 |
+| **フローチェックリスト** | superadmin/admin/userの操作フローを18項目のチェックリストで確認（進捗バー付き） |
+| **2ロール簡素化** | 権限カードをsuperadmin/adminの2構成に簡素化（staff作成は非推奨化） |
 
-### ✅ LINE Webhook
-- **follow イベント**: line_users・user_accounts 自動作成、**招待コード入力を促すメッセージ送信**
-- **招待コード検出**: `ABC-1234` パターンのテキスト → `invite_codes` テーブルで検証 → アカウント紐付け
-- **テキスト記録**: 体重（例: `72.5kg`）→ daily_logs・body_metrics に保存、即時返信
-- **相談モード**: `相談モード` で切替 → GPT-4o による AI 返信
-- **署名検証**: HMAC-SHA256 署名検証
-- **画像解析**: 食事写真/体重計/経過写真を R2 保存 → Queue → OpenAI Vision 解析 → 仮保存 → ユーザー確認後に正式登録
+### LINE Webhook
+- **follow イベント**: line_users・user_accounts 自動作成、招待コード入力を促すメッセージ送信
+- **招待コード検出**: `ABC-1234` パターンのテキスト → 検証 → アカウント紐付け
+- **テキスト記録**: 体重（例: `72.5kg`）→ daily_logs・body_metrics に保存
+- **相談モード**: GPT-4o による AI 返信
+- **画像解析**: 食事写真/体重計/経過写真を R2 → Queue → OpenAI Vision → 確認フロー
 
-### ✅ 問診 (Intake) フロー — M2-1
+### 問診 (Intake) フロー
 - 9問の初回問診（ニックネーム/性別/年代/身長/体重/目標/理由/気になること/活動レベル）
-- `intake_completed` フラグで完了管理
-- 途中離脱後の再開: `問診再開` / `問診やり直し` コマンド対応
-- follow 時: 招待コード使用済みユーザーは問診再開、未使用は招待コード入力案内
+- 途中離脱後の再開対応
 
-### ✅ 画像確認フロー — M3-1/M3-2/M3-6/M3-7
-- 画像解析結果を `image_intake_results` に仮保存 (`applied_flag=0`)
-- LINE QuickReply で「確定」「取消」選択可能 (`pending_image_confirm` モード)
-- 確定 → meal_entries / body_metrics / progress_photos に正式登録
-- 取消 → `applied_flag=2` でマーク
-- 24時間未応答 → hourly cron で `applied_flag=3` (expired) に自動更新
+### LIFF認証フロー
+- `/liff` → LINE Login → JWT発行 → `/dashboard`
+- `USER_NOT_REGISTERED`, `ACCOUNT_NOT_FOUND`, `INVALID_LINE_TOKEN` の各状態に対応
 
-### ✅ LIFF認証フロー — M1-4
-- `/liff` → liff.init() → ID Token取得 → `/api/auth/line` → JWT発行 → `/dashboard`
-- `USER_NOT_REGISTERED`: 登録手順ガイド画面（友達追加→問診→再読み込み）
-- `ACCOUNT_NOT_FOUND`: アカウント紐付け待ち画面
-- `INVALID_LINE_TOKEN`: 再ログインボタン付き画面
+### ユーザーPWA
+- `/dashboard` で3状態分岐（停止中/問診未完了/通常）
 
-### ✅ ユーザーPWA — M1-3 / L-1
-- `/dashboard` で3状態分岐:
-  - **停止中** (`botEnabled=false`): 全画面ブロック + 再読み込みボタン
-  - **問診未完了** (`intakeCompleted=false`): 問診誘導画面 + LINE遷移ボタン + ナビ制限
-  - **通常**: フルダッシュボード（今日のサマリー/体重グラフ/食事/記録/写真/レポート/プロフィール）
+---
 
-### ✅ 管理画面 — M1-5 / M2-2 / M2-3 / L-2
-- `/admin` → ログイン（JWT）→ ダッシュボード統計
-  - 総ユーザー数 / 今日の記録数 / 週間アクティブ / **問診未完了数**
-- **初回セットアップ**: superadminが未登録の場合、ログイン画面から初期セットアップ画面に遷移可能
-- **ロール別ウェルカムガイド**: 初回ログイン時に「最初にやること」を表示（superadmin/admin/staff別）
-- **ロール別ナビゲーション**:
-  - **superadmin**: ダッシュボード / LINEユーザー管理 / **招待コード** / 管理者管理 / LINE案内文 / アカウント設定 / システム管理
-  - **admin**: ダッシュボード / LINEユーザー管理 / **招待コード** / 管理者管理 / LINE案内文 / アカウント設定
-  - **staff**: ダッシュボード / LINEユーザー管理 / アカウント設定（閲覧のみ）
-- **招待コード管理ページ（NEW）**:
-  - 発行フォーム（ラベル/使用回数上限/有効期限を選択）
-  - 発行済みコード一覧（コード/ラベル/使用状況/状態/有効期限/作成者）
-  - コードの無効化操作
-  - ワンクリックでコードをクリップボードにコピー
-- **管理者管理ページ**:
-  - 管理者一覧（メール/権限/状態/LINEユーザー数/最終ログイン）
-  - 管理者追加フォーム（メール+仮パスワード+権限選択）
-  - 管理者ステータス切替（有効/停止）— superadminのみ → **カスケード停止連動**
-  - 権限説明カード（superadmin/admin/staff）
-- **LINE案内文ページ**: QRコード表示 / LINE ID / **招待コード入力ガイド付き**メール用テンプレ / SMS用テンプレ / ウェルカムページURL
-- ユーザー一覧: ステータスラベル（ブロック/停止中/問診未完了/制限中/利用中）
-- ユーザー詳細モーダル（4タブ）:
-  - **概要**: プロフィール + 問診回答 + サービス設定 + 直近記録
-  - **記録**: 30日間の食事記録（タイプ別バッジ・カロリー表示）
-  - **写真**: 進捗写真グリッド（タイプ/ポーズラベル付き）
-  - **レポート**: 7日間サマリー（記録日数/食事数/ログ件数）
+## 管理者 API
 
-### ✅ Superadmin画面 — L-3
-- `/admin` でsuperadmin限定「システム管理」メニュー
-  - API バージョン / ランタイム / データベース情報
-  - データベース統計（テーブルサイズ）— invite_codes, invite_code_usages 追加
-  - 定期ジョブ一覧（リマインダー/週次レポート/期限切れ清掃/**招待コード期限切れ処理**）
-  - API エンドポイント一覧
-
-### 管理者 API
 | メソッド | エンドポイント | 説明 |
 |----------|---------------|------|
+| GET | `/api/admin/auth/setup-status` | **superadmin存在チェック（認証不要）** |
 | POST | `/api/admin/auth/register` | 初回superadmin登録 |
 | POST | `/api/admin/auth/login` | ログイン（JWT発行） |
 | POST | `/api/admin/auth/invite` | メール招待（SendGrid） |
@@ -149,29 +144,15 @@
 | GET | `/api/admin/dashboard/stats` | ダッシュボード統計 |
 | GET | `/api/admin/dashboard/members` | 管理者一覧 |
 | POST | `/api/admin/dashboard/members` | 管理者直接作成（仮パスワード） |
-| PATCH | `/api/admin/dashboard/members/:id` | 管理者ステータス変更 **+カスケード停止** |
-| GET | `/api/admin/invite-codes` | **招待コード一覧** |
-| POST | `/api/admin/invite-codes` | **招待コード発行** |
-| PATCH | `/api/admin/invite-codes/:id/revoke` | **招待コード無効化** |
-| GET | `/api/admin/users` | LINEユーザー一覧 |
+| PATCH | `/api/admin/dashboard/members/:id` | 管理者ステータス変更+カスケード停止 |
+| GET | `/api/admin/invite-codes` | 招待コード一覧 |
+| POST | `/api/admin/invite-codes` | 招待コード発行 |
+| PATCH | `/api/admin/invite-codes/:id/revoke` | 招待コード無効化 |
+| GET | `/api/admin/users` | LINEユーザー一覧（superadmin:全件+admin情報） |
 | GET | `/api/admin/users/:id` | ユーザー詳細 |
 | PATCH | `/api/admin/users/:id/service` | サービス設定変更 |
 
-### ロール別初回フロー
-1. **Superadmin**:
-   - `/admin` にアクセス → ログイン画面 → 「こちら」から初期セットアップ → アカウント作成
-   - ログイン → ウェルカムガイド → 「管理者管理」で admin を追加 → システム設定確認
-2. **Admin**:
-   - superadmin が作成した仮パスワードで `/admin` にログイン
-   - ウェルカムガイド → **「招待コード」で顧客用コード発行** → 「LINE案内文」で顧客にコード付きLINE登録案内 → ユーザー記録を確認
-3. **User（エンドユーザー）**:
-   - LINE友達追加 → **招待コード送信** → 初回問診（9問）→ 食事写真・体重送信 → LIFF ダッシュボード
-
-### ✅ インフラ
-- Cloudflare Pages デプロイ済み
-- D1 (diet-bot-production) — **10件マイグレーション適用済み**
-- R2 (diet-bot-media) — 画像保存用
-- Queue (diet-bot-line-events + DLQ) — 画像解析ジョブ用
+---
 
 ## データアーキテクチャ
 ```
@@ -219,38 +200,29 @@ accounts → line_channels → line_users → user_accounts
 9. LIFF URL: https://liff.line.me/2009409790-DekZRh4t → ダッシュボード表示
 
 ## LINE Developers での追加設定（手動）
-> **重要**: 以下はLINE Developersコンソールで手動設定が必要
-
-1. **LIFFエンドポイントURL設定**（Login Channel 2009409790 → LIFF → 編集）
-   ```
-   エンドポイントURL: https://diet-bot.pages.dev/liff
-   ```
-2. **Webhook URL確認**（Messaging API → Webhook設定）
-   ```
-   Webhook URL: https://diet-bot.pages.dev/api/webhooks/line ✅ 設定済み
-   ```
+1. **LIFFエンドポイントURL設定**: `https://diet-bot.pages.dev/liff`
+2. **Webhook URL確認**: `https://diet-bot.pages.dev/api/webhooks/line`
 
 ## デプロイ
 - **プラットフォーム**: Cloudflare Pages
 - **ステータス**: ✅ 本番稼働中
 - **技術スタック**: Hono + TypeScript + Cloudflare D1/R2/Queue + OpenAI GPT-4o
+- **GitHub**: https://github.com/matiuskuma2/syokujikanri
 - **最終更新**: 2026-03-12
 
 ## ローカル開発
 ```bash
-# 依存インストール
 npm install
-
-# D1マイグレーション（初回）
 npm run db:migrate:local
-
-# シードデータ投入
 npm run db:seed
-
-# 開発サーバー起動
 npm run build
 pm2 start ecosystem.config.cjs
-
-# ヘルスチェック
 curl http://localhost:3000/api/health
 ```
+
+## 次のステップ（未実装）
+1. Cloudflare API key設定後の本番デプロイ
+2. 実機テスト: superadmin→admin→userの完全フロー検証
+3. LINE端末での友達追加 → 招待コード → 問診 → 記録フルテスト
+4. パスワード変更フロー（admin初回ログイン時に仮パスワード変更促進）
+5. 請求管理・サブスクリプション機能（Phase 2）
