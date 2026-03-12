@@ -414,6 +414,10 @@ function getAdminDashboardHtml(): string {
           class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-300 hover:bg-gray-700 transition-colors text-left">
           <i class="fas fa-server w-5 text-center"></i><span>システム管理</span>
         </button>
+        <button id="nav-bot-settings" onclick="showPage('bot-settings')"
+          class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-300 hover:bg-gray-700 transition-colors text-left">
+          <i class="fas fa-robot w-5 text-center"></i><span>BOT/ナレッジ設定</span>
+        </button>
       </div>
     </nav>
     <div class="p-4 border-t border-gray-700">
@@ -1253,6 +1257,69 @@ https://lin.ee/n4PoXrR</div>
       </div>
     </div>
 
+    <!-- ===== BOT/ナレッジ設定ページ (Superadmin Only) ===== -->
+    <div id="page-bot-settings" class="hidden p-8">
+      <h1 class="text-2xl font-bold text-gray-800 mb-6"><i class="fas fa-robot mr-2 text-purple-500"></i>BOT / ナレッジ設定</h1>
+
+      <!-- BOT 一覧 -->
+      <div class="bg-white rounded-xl shadow p-6 mb-6">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="font-bold text-gray-800"><i class="fas fa-robot mr-2 text-blue-500"></i>BOT 一覧</h2>
+        </div>
+        <div id="bots-list" class="text-gray-400 text-sm">読み込み中...</div>
+      </div>
+
+      <!-- プロンプトエディタ -->
+      <div id="prompt-editor-section" class="hidden bg-white rounded-xl shadow p-6 mb-6">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="font-bold text-gray-800"><i class="fas fa-edit mr-2 text-green-500"></i>System Prompt エディタ</h2>
+          <div class="flex gap-2">
+            <span id="prompt-bot-name" class="text-sm text-gray-500"></span>
+            <span id="prompt-version-badge" class="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full"></span>
+          </div>
+        </div>
+        <textarea id="prompt-editor" rows="15"
+          class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent font-mono text-sm leading-relaxed resize-y"
+          placeholder="System Prompt を入力..."></textarea>
+        <div class="flex items-center justify-between mt-4">
+          <p class="text-xs text-gray-400">保存すると新しいバージョンが公開されます</p>
+          <div class="flex gap-3">
+            <button onclick="closePromptEditor()" class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-5 py-2 rounded-xl text-sm font-medium transition-colors">
+              キャンセル
+            </button>
+            <button onclick="savePrompt()" class="bg-purple-500 hover:bg-purple-600 text-white px-5 py-2 rounded-xl text-sm font-medium transition-colors">
+              <i class="fas fa-save mr-1"></i>保存して公開
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ナレッジベース一覧 -->
+      <div class="bg-white rounded-xl shadow p-6 mb-6">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="font-bold text-gray-800"><i class="fas fa-book mr-2 text-amber-500"></i>ナレッジベース</h2>
+        </div>
+        <div id="knowledge-bases-list" class="text-gray-400 text-sm">読み込み中...</div>
+      </div>
+
+      <!-- ナレッジドキュメント詳細 -->
+      <div id="kb-documents-section" class="hidden bg-white rounded-xl shadow p-6 mb-6">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="font-bold text-gray-800"><i class="fas fa-file-lines mr-2 text-teal-500"></i>ドキュメント一覧</h2>
+          <span id="kb-documents-name" class="text-sm text-gray-500"></span>
+        </div>
+        <div id="kb-documents-list" class="text-gray-400 text-sm">読み込み中...</div>
+      </div>
+
+      <!-- BOT↔ナレッジ紐付け -->
+      <div class="bg-white rounded-xl shadow p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="font-bold text-gray-800"><i class="fas fa-link mr-2 text-indigo-500"></i>BOT ↔ ナレッジ紐付け</h2>
+        </div>
+        <div id="bot-kb-links-list" class="text-gray-400 text-sm">読み込み中...</div>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -1606,6 +1673,9 @@ function getUserDashboardHtml(liffId: string): string {
       <p class="profile-sub" id="profile-joined">-</p>
     </div>
 
+    <!-- プロフィール詳細 (JS で描画) -->
+    <div id="profile-details"></div>
+
     <div class="settings-list">
       <div class="settings-row">
         <span class="settings-label"><i class="fas fa-robot" style="color:#22c55e;margin-right:8px;"></i>BOT 通知</span>
@@ -1657,6 +1727,19 @@ function getUserDashboardHtml(liffId: string): string {
       <i class="fas fa-user"></i><span>プロフィール</span>
     </button>
   </nav>
+</div>
+
+<!-- 記録詳細モーダル -->
+<div id="record-detail-modal" style="display:none;position:fixed;inset:0;z-index:100;background:rgba(0,0,0,0.5);align-items:flex-end;justify-content:center;">
+  <div style="background:white;width:100%;max-width:480px;max-height:85vh;border-radius:20px 20px 0 0;overflow:hidden;display:flex;flex-direction:column;">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #f3f4f6;">
+      <h3 style="font-size:16px;font-weight:700;color:#1f2937;" id="modal-date">-</h3>
+      <button onclick="closeModal()" style="background:none;border:none;color:#9ca3af;font-size:20px;cursor:pointer;">
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
+    <div id="modal-content" style="overflow-y:auto;padding:16px 20px;flex:1;"></div>
+  </div>
 </div>
 
 <!-- Toast -->

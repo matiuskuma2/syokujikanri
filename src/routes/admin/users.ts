@@ -10,6 +10,7 @@ import type { HonoEnv } from '../../middleware/auth'
 import { listUserAccountsWithDetails, findUserAccount } from '../../repositories/line-users-repo'
 import { listRecentDailyLogs } from '../../repositories/daily-logs-repo'
 import { listMealEntriesByDailyLogIds } from '../../repositories/meal-entries-repo'
+import { listWeightHistory } from '../../repositories/body-metrics-repo'
 import { upsertUserServiceStatus, findUserServiceStatus } from '../../repositories/subscriptions-repo'
 import type { UserProfile } from '../../types/db'
 import { ok, badRequest, notFound } from '../../utils/response'
@@ -134,6 +135,9 @@ usersRouter.get('/:lineUserId', async (c) => {
     answered_at: string
   }>()
 
+  // 体重推移取得（グラフ用）
+  const weightHistory = await listWeightHistory(c.env.DB, userAccount.id, 30)
+
   return ok(c, {
     userAccountId: userAccount.id,
     lineUserId,
@@ -156,6 +160,7 @@ usersRouter.get('/:lineUserId', async (c) => {
     } : null,
     intakeAnswers: intakeAnswers ?? [],
     recentLogs,
+    weightHistory,
   })
 })
 

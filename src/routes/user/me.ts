@@ -27,11 +27,12 @@ import {
   listRecentDailyLogs,
   findDailyLogByUserAndDate,
 } from '../../repositories/daily-logs-repo'
-import { findMealEntriesByDailyLog } from '../../repositories/meal-entries-repo'
-import { findBodyMetricsByDailyLog } from '../../repositories/body-metrics-repo'
+import { findMealEntriesByDailyLog, listMealEntriesByDailyLogIds } from '../../repositories/meal-entries-repo'
+import { findBodyMetricsByDailyLog, listWeightHistory } from '../../repositories/body-metrics-repo'
 import { listProgressPhotosByUser } from '../../repositories/progress-photos-repo'
 import { listWeeklyReportsByUser } from '../../repositories/weekly-reports-repo'
 import { upsertUserServiceStatus, findUserServiceStatus } from '../../repositories/subscriptions-repo'
+import type { UserProfile } from '../../types/db'
 import { ok, badRequest, notFound } from '../../utils/response'
 import { todayJst } from '../../utils/id'
 
@@ -52,10 +53,12 @@ meRouter.get('/', async (c) => {
   const userAccount = await findUserAccountById(c.env.DB, userAccountId)
   if (!userAccount) return notFound(c, 'User account not found')
 
-  // LINE ユーザー情報 + サービスステータスを並行取得
-  const [lineUser, serviceStatus] = await Promise.all([
+  // LINE ユーザー情報 + サービスステータス + プロフィールを並行取得
+  const [lineUser, serviceStatus, profile] = await Promise.all([
     findLineUser(c.env.DB, c.env.LINE_CHANNEL_ID, userAccount.line_user_id),
     findUserServiceStatus(c.env.DB, accountId, userAccount.line_user_id),
+    c.env.DB.prepare('SELECT * FROM user_profiles WHERE user_account_id = ?1 LIMIT 1')
+      .bind(userAccountId).first<UserProfile>(),
   ])
 
   return ok(c, {
@@ -71,6 +74,17 @@ meRouter.get('/', async (c) => {
       consultEnabled: serviceStatus?.consult_enabled === 1,
       intakeCompleted: serviceStatus?.intake_completed === 1,
     },
+    profile: profile ? {
+      nickname: profile.nickname,
+      gender: profile.gender,
+      ageRange: profile.age_range,
+      heightCm: profile.height_cm,
+      currentWeightKg: profile.current_weight_kg,
+      targetWeightKg: profile.target_weight_kg,
+      goalSummary: profile.goal_summary,
+      concernTags: profile.concern_tags,
+      activityLevel: profile.activity_level,
+    } : null,
   })
 })
 
@@ -162,6 +176,62 @@ meRouter.get('/weekly-reports', async (c) => {
 
   const reports = await listWeeklyReportsByUser(c.env.DB, userAccountId, limit)
   return ok(c, { reports, count: reports.length })
+})
+
+// ===================================================================
+// GET /api/users/me/weight-history  — 体重推移一括取得
+// ===================================================================
+
+meRouter.get('/weight-history', async (c) => {
+  const payload = c.get('jwtPayload')
+  const userAccountId = payload.sub
+  const limit = Math.min(parseInt(c.req.query('limit') || '90', 10), 365)
+
+  const history = await listWeightHistory(c.env.DB, userAccountId, limit)
+  return ok(c, { history, count: history.length })
+})
+
+// ===================================================================
+// GET /api/users/me/records-with-meals  — 一括取得（N+1解消）
+// ===================================================================
+
+meRouter.get('/records-with-meals', async (c) => {
+  const payload = c.get('jwtPayload')
+  const userAccountId = payload.sub
+  const limit = Math.min(parseInt(c.req.query('limit') || '30', 10), 90)
+
+  const logs = await listRecentDailyLogs(c.env.DB, userAccountId, limit)
+  if (logs.length === 0) return ok(c, { logs: [], count: 0 })
+
+  const logIds = logs.map(l => l.id)
+  const allMeals = await listMealEntriesByDailyLogIds(c.env.DB, logIds)
+
+  // body_metrics も一括取得
+  const placeholders = logIds.map((_, i) => `?${i + 1}`).join(',')
+  const { results: allMetrics } = await c.env.DB
+    .prepare(`SELECT * FROM body_metrics WHERE daily_log_id IN (${placeholders})`)
+    .bind(...logIds)
+    .all<any>()
+
+  const mealsMap = new Map<string, typeof allMeals>()
+  for (const meal of allMeals) {
+    const arr = mealsMap.get(meal.daily_log_id) ?? []
+    arr.push(meal)
+    mealsMap.set(meal.daily_log_id, arr)
+  }
+
+  const metricsMap = new Map<string, any>()
+  for (const m of allMetrics) {
+    metricsMap.set(m.daily_log_id, m)
+  }
+
+  const enrichedLogs = logs.map(log => ({
+    ...log,
+    meals: mealsMap.get(log.id) ?? [],
+    bodyMetrics: metricsMap.get(log.id) ?? null,
+  }))
+
+  return ok(c, { logs: enrichedLogs, count: enrichedLogs.length })
 })
 
 // ===================================================================

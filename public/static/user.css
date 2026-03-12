@@ -458,3 +458,24 @@ html, body {
 }
 .status-banner.suspended i { color: #ef4444; }
 .status-banner.suspended .banner-desc { color: #b91c1c; }
+
+/* ================================================================
+   Record Detail Modal
+   ================================================================ */
+.modal-section {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f3f4f6;
+}
+.modal-section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+}
+.modal-section-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #374151;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+}

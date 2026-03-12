@@ -410,4 +410,196 @@ dashboardRouter.patch('/members/:id', async (c) => {
   return ok(c, { message: 'Status updated', id: memberId, status: body.status })
 })
 
+// ===================================================================
+// BOT 一覧 (Superadmin)
+// GET /api/admin/dashboard/bots
+// ===================================================================
+
+dashboardRouter.get('/bots', async (c) => {
+  const payload = c.get('jwtPayload')
+  if (payload.role !== 'superadmin') {
+    return c.json({ success: false, error: 'Superadmin access required' }, 403)
+  }
+
+  const { results: bots } = await c.env.DB.prepare(`
+    SELECT b.id, b.account_id, b.name, b.bot_key, b.type, b.is_active, b.current_version_id, b.created_at,
+           a.name AS account_name,
+           bv.version_number, bv.is_published, bv.system_prompt
+    FROM bots b
+    LEFT JOIN accounts a ON a.id = b.account_id
+    LEFT JOIN bot_versions bv ON bv.id = b.current_version_id
+    ORDER BY b.created_at DESC
+  `).all<any>()
+
+  return ok(c, { bots })
+})
+
+// ===================================================================
+// BOT のバージョン一覧
+// GET /api/admin/dashboard/bots/:botId/versions
+// ===================================================================
+
+dashboardRouter.get('/bots/:botId/versions', async (c) => {
+  const payload = c.get('jwtPayload')
+  if (payload.role !== 'superadmin') {
+    return c.json({ success: false, error: 'Superadmin access required' }, 403)
+  }
+
+  const botId = c.req.param('botId')
+  const { results: versions } = await c.env.DB.prepare(`
+    SELECT id, bot_id, version_number, is_published, created_at,
+           substr(system_prompt, 1, 200) AS prompt_preview
+    FROM bot_versions
+    WHERE bot_id = ?1
+    ORDER BY version_number DESC
+  `).bind(botId).all<any>()
+
+  return ok(c, { versions })
+})
+
+// ===================================================================
+// BOT バージョンの system_prompt 更新（新バージョン作成）
+// POST /api/admin/dashboard/bots/:botId/versions
+// ===================================================================
+
+dashboardRouter.post('/bots/:botId/versions', async (c) => {
+  const payload = c.get('jwtPayload')
+  if (payload.role !== 'superadmin') {
+    return c.json({ success: false, error: 'Superadmin access required' }, 403)
+  }
+
+  const botId = c.req.param('botId')
+  const body = await c.req.json<{ systemPrompt: string; publish?: boolean }>().catch(() => ({} as any))
+  if (!body.systemPrompt) {
+    return c.json({ success: false, error: 'systemPrompt is required' }, 400)
+  }
+
+  const { generateId, nowIso } = await import('../../utils/id')
+
+  // 最新バージョン番号を取得
+  const latest = await c.env.DB.prepare(
+    'SELECT MAX(version_number) as max_ver FROM bot_versions WHERE bot_id = ?1'
+  ).bind(botId).first<{ max_ver: number | null }>()
+  const newVersion = (latest?.max_ver ?? 0) + 1
+
+  const versionId = generateId()
+  const shouldPublish = body.publish !== false
+
+  // 新バージョンを作成
+  await c.env.DB.prepare(`
+    INSERT INTO bot_versions (id, bot_id, version_number, system_prompt, is_published, created_at)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+  `).bind(versionId, botId, newVersion, body.systemPrompt, shouldPublish ? 1 : 0, nowIso()).run()
+
+  if (shouldPublish) {
+    // 旧バージョンの公開フラグを落とす
+    await c.env.DB.prepare(
+      'UPDATE bot_versions SET is_published = 0 WHERE bot_id = ?1 AND id != ?2'
+    ).bind(botId, versionId).run()
+    // BOT の current_version_id を更新
+    await c.env.DB.prepare(
+      'UPDATE bots SET current_version_id = ?1, updated_at = ?2 WHERE id = ?3'
+    ).bind(versionId, nowIso(), botId).run()
+  }
+
+  return ok(c, { versionId, versionNumber: newVersion, published: shouldPublish })
+})
+
+// ===================================================================
+// ナレッジベース一覧 (Superadmin)
+// GET /api/admin/dashboard/knowledge-bases
+// ===================================================================
+
+dashboardRouter.get('/knowledge-bases', async (c) => {
+  const payload = c.get('jwtPayload')
+  if (payload.role !== 'superadmin') {
+    return c.json({ success: false, error: 'Superadmin access required' }, 403)
+  }
+
+  const { results: bases } = await c.env.DB.prepare(`
+    SELECT kb.id, kb.account_id, kb.name, kb.description, kb.is_active, kb.priority, kb.created_at,
+           a.name AS account_name,
+           (SELECT COUNT(*) FROM knowledge_documents kd WHERE kd.knowledge_base_id = kb.id AND kd.is_active = 1) AS doc_count
+    FROM knowledge_bases kb
+    LEFT JOIN accounts a ON a.id = kb.account_id
+    ORDER BY kb.priority DESC, kb.created_at DESC
+  `).all<any>()
+
+  return ok(c, { bases })
+})
+
+// ===================================================================
+// ナレッジドキュメント一覧
+// GET /api/admin/dashboard/knowledge-bases/:kbId/documents
+// ===================================================================
+
+dashboardRouter.get('/knowledge-bases/:kbId/documents', async (c) => {
+  const payload = c.get('jwtPayload')
+  if (payload.role !== 'superadmin') {
+    return c.json({ success: false, error: 'Superadmin access required' }, 403)
+  }
+
+  const kbId = c.req.param('kbId')
+  const { results: documents } = await c.env.DB.prepare(`
+    SELECT id, knowledge_base_id, title, content, source_url, is_active, priority, created_at, updated_at
+    FROM knowledge_documents
+    WHERE knowledge_base_id = ?1
+    ORDER BY priority DESC, created_at DESC
+  `).bind(kbId).all<any>()
+
+  return ok(c, { documents })
+})
+
+// ===================================================================
+// ナレッジドキュメント作成/更新
+// POST /api/admin/dashboard/knowledge-bases/:kbId/documents
+// ===================================================================
+
+dashboardRouter.post('/knowledge-bases/:kbId/documents', async (c) => {
+  const payload = c.get('jwtPayload')
+  if (payload.role !== 'superadmin') {
+    return c.json({ success: false, error: 'Superadmin access required' }, 403)
+  }
+
+  const kbId = c.req.param('kbId')
+  const body = await c.req.json<{ title: string; content: string; sourceUrl?: string; priority?: number }>().catch(() => ({} as any))
+  if (!body.title || !body.content) {
+    return c.json({ success: false, error: 'title and content are required' }, 400)
+  }
+
+  const { createKnowledgeDocument } = await import('../../repositories/knowledge-repo')
+  const doc = await createKnowledgeDocument(c.env.DB, {
+    knowledgeBaseId: kbId,
+    title: body.title,
+    content: body.content,
+    sourceUrl: body.sourceUrl,
+    priority: body.priority,
+  })
+
+  return ok(c, { document: doc })
+})
+
+// ===================================================================
+// BOT↔ナレッジ紐付け一覧
+// GET /api/admin/dashboard/bot-knowledge-links
+// ===================================================================
+
+dashboardRouter.get('/bot-knowledge-links', async (c) => {
+  const payload = c.get('jwtPayload')
+  if (payload.role !== 'superadmin') {
+    return c.json({ success: false, error: 'Superadmin access required' }, 403)
+  }
+
+  const { results: links } = await c.env.DB.prepare(`
+    SELECT bkl.id, bkl.bot_id, bkl.knowledge_base_id, bkl.priority, bkl.created_at,
+           b.name AS bot_name, kb.name AS kb_name
+    FROM bot_knowledge_links bkl
+    LEFT JOIN bots b ON b.id = bkl.bot_id
+    LEFT JOIN knowledge_bases kb ON kb.id = bkl.knowledge_base_id
+    ORDER BY bkl.priority DESC
+  `).all<any>()
+
+  return ok(c, { links })
+})
+
 export default dashboardRouter

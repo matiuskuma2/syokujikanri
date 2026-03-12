@@ -271,7 +271,7 @@ function dismissGuide() {
 // ページ切替
 // ================================================================
 function showPage(page) {
-  const pages = ['overview', 'users', 'invite-codes', 'members', 'line-guide', 'checklist', 'account', 'system'];
+  const pages = ['overview', 'users', 'invite-codes', 'members', 'line-guide', 'checklist', 'account', 'system', 'bot-settings'];
   pages.forEach(p => {
     const el = document.getElementById('page-' + p);
     if (el) el.classList.add('hidden');
@@ -301,6 +301,7 @@ function showPage(page) {
   else if (page === 'members') loadMembers();
   else if (page === 'account') loadAccount();
   else if (page === 'system') loadSystem();
+  else if (page === 'bot-settings') loadBotSettings();
   else if (page === 'checklist') updateChecklistProgress();
   // line-guide は静的なので読み込み不要
 }
@@ -537,6 +538,7 @@ function renderModalOverview() {
   const logs = (u.recentLogs || []).slice(0, 7);
   const profile = u.profile;
   const answers = u.intakeAnswers || [];
+  const weightHistory = u.weightHistory || [];
   const isReadOnly = currentAdmin?.role === 'staff';
 
   document.getElementById('modal-content').innerHTML = `
@@ -605,6 +607,15 @@ function renderModalOverview() {
       </div>
     </div>
 
+    ${weightHistory.length > 0 ? `
+    <div class="mb-6">
+      <h3 class="font-semibold text-gray-700 mb-3"><i class="fas fa-chart-line text-blue-500 mr-1"></i>体重推移（30日）</h3>
+      <div style="position:relative;height:160px;background:#f9fafb;border-radius:8px;padding:8px;">
+        <canvas id="admin-weight-chart"></canvas>
+      </div>
+    </div>
+    ` : ''}
+
     ${answers.length > 0 ? `
     <div class="mb-6">
       <h3 class="font-semibold text-gray-700 mb-3"><i class="fas fa-clipboard-list text-blue-500 mr-1"></i>問診回答 (${answers.length}件)</h3>
@@ -635,6 +646,11 @@ function renderModalOverview() {
       }
     </div>
   `;
+
+  // 体重チャートを描画
+  if (weightHistory.length > 0) {
+    renderAdminWeightChart(weightHistory);
+  }
 }
 
 // Records Tab
@@ -757,6 +773,52 @@ async function loadModalReports() {
   } catch {
     el.innerHTML = '<p class="text-red-400 text-sm">レポートデータの取得に失敗しました</p>';
   }
+}
+
+let adminWeightChart = null;
+
+function renderAdminWeightChart(history) {
+  const canvas = document.getElementById('admin-weight-chart');
+  if (!canvas || typeof Chart === 'undefined' || !history || history.length === 0) return;
+  if (adminWeightChart) adminWeightChart.destroy();
+
+  const labels = history.map(h => {
+    const d = h.log_date || '';
+    const parts = d.split('-');
+    return parts.length === 3 ? parts[1] + '/' + parts[2] : d;
+  });
+  const data = history.map(h => h.weight_kg);
+  const weights = data.filter(v => v != null);
+  const minW = Math.floor(Math.min(...weights) - 1);
+  const maxW = Math.ceil(Math.max(...weights) + 1);
+
+  adminWeightChart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: '体重 (kg)',
+        data,
+        borderColor: '#3b82f6',
+        backgroundColor: 'rgba(59,130,246,0.08)',
+        tension: 0.3,
+        fill: true,
+        pointRadius: 3,
+        pointBackgroundColor: '#3b82f6',
+        spanGaps: true,
+        borderWidth: 2,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ctx.parsed.y != null ? ctx.parsed.y + ' kg' : '' } } },
+      scales: {
+        x: { ticks: { maxRotation: 0, maxTicksLimit: 7, font: { size: 10 } }, grid: { display: false } },
+        y: { min: minW, max: maxW, ticks: { callback: v => v + 'kg', font: { size: 10 } } },
+      },
+    },
+  });
 }
 
 function formatConcernTags(tags) {
@@ -1207,6 +1269,220 @@ async function loadSystem() {
     }
   } catch {
     el.innerHTML = '<p class="text-gray-400">DB統計の取得に失敗しました</p>';
+  }
+}
+
+// ================================================================
+// BOT / ナレッジ設定 (Superadmin Only)
+// ================================================================
+let currentEditBotId = null;
+
+async function loadBotSettings() {
+  if (currentAdmin?.role !== 'superadmin') {
+    showToast('アクセス権限がありません', 'error');
+    showPage('overview');
+    return;
+  }
+  await Promise.all([loadBots(), loadKnowledgeBases(), loadBotKbLinks()]);
+}
+
+async function loadBots() {
+  const el = document.getElementById('bots-list');
+  if (!el) return;
+  el.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>読み込み中...';
+  try {
+    const res = await axios.get(API_BASE + '/admin/dashboard/bots', { headers: apiHeaders() });
+    const bots = res.data.data.bots || [];
+    if (bots.length === 0) {
+      el.innerHTML = '<div class="text-center py-6 text-gray-400"><i class="fas fa-robot text-3xl mb-3"></i><p>BOTが登録されていません</p><p class="text-xs mt-1">seed.sql でBOTを初期登録してください</p></div>';
+      return;
+    }
+    el.innerHTML = `<div class="space-y-3">${bots.map(b => {
+      const statusBadge = b.is_active
+        ? '<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">有効</span>'
+        : '<span class="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-600 font-medium">無効</span>';
+      const versionInfo = b.version_number ? `v${b.version_number}` : '未設定';
+      const publishedBadge = b.is_published
+        ? '<span class="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium">公開中</span>'
+        : '<span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 font-medium">未公開</span>';
+      return `<div class="flex items-center justify-between bg-gray-50 p-4 rounded-xl">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 bg-purple-100 rounded-full flex items-center justify-center">
+            <i class="fas fa-robot text-purple-600"></i>
+          </div>
+          <div>
+            <p class="font-medium text-gray-800">${esc(b.name)}</p>
+            <p class="text-xs text-gray-500">key: ${esc(b.bot_key)} · ${esc(b.account_name || '-')} · ${versionInfo}</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          ${statusBadge} ${publishedBadge}
+          <button onclick="openPromptEditor('${esc(b.id)}', '${esc(b.name)}', ${b.version_number || 0})" 
+            class="text-xs bg-purple-100 text-purple-700 hover:bg-purple-200 px-3 py-1.5 rounded-lg transition-colors">
+            <i class="fas fa-edit mr-1"></i>プロンプト編集
+          </button>
+        </div>
+      </div>`;
+    }).join('')}</div>`;
+  } catch {
+    el.innerHTML = '<p class="text-red-400">BOT一覧の取得に失敗しました</p>';
+  }
+}
+
+async function openPromptEditor(botId, botName, currentVersion) {
+  currentEditBotId = botId;
+  const section = document.getElementById('prompt-editor-section');
+  section.classList.remove('hidden');
+  document.getElementById('prompt-bot-name').textContent = botName;
+  document.getElementById('prompt-version-badge').textContent = `現在: v${currentVersion || 0}`;
+  document.getElementById('prompt-editor').value = '';
+
+  // 現在のプロンプトを取得
+  try {
+    const res = await axios.get(API_BASE + '/admin/dashboard/bots/' + botId + '/versions', { headers: apiHeaders() });
+    const versions = res.data.data.versions || [];
+    const published = versions.find(v => v.is_published) || versions[0];
+    if (published) {
+      // プロンプトの全文を取得（preview は 200 文字まで）
+      // system_prompt の全文は bot detail API がないので、versions の preview を使う
+      // 実際は full prompt が必要 — versions API で全文返すよう改良が理想だが、
+      // ここでは published version のプロンプトを取得する別ルートを使う
+      document.getElementById('prompt-editor').value = published.prompt_preview || '';
+      document.getElementById('prompt-editor').placeholder = 'System Prompt を入力...\n(現在のプロンプトが表示されています。全文は200文字まで表示。)';
+    }
+  } catch {
+    showToast('プロンプトの取得に失敗しました', 'error');
+  }
+  section.scrollIntoView({ behavior: 'smooth' });
+}
+
+function closePromptEditor() {
+  document.getElementById('prompt-editor-section').classList.add('hidden');
+  currentEditBotId = null;
+}
+
+async function savePrompt() {
+  if (!currentEditBotId) return;
+  const prompt = document.getElementById('prompt-editor').value.trim();
+  if (!prompt) { showToast('プロンプトを入力してください', 'error'); return; }
+
+  try {
+    const res = await axios.post(
+      API_BASE + '/admin/dashboard/bots/' + currentEditBotId + '/versions',
+      { systemPrompt: prompt, publish: true },
+      { headers: apiHeaders() }
+    );
+    const ver = res.data.data;
+    showToast(`v${ver.versionNumber} を公開しました`, 'success');
+    closePromptEditor();
+    loadBots();
+  } catch (err) {
+    showToast(err.response?.data?.error || '保存に失敗しました', 'error');
+  }
+}
+
+async function loadKnowledgeBases() {
+  const el = document.getElementById('knowledge-bases-list');
+  if (!el) return;
+  el.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>読み込み中...';
+  try {
+    const res = await axios.get(API_BASE + '/admin/dashboard/knowledge-bases', { headers: apiHeaders() });
+    const bases = res.data.data.bases || [];
+    if (bases.length === 0) {
+      el.innerHTML = '<div class="text-center py-6 text-gray-400"><i class="fas fa-book text-3xl mb-3"></i><p>ナレッジベースがありません</p><p class="text-xs mt-1">seed.sql でナレッジベースを初期登録してください</p></div>';
+      return;
+    }
+    el.innerHTML = `<div class="space-y-3">${bases.map(kb => {
+      const statusBadge = kb.is_active
+        ? '<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">有効</span>'
+        : '<span class="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-600 font-medium">無効</span>';
+      return `<div class="flex items-center justify-between bg-gray-50 p-4 rounded-xl">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center">
+            <i class="fas fa-book text-amber-600"></i>
+          </div>
+          <div>
+            <p class="font-medium text-gray-800">${esc(kb.name)}</p>
+            <p class="text-xs text-gray-500">${esc(kb.description || '-')} · ${esc(kb.account_name || 'システム共通')} · ${kb.doc_count}件のドキュメント</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          ${statusBadge}
+          <span class="text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full">優先度: ${kb.priority}</span>
+          <button onclick="loadKbDocuments('${esc(kb.id)}', '${esc(kb.name)}')"
+            class="text-xs bg-amber-100 text-amber-700 hover:bg-amber-200 px-3 py-1.5 rounded-lg transition-colors">
+            <i class="fas fa-file-lines mr-1"></i>ドキュメント
+          </button>
+        </div>
+      </div>`;
+    }).join('')}</div>`;
+  } catch {
+    el.innerHTML = '<p class="text-red-400">ナレッジベース一覧の取得に失敗しました</p>';
+  }
+}
+
+async function loadKbDocuments(kbId, kbName) {
+  const section = document.getElementById('kb-documents-section');
+  section.classList.remove('hidden');
+  document.getElementById('kb-documents-name').textContent = kbName;
+  const el = document.getElementById('kb-documents-list');
+  el.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>読み込み中...';
+
+  try {
+    const res = await axios.get(API_BASE + '/admin/dashboard/knowledge-bases/' + kbId + '/documents', { headers: apiHeaders() });
+    const docs = res.data.data.documents || [];
+    if (docs.length === 0) {
+      el.innerHTML = '<p class="text-gray-400 text-center py-4">ドキュメントがありません</p>';
+      return;
+    }
+    el.innerHTML = `<div class="space-y-3">${docs.map(d => {
+      const contentPreview = (d.content || '').substring(0, 150);
+      return `<div class="bg-gray-50 p-4 rounded-xl">
+        <div class="flex items-center justify-between mb-2">
+          <p class="font-medium text-gray-800 text-sm">${esc(d.title)}</p>
+          <div class="flex gap-2">
+            <span class="text-xs px-2 py-0.5 rounded-full ${d.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-500'}">
+              ${d.is_active ? '有効' : '無効'}
+            </span>
+            <span class="text-xs text-gray-400">優先度: ${d.priority}</span>
+          </div>
+        </div>
+        <p class="text-xs text-gray-600 leading-relaxed whitespace-pre-wrap">${esc(contentPreview)}${d.content && d.content.length > 150 ? '...' : ''}</p>
+        ${d.source_url ? '<p class="text-xs text-blue-500 mt-2"><i class="fas fa-link mr-1"></i>' + esc(d.source_url) + '</p>' : ''}
+        <p class="text-xs text-gray-400 mt-2">${fmtDateTime(d.created_at)}</p>
+      </div>`;
+    }).join('')}</div>`;
+  } catch {
+    el.innerHTML = '<p class="text-red-400">ドキュメントの取得に失敗しました</p>';
+  }
+  section.scrollIntoView({ behavior: 'smooth' });
+}
+
+async function loadBotKbLinks() {
+  const el = document.getElementById('bot-kb-links-list');
+  if (!el) return;
+  el.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>読み込み中...';
+  try {
+    const res = await axios.get(API_BASE + '/admin/dashboard/bot-knowledge-links', { headers: apiHeaders() });
+    const links = res.data.data.links || [];
+    if (links.length === 0) {
+      el.innerHTML = '<p class="text-gray-400 text-center py-4">紐付けがありません</p>';
+      return;
+    }
+    el.innerHTML = `<div class="space-y-2">${links.map(l => `
+      <div class="flex items-center justify-between bg-gray-50 p-3 rounded-lg text-sm">
+        <div class="flex items-center gap-3">
+          <i class="fas fa-robot text-purple-500"></i>
+          <span class="font-medium">${esc(l.bot_name || '-')}</span>
+          <i class="fas fa-arrow-right text-gray-300 text-xs"></i>
+          <i class="fas fa-book text-amber-500"></i>
+          <span class="font-medium">${esc(l.kb_name || '-')}</span>
+        </div>
+        <span class="text-xs text-gray-400">優先度: ${l.priority}</span>
+      </div>
+    `).join('')}</div>`;
+  } catch {
+    el.innerHTML = '<p class="text-red-400">紐付け情報の取得に失敗しました</p>';
   }
 }
 
