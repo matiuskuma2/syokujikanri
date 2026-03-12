@@ -207,6 +207,10 @@ async function showDashboard() {
   const membersNav = document.getElementById('nav-members');
   if (membersNav && role === 'staff') membersNav.style.display = 'none';
 
+  // staff: 招待コードメニュー非表示（閲覧のみ可だが、発行不可なため非表示にする場合はここ）
+  const inviteNav = document.getElementById('nav-invite-codes');
+  if (inviteNav && role === 'staff') inviteNav.style.display = 'none';
+
   // ウェルカムガイドの表示（まだ閉じていない場合）
   const guideKey = 'diet_bot_guide_dismissed_' + (currentAdmin?.id || '');
   const guideDismissed = localStorage.getItem(guideKey);
@@ -246,7 +250,7 @@ function dismissGuide() {
 // ページ切替
 // ================================================================
 function showPage(page) {
-  const pages = ['overview', 'users', 'members', 'line-guide', 'account', 'system'];
+  const pages = ['overview', 'users', 'invite-codes', 'members', 'line-guide', 'account', 'system'];
   pages.forEach(p => {
     const el = document.getElementById('page-' + p);
     if (el) el.classList.add('hidden');
@@ -272,6 +276,7 @@ function showPage(page) {
 
   if (page === 'overview') loadOverview();
   else if (page === 'users') loadUsers();
+  else if (page === 'invite-codes') loadInviteCodes();
   else if (page === 'members') loadMembers();
   else if (page === 'account') loadAccount();
   else if (page === 'system') loadSystem();
@@ -919,6 +924,146 @@ async function handleChangePassword() {
   } catch (err) {
     const msg = err.response?.data?.error || 'パスワード変更に失敗しました';
     showMsg(msgEl, msg, 'error');
+  }
+}
+
+// ================================================================
+// 招待コード管理
+// ================================================================
+let allInviteCodes = [];
+
+async function loadInviteCodes() {
+  const role = currentAdmin?.role;
+
+  // staff はフォーム非表示
+  const formEl = document.getElementById('invite-code-form');
+  if (formEl) formEl.classList.toggle('hidden', role === 'staff');
+
+  const tableEl = document.getElementById('invite-codes-table');
+  tableEl.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin text-gray-400 mr-2"></i>読み込み中...</div>';
+
+  try {
+    const res = await axios.get(API_BASE + '/admin/invite-codes', { headers: apiHeaders() });
+    allInviteCodes = res.data.data.codes || [];
+    renderInviteCodesTable(allInviteCodes);
+  } catch (err) {
+    console.error('loadInviteCodes error:', err);
+    tableEl.innerHTML = '<p class="text-red-400 text-sm p-4">読み込みに失敗しました</p>';
+  }
+}
+
+function renderInviteCodesTable(codes) {
+  const tableEl = document.getElementById('invite-codes-table');
+  if (codes.length === 0) {
+    tableEl.innerHTML = `
+      <div class="text-center py-12 text-gray-400">
+        <i class="fas fa-ticket-alt text-4xl mb-3"></i>
+        <p>招待コードがまだありません</p>
+        <p class="text-xs mt-2">上のフォームからコードを発行してください</p>
+      </div>`;
+    return;
+  }
+
+  const canRevoke = currentAdmin?.role !== 'staff';
+
+  tableEl.innerHTML = `
+    <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead><tr class="border-b text-left text-gray-500 bg-gray-50">
+        <th class="pb-3 pt-2 px-4">コード</th>
+        <th class="pb-3 pt-2 px-4">ラベル</th>
+        <th class="pb-3 pt-2 px-4 text-center">使用状況</th>
+        <th class="pb-3 pt-2 px-4 text-center">状態</th>
+        <th class="pb-3 pt-2 px-4">有効期限</th>
+        <th class="pb-3 pt-2 px-4">作成者</th>
+        <th class="pb-3 pt-2 px-4">作成日</th>
+        ${canRevoke ? '<th class="pb-3 pt-2 px-4">操作</th>' : ''}
+      </tr></thead>
+      <tbody>
+        ${codes.map(c => {
+          const statusBadge = {
+            active: '<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">有効</span>',
+            expired: '<span class="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-600 font-medium">期限切れ</span>',
+            revoked: '<span class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">無効化済</span>',
+          }[c.status] || '';
+
+          const maxLabel = c.max_uses === 0 || c.max_uses === null ? '無制限' : c.max_uses;
+          const useInfo = c.use_count + ' / ' + maxLabel;
+
+          return `
+          <tr class="border-b hover:bg-gray-50">
+            <td class="py-3 px-4">
+              <div class="flex items-center gap-2">
+                <code class="text-sm font-bold text-green-700 bg-green-50 px-2 py-1 rounded">${esc(c.code)}</code>
+                <button onclick="copyText('${esc(c.code)}', this)" class="text-gray-400 hover:text-gray-600 text-xs" title="コピー">
+                  <i class="fas fa-copy"></i>
+                </button>
+              </div>
+            </td>
+            <td class="py-3 px-4 text-gray-600 text-xs">${esc(c.label || '-')}</td>
+            <td class="py-3 px-4 text-center text-xs">
+              <span class="font-bold ${c.use_count > 0 ? 'text-green-600' : 'text-gray-500'}">${useInfo}</span>
+            </td>
+            <td class="py-3 px-4 text-center">${statusBadge}</td>
+            <td class="py-3 px-4 text-xs text-gray-500">${c.expires_at ? fmtDate(c.expires_at) : '無期限'}</td>
+            <td class="py-3 px-4 text-xs text-gray-500">${esc(c.creator_email || '-')}</td>
+            <td class="py-3 px-4 text-xs text-gray-500">${fmtDate(c.created_at)}</td>
+            ${canRevoke ? `<td class="py-3 px-4">
+              ${c.status === 'active' ? `
+                <button onclick="revokeInviteCode('${esc(c.id)}')"
+                  class="text-xs bg-red-100 text-red-700 hover:bg-red-200 px-3 py-1 rounded-lg transition-colors">
+                  無効化
+                </button>
+              ` : '<span class="text-xs text-gray-300">-</span>'}
+            </td>` : ''}
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+    </div>
+    <p class="text-gray-400 text-xs mt-3 px-4">全 ${codes.length} 件</p>
+  `;
+}
+
+async function handleCreateInviteCode() {
+  const label = document.getElementById('invite-label').value.trim();
+  const maxUsesVal = document.getElementById('invite-max-uses').value;
+  const expiresVal = document.getElementById('invite-expires').value;
+  const msgEl = document.getElementById('invite-code-msg');
+
+  const maxUses = parseInt(maxUsesVal, 10);
+  const expiresInDays = parseInt(expiresVal, 10);
+
+  try {
+    const res = await axios.post(API_BASE + '/admin/invite-codes', {
+      label: label || undefined,
+      maxUses: maxUses === 0 ? null : maxUses,
+      expiresInDays: expiresInDays || undefined,
+    }, { headers: apiHeaders() });
+
+    const code = res.data.data.code;
+    showMsg(msgEl, `招待コード「${code.code}」を発行しました！`, 'success');
+    document.getElementById('invite-label').value = '';
+    showToast(`コード ${code.code} を発行しました`, 'success');
+
+    // コードをクリップボードにコピー
+    try { await navigator.clipboard.writeText(code.code); } catch {}
+
+    loadInviteCodes();
+  } catch (err) {
+    const msg = err.response?.data?.error || '発行に失敗しました';
+    showMsg(msgEl, msg, 'error');
+  }
+}
+
+async function revokeInviteCode(codeId) {
+  if (!confirm('この招待コードを無効化しますか？')) return;
+  try {
+    await axios.patch(API_BASE + '/admin/invite-codes/' + codeId + '/revoke', {}, { headers: apiHeaders() });
+    showToast('招待コードを無効化しました', 'success');
+    loadInviteCodes();
+  } catch (err) {
+    showToast(err.response?.data?.error || '無効化に失敗しました', 'error');
   }
 }
 

@@ -200,6 +200,7 @@ dashboardRouter.get('/db-stats', async (c) => {
     'conversation_threads', 'conversation_messages', 'message_attachments',
     'image_analysis_jobs', 'image_intake_results', 'bot_mode_sessions',
     'progress_photos', 'weekly_reports',
+    'invite_codes', 'invite_code_usages',
   ]
 
   const results: { name: string; count: number }[] = []
@@ -382,6 +383,29 @@ dashboardRouter.patch('/members/:id', async (c) => {
   await c.env.DB.prepare(
     'UPDATE account_memberships SET status = ?1, updated_at = ?2 WHERE id = ?3'
   ).bind(body.status, nowIso(), memberId).run()
+
+  // ===================================================================
+  // カスケード停止/復帰: admin停止時、従属ユーザーのBOTも停止する
+  // admin復帰時は従属ユーザーのBOTも復帰する
+  // ===================================================================
+  if (target.role === 'admin') {
+    const newBotEnabled = body.status === 'active' ? 1 : 0
+    await c.env.DB.prepare(`
+      UPDATE user_service_statuses
+      SET bot_enabled = ?1, updated_at = ?2
+      WHERE account_id = ?3
+    `).bind(newBotEnabled, nowIso(), target.account_id).run()
+
+    // account自体も停止/復帰させる
+    const accountStatus = body.status === 'active' ? 'active' : 'suspended'
+    await c.env.DB.prepare(`
+      UPDATE accounts
+      SET status = ?1, updated_at = ?2
+      WHERE id = ?3
+    `).bind(accountStatus, nowIso(), target.account_id).run()
+
+    console.log(`[cascade] admin ${memberId} → ${body.status}: account ${target.account_id} and all users bot_enabled=${newBotEnabled}`)
+  }
 
   return ok(c, { message: 'Status updated', id: memberId, status: body.status })
 })

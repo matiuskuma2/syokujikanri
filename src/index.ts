@@ -18,6 +18,7 @@ import lineAuthRouter from './routes/line/auth'
 import adminAuthRouter from './routes/admin/auth'
 import adminUsersRouter from './routes/admin/users'
 import adminDashboardRouter from './routes/admin/dashboard'
+import inviteCodesRouter from './routes/admin/invite-codes'
 import userRouter from './routes/user/index'
 import meRouter from './routes/user/me'
 import filesRouter from './routes/user/files'
@@ -30,6 +31,7 @@ import { runDailyReminder } from './jobs/daily-reminder'
 import { runWeeklyReport } from './jobs/weekly-report'
 import { expirePendingIntakeResults } from './repositories/image-intake-repo'
 import { deleteExpiredSessions } from './repositories/mode-sessions-repo'
+import { expireInviteCodes } from './repositories/invite-codes-repo'
 
 type Variables = {
   jwtPayload: JwtPayload
@@ -83,6 +85,7 @@ app.route('/api/admin/auth', adminAuthRouter)
 app.use('/api/admin/*', authMiddleware)
 app.route('/api/admin/users', adminUsersRouter)
 app.route('/api/admin/dashboard', adminDashboardRouter)
+app.route('/api/admin/invite-codes', inviteCodesRouter)
 
 // ===================================================================
 // User API（後方互換: マジックリンク方式 /api/user/*）
@@ -156,8 +159,9 @@ async function runHourlyCleanup(env: Bindings): Promise<void> {
   try {
     const expired = await expirePendingIntakeResults(env.DB)
     const sessions = await deleteExpiredSessions(env.DB)
-    if (expired > 0 || sessions > 0) {
-      console.log(`[cron] hourly cleanup: ${expired} expired image results, ${sessions} expired sessions`)
+    const codes = await expireInviteCodes(env.DB)
+    if (expired > 0 || sessions > 0 || codes > 0) {
+      console.log(`[cron] hourly cleanup: ${expired} expired image results, ${sessions} expired sessions, ${codes} expired invite codes`)
     }
   } catch (err) {
     console.error('[cron] hourly cleanup error:', err)
@@ -362,6 +366,10 @@ function getAdminDashboardHtml(): string {
       <button id="nav-users" onclick="showPage('users')"
         class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-300 hover:bg-gray-700 transition-colors text-left">
         <i class="fas fa-users w-5 text-center"></i><span>LINEユーザー管理</span>
+      </button>
+      <button id="nav-invite-codes" onclick="showPage('invite-codes')"
+        class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-300 hover:bg-gray-700 transition-colors text-left">
+        <i class="fas fa-ticket-alt w-5 text-center"></i><span>招待コード</span>
       </button>
 
       <p class="text-gray-500 text-xs font-medium px-3 py-2 mt-3 uppercase tracking-wider">管理</p>
@@ -568,6 +576,72 @@ function getAdminDashboardHtml(): string {
       </div>
     </div>
 
+    <!-- ===== 招待コード管理ページ ===== -->
+    <div id="page-invite-codes" class="hidden p-8">
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          <h1 class="text-2xl font-bold text-gray-800"><i class="fas fa-ticket-alt text-green-500 mr-2"></i>招待コード</h1>
+          <p class="text-gray-500 text-sm mt-1">顧客に配布する招待コードを管理します。コードでLINEユーザーが正しいアカウントに紐付けられます。</p>
+        </div>
+      </div>
+
+      <!-- 仕組みの説明 -->
+      <div class="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6">
+        <h3 class="font-semibold text-blue-800 text-sm mb-2"><i class="fas fa-info-circle mr-1"></i>招待コードの使い方</h3>
+        <ol class="text-xs text-blue-700 space-y-1 list-decimal list-inside">
+          <li>下の「招待コード発行」ボタンでコードを生成（例: <code class="bg-blue-100 px-1 rounded">ABC-1234</code>）</li>
+          <li>お客様にコードを伝える（LINE案内文テンプレートが便利です）</li>
+          <li>お客様がLINE友達追加後、コードをチャットで送信</li>
+          <li>自動的にあなたのアカウントに紐付けられ、問診が開始されます</li>
+        </ol>
+      </div>
+
+      <!-- 発行フォーム (staff以外) -->
+      <div id="invite-code-form" class="bg-white rounded-xl shadow p-6 mb-6">
+        <h3 class="font-semibold text-gray-700 mb-4"><i class="fas fa-plus-circle text-green-500 mr-1"></i>招待コードを発行</h3>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label class="block text-sm text-gray-600 mb-1">ラベル（メモ）</label>
+            <input id="invite-label" type="text" placeholder="顧客名やメモ"
+              class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+          </div>
+          <div>
+            <label class="block text-sm text-gray-600 mb-1">使用回数上限</label>
+            <select id="invite-max-uses" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+              <option value="1">1回（1顧客用）</option>
+              <option value="5">5回</option>
+              <option value="10">10回</option>
+              <option value="0">無制限</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm text-gray-600 mb-1">有効期限</label>
+            <select id="invite-expires" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+              <option value="0">無期限</option>
+              <option value="7">7日間</option>
+              <option value="30" selected>30日間</option>
+              <option value="90">90日間</option>
+            </select>
+          </div>
+        </div>
+        <div id="invite-code-msg" class="hidden mt-3 p-3 rounded-lg text-sm"></div>
+        <button onclick="handleCreateInviteCode()"
+          class="mt-4 bg-green-500 hover:bg-green-600 text-white px-6 py-2 rounded-xl text-sm font-medium transition-colors">
+          <i class="fas fa-magic mr-1"></i>招待コードを発行
+        </button>
+      </div>
+
+      <!-- 発行済みコード一覧 -->
+      <div class="bg-white rounded-xl shadow">
+        <div class="p-4 border-b">
+          <h3 class="font-semibold text-gray-700"><i class="fas fa-list mr-1"></i>発行済みコード一覧</h3>
+        </div>
+        <div id="invite-codes-table" class="p-4">
+          <div class="text-gray-400 text-sm">読み込み中...</div>
+        </div>
+      </div>
+    </div>
+
     <!-- ===== 管理者管理ページ（旧スタッフ管理を全面リニューアル） ===== -->
     <div id="page-members" class="hidden p-8">
       <div class="flex items-center justify-between mb-6">
@@ -697,9 +771,12 @@ function getAdminDashboardHtml(): string {
    https://lin.ee/n4PoXrR
    (LINE ID: @054eyzbj)
 
-2. 友達追加すると、初回問診(約2分)が始まります
+2. 友達追加したら、担当者から受け取った招待コードを送信してください
+   例: ABC-1234
 
-3. 問診完了後、食事の写真を送るだけでAIが自動でカロリー計算します
+3. コード認証後、初回問診(約2分)が始まります
+
+4. 問診完了後、食事の写真を送るだけでAIが自動でカロリー計算します
 
 ※体重は「72.5kg」のようにテキストで送るだけでOKです
 ※「相談」と送るとAI栄養相談もできます</div>
@@ -714,7 +791,7 @@ function getAdminDashboardHtml(): string {
             class="absolute top-3 right-3 text-xs bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-gray-500 hover:bg-gray-50 transition-colors">
             <i class="fas fa-copy mr-1"></i>コピー
           </button>
-          <div id="guide-text-2" class="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">食事指導BOTのご案内です。下記リンクからLINEで友達追加して、初回問診にお答えください。写真を送るだけでカロリー記録ができます。
+          <div id="guide-text-2" class="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">食事指導BOTのご案内です。下記リンクからLINEで友達追加し、招待コード「（ここにコードを入力）」を送信してください。初回問診後、写真を送るだけでカロリー記録ができます。
 https://lin.ee/n4PoXrR</div>
         </div>
       </div>
@@ -1475,22 +1552,22 @@ function getWelcomeHtml(): string {
     <!-- Step 2 -->
     <div class="bg-white rounded-2xl shadow-sm p-6 fade-in" style="animation-delay:0.2s;">
       <div class="step-num bg-blue-100 text-blue-700 mb-4">2</div>
-      <h3 class="font-bold text-gray-800 text-lg mb-2">初回問診に回答</h3>
+      <h3 class="font-bold text-gray-800 text-lg mb-2">招待コードを送信</h3>
       <p class="text-gray-500 text-sm leading-relaxed">
-        性別・身長・体重・目標など<br>
-        <strong>9つの質問</strong>にLINEで答えるだけ。<br>
-        約2分で完了します。
+        担当者から受け取った<br>
+        <strong>招待コード</strong>（例: ABC-1234）を<br>
+        LINEで送信してください。
       </p>
     </div>
 
     <!-- Step 3 -->
     <div class="bg-white rounded-2xl shadow-sm p-6 fade-in" style="animation-delay:0.3s;">
       <div class="step-num bg-purple-100 text-purple-700 mb-4">3</div>
-      <h3 class="font-bold text-gray-800 text-lg mb-2">写真を送って記録開始</h3>
+      <h3 class="font-bold text-gray-800 text-lg mb-2">問診に回答して開始</h3>
       <p class="text-gray-500 text-sm leading-relaxed">
-        食事の写真を送るとAIが自動で<br>
-        <strong>カロリー＆栄養素</strong>を計算。<br>
-        体重はテキストで送ればOK。
+        <strong>9つの質問</strong>にLINEで答えるだけ。<br>
+        約2分で完了。あとは写真を送るだけで<br>
+        AIがカロリー計算します。
       </p>
     </div>
   </div>

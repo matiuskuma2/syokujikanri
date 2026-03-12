@@ -52,6 +52,9 @@ const SWITCH_TO_CONSULT = ['相談モード', '相談にして', '相談する']
 const SWITCH_TO_RECORD = ['記録モード', '記録にして', '記録する', '戻る']
 
 // 体重検出パターン: 例 "58.5kg", "58.5 kg", "58キロ"
+// 招待コード検出パターン: 例 "ABC-1234"
+const INVITE_CODE_PATTERN = /^([A-Z]{3}-\d{4})$/i
+
 const WEIGHT_PATTERN = /(\d{2,3}(?:\.\d{1,2})?)\s*(?:kg|ｋｇ|キロ|Kg|KG)/i
 
 // 食事区分テキスト分類
@@ -130,7 +133,7 @@ async function handleFollowEvent(
     followStatus: 'following',
   })
 
-  // 3. user_accounts 作成（初回フォロー時）
+  // 3. user_accounts 作成（デフォルトアカウントに仮紐付け）
   await ensureUserAccount(env.DB, lineUserId, clientAccountId)
 
   // 4. user_service_statuses 初期化
@@ -152,15 +155,31 @@ async function handleFollowEvent(
     userAccountId: userAccount.id,
   })
 
-  // 6. インテークフロー開始（初回問診 / 再フォロー時はスキップ判定）
+  // 6. 招待コード入力を促すメッセージを送信
+  //    コードが入力されたら handleInviteCode で正しいアカウントに紐付けられる
+  //    コードなしでも問診コマンドで開始可能（デフォルトアカウントのまま）
   if (event.replyToken) {
-    await startIntakeFlow(
-      event.replyToken,
-      lineUserId,
-      clientAccountId,
-      env,
-      'follow'
-    )
+    // 既に別アカウントに紐付いているか確認（再フォロー時）
+    const { findInviteCodeUsageByLineUser } = await import('../../repositories/invite-codes-repo')
+    const existingUsage = await findInviteCodeUsageByLineUser(env.DB, lineUserId)
+
+    if (existingUsage) {
+      // 再フォロー: 既にコード使用済みなので問診を再開
+      await startIntakeFlow(
+        event.replyToken,
+        lineUserId,
+        clientAccountId,
+        env,
+        'follow'
+      )
+    } else {
+      // 初回フォロー: 招待コード入力を促す
+      await replyText(
+        event.replyToken,
+        `🎉 友だち追加ありがとうございます！\n\n食事指導BOTへようこそ。\n\n📋 担当者から受け取った「招待コード」を送信してください。\n\n例: ABC-1234\n\n招待コードを入力すると、あなた専用のダイエットサポートが開始されます！`,
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+    }
   }
 
   console.log(`[LINE] follow: ${lineUserId} (${profile?.displayName})`)
@@ -241,6 +260,19 @@ async function handleTextMessageEvent(
   // ------------------------------------------------------------------
   // 4. モード切替コマンド判定
   // ------------------------------------------------------------------
+
+  // 4a. 招待コード検出（最優先）
+  const inviteMatch = textTrim.match(INVITE_CODE_PATTERN)
+  if (inviteMatch) {
+    await handleInviteCode(
+      event.replyToken,
+      inviteMatch[1],
+      lineUserId,
+      ctx
+    )
+    return
+  }
+
   // インテーク開始 / 再開コマンド
   if (['問診', 'ヒアリング', '登録', '初期設定'].includes(textTrim)) {
     await startIntakeFlow(event.replyToken, lineUserId, clientAccountId, env, 'command')
@@ -629,4 +661,78 @@ async function handleImageMessageEvent(
   )
 
   console.log(`[LINE] image queued: attachment=${attachment.id} r2Key=${r2Key}`)
+}
+
+// ===================================================================
+// handleInviteCode — 招待コード検出時の紐付け処理
+// ===================================================================
+
+async function handleInviteCode(
+  replyToken: string,
+  code: string,
+  lineUserId: string,
+  ctx: ProcessContext
+): Promise<void> {
+  const { env, lineChannelId, clientAccountId } = ctx
+  const { useInviteCode } = await import('../../repositories/invite-codes-repo')
+  const { findUserAccount, ensureUserAccount: ensureUA } = await import('../../repositories/line-users-repo')
+
+  const result = await useInviteCode(env.DB, code, lineUserId)
+
+  if (!result.success) {
+    const errorMessages: Record<string, string> = {
+      INVALID_CODE: '❌ この招待コードは無効です。\nコードをもう一度確認してください。',
+      CODE_EXPIRED: '⏰ この招待コードは有効期限切れです。\n担当者にお問い合わせください。',
+      CODE_EXHAUSTED: '⚠️ この招待コードは使用上限に達しています。\n担当者にお問い合わせください。',
+      ALREADY_USED: 'ℹ️ このコードは既に登録済みです。\nそのままご利用いただけます！',
+    }
+    await replyText(
+      replyToken,
+      errorMessages[result.error] ?? '招待コードの処理に失敗しました。',
+      env.LINE_CHANNEL_ACCESS_TOKEN
+    )
+    return
+  }
+
+  // 紐付け先の account_id
+  const targetAccountId = result.accountId
+
+  // user_accounts にレコードがあるか確認（既にデフォルトアカウントに紐付いている場合）
+  const existingDefault = await findUserAccount(env.DB, lineUserId, clientAccountId)
+  if (existingDefault && clientAccountId !== targetAccountId) {
+    // デフォルトアカウントの紐付けから、正しいアカウントに更新
+    await env.DB.prepare(`
+      UPDATE user_accounts 
+      SET client_account_id = ?1, updated_at = ?2
+      WHERE line_user_id = ?3 AND client_account_id = ?4
+    `).bind(targetAccountId, nowIso(), lineUserId, clientAccountId).run()
+  }
+
+  // 正しいアカウントへの紐付けを確保
+  await ensureUA(env.DB, lineUserId, targetAccountId)
+
+  // user_service_statuses も正しいアカウントに紐付け
+  const { upsertUserServiceStatus } = await import('../../repositories/subscriptions-repo')
+  await upsertUserServiceStatus(env.DB, {
+    accountId: targetAccountId,
+    lineUserId,
+    botEnabled: 1,
+    recordEnabled: 1,
+    consultEnabled: 1,
+  })
+
+  await replyText(
+    replyToken,
+    `✅ 招待コード「${code.toUpperCase()}」で登録が完了しました！\n\nこれからダイエットサポートを開始します。\nまずは初回ヒアリングにお答えください 😊`,
+    env.LINE_CHANNEL_ACCESS_TOKEN
+  )
+
+  // 招待コード使用後にインテークフローを開始
+  await startIntakeFlow(replyToken, lineUserId, targetAccountId, env, 'invite_code')
+    .catch(() => {
+      // replyToken は1回しか使えないので、既に返信済みの場合はエラーを無視
+      console.log(`[LINE] intake flow after invite code - reply already used`)
+    })
+
+  console.log(`[LINE] invite code used: ${code} → account ${targetAccountId} by ${lineUserId}`)
 }
