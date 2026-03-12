@@ -66,7 +66,19 @@
 ### ✅ 管理画面 — M1-5 / M2-2 / M2-3 / L-2
 - `/admin` → ログイン（JWT）→ ダッシュボード統計
   - 総ユーザー数 / 今日の記録数 / 週間アクティブ / **問診未完了数**
-- ユーザー一覧: 5段階ステータスラベル（🚫ブロック/⏸停止中/📋問診未完了/🔵制限中/✅利用中）
+- **初回セットアップ**: superadminが未登録の場合、ログイン画面から初期セットアップ画面に遷移可能
+- **ロール別ウェルカムガイド**: 初回ログイン時に「最初にやること」を表示（superadmin/admin/staff別）
+- **ロール別ナビゲーション**:
+  - **superadmin**: ダッシュボード / LINEユーザー管理 / 管理者管理 / LINE案内文 / アカウント設定 / システム管理
+  - **admin**: ダッシュボード / LINEユーザー管理 / 管理者管理 / LINE案内文 / アカウント設定
+  - **staff**: ダッシュボード / LINEユーザー管理 / アカウント設定（閲覧のみ）
+- **管理者管理ページ**:
+  - 管理者一覧（メール/権限/状態/LINEユーザー数/最終ログイン）
+  - 管理者追加フォーム（メール+仮パスワード+権限選択）
+  - 管理者ステータス切替（有効/停止）— superadminのみ
+  - 権限説明カード（superadmin/admin/staff）
+- **LINE案内文ページ**: QRコード表示 / LINE ID / メール用テンプレ / SMS用テンプレ / ウェルカムページURL
+- ユーザー一覧: ステータスラベル（ブロック/停止中/問診未完了/制限中/利用中）
 - ユーザー詳細モーダル（4タブ）:
   - **概要**: プロフィール + 問診回答 + サービス設定 + 直近記録
   - **記録**: 30日間の食事記録（タイプ別バッジ・カロリー表示）
@@ -79,6 +91,35 @@
   - データベース統計（テーブルサイズ）
   - 定期ジョブ一覧（リマインダー/週次レポート/期限切れ清掃）
   - API エンドポイント一覧
+
+### 管理者 API
+| メソッド | エンドポイント | 説明 |
+|----------|---------------|------|
+| POST | `/api/admin/auth/register` | 初回superadmin登録 |
+| POST | `/api/admin/auth/login` | ログイン（JWT発行） |
+| POST | `/api/admin/auth/invite` | メール招待（SendGrid） |
+| POST | `/api/admin/auth/accept-invite` | 招待受諾 |
+| POST | `/api/admin/auth/change-password` | パスワード変更 |
+| POST | `/api/admin/auth/forgot-password` | パスワードリセット申請 |
+| POST | `/api/admin/auth/reset-password` | パスワードリセット実行 |
+| GET | `/api/admin/auth/me` | 自分の情報取得 |
+| GET | `/api/admin/dashboard/stats` | ダッシュボード統計 |
+| GET | `/api/admin/dashboard/members` | 管理者一覧 |
+| POST | `/api/admin/dashboard/members` | 管理者直接作成（仮パスワード） |
+| PATCH | `/api/admin/dashboard/members/:id` | 管理者ステータス変更 |
+| GET | `/api/admin/users` | LINEユーザー一覧 |
+| GET | `/api/admin/users/:id` | ユーザー詳細 |
+| PATCH | `/api/admin/users/:id/service` | サービス設定変更 |
+
+### ロール別初回フロー
+1. **Superadmin**:
+   - `/admin` にアクセス → ログイン画面 → 「こちら」から初期セットアップ → アカウント作成
+   - ログイン → ウェルカムガイド → 「管理者管理」で admin を追加 → システム設定確認
+2. **Admin**:
+   - superadmin が作成した仮パスワードで `/admin` にログイン
+   - ウェルカムガイド → 「LINE案内文」でお客様にLINE登録を案内 → ユーザー記録を確認
+3. **User（エンドユーザー）**:
+   - LINE友達追加 → 初回問診（9問）→ 食事写真・体重送信 → LIFF ダッシュボード
 
 ### ✅ インフラ
 - Cloudflare Pages デプロイ済み
@@ -141,7 +182,7 @@ accounts → line_channels → line_users → user_accounts
 - **プラットフォーム**: Cloudflare Pages
 - **ステータス**: ✅ 本番稼働中
 - **技術スタック**: Hono + TypeScript + Cloudflare D1/R2/Queue + OpenAI GPT-4o
-- **最終更新**: 2026-03-11
+- **最終更新**: 2026-03-12
 
 ## ローカル開発
 ```bash
