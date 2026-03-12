@@ -189,7 +189,7 @@ accounts → line_channels → line_users → user_accounts
 | LINE_CHANNEL_ACCESS_TOKEN | Messaging API Access Token |
 | LINE_LIFF_CHANNEL_ID | 2009409790 (Login Channel) |
 | LINE_LIFF_ID | 2009409790-DekZRh4t |
-| LINE_CHANNEL_ID | ch_default_replace_me (D1 line_channels.id) |
+| LINE_CHANNEL_ID | ch_default_replace_me (D1 line_channels.id 内部UUID) |
 | CLIENT_ACCOUNT_ID | acc_client_00000000000000000000000000000001 |
 | OPENAI_API_KEY | GPT-4o API Key |
 | JWT_SECRET | (auto-generated secure key) |
@@ -214,8 +214,8 @@ accounts → line_channels → line_users → user_accounts
 - **ステータス**: ✅ 本番稼働中
 - **技術スタック**: Hono + TypeScript + Cloudflare D1/R2/Queue + OpenAI GPT-4o
 - **GitHub**: https://github.com/matiuskuma2/syokujikanri
-- **最終デプロイ**: 2026-03-12（文言改善・チェックリスト Phase 化デプロイ完了）
-- **デプロイURL**: https://26468c42.diet-bot.pages.dev
+- **最終デプロイ**: 2026-03-12（LINE連携不具合修正 + 仕様書追加）
+- **デプロイURL**: https://diet-bot.pages.dev
 
 ## ローカル開発
 ```bash
@@ -264,10 +264,46 @@ curl http://localhost:3000/api/health
 
 ---
 
+## 詳細仕様書（docs/ ディレクトリ）
+
+| ドキュメント | 内容 |
+|-------------|------|
+| [`docs/01_LINE動き仕様書.md`](docs/01_LINE動き仕様書.md) | LINE上の全イベント処理フロー、メッセージ例、BOT応答文言、DB保存先テーブル、テキスト処理優先順位 |
+| [`docs/02_画像解析記録反映確認表.md`](docs/02_画像解析記録反映確認表.md) | 画像パイプライン全体図、カテゴリ別抽出データ、proposed_action_json構造、エラーハンドリング |
+| [`docs/03_計画vs現状_差分比較.md`](docs/03_計画vs現状_差分比較.md) | 54項目の実装チェックリスト、ナレッジ・プロンプト設計の差分、推奨次ステップ（優先順位付き） |
+
+---
+
+## 修正履歴（2026-03-12）
+
+### LINE連携不具合の修正
+| # | 問題 | 原因 | 対応 |
+|---|------|------|------|
+| 1 | 招待コードが「使用済み」エラー | max_uses=1で1回使用後にブロック | use_countリセット、フロー修正 |
+| 2 | 「このサービスは現在ご利用いただけません」 | checkServiceAccessが招待コード処理の前に実行 | 招待コード検出を最優先に移動 |
+| 3 | line_usersにレコードが作成されない | LINE_CHANNEL_IDとline_channels.idの不一致（数値vs内部UUID） | webhook.tsでline_channelsテーブルLookup追加 |
+| 4 | 別アカウントに紐付けた後もブロック | checkServiceAccessがCLIENT_ACCOUNT_IDのみで検索 | lineUserIdフォールバック検索を追加 |
+
+---
+
 ## 次のステップ（未実装）
-1. ~~Cloudflare API key設定後の本番デプロイ~~ ✅ 完了（2026-03-12）
-2. ~~admin画面の文言改善（LINE登録案内に統一）~~ ✅ 完了（2026-03-12）
-3. 実機テスト: superadmin→admin→userの完全フロー検証（上記チェックリスト参照）
-4. LINE端末での友達追加 → 招待コード → 問診 → 記録フルテスト
-5. パスワード変更フロー（admin初回ログイン時に仮パスワード変更促進）
-6. 請求管理・サブスクリプション機能（Phase 2）
+
+### Phase 1.1 — 即時対応（運用開始前に必須）
+1. ✅ ~~Cloudflare API key設定後の本番デプロイ~~ 完了（2026-03-12）
+2. ✅ ~~admin画面の文言改善（LINE登録案内に統一）~~ 完了（2026-03-12）
+3. ✅ ~~LINE連携不具合修正（招待コード・アカウント紐付け）~~ 完了（2026-03-12）
+4. E2Eテスト実施: LINE実機で友達追加→招待コード→問診→記録→画像→相談の全フロー検証
+5. LINE Developers Webhook設定確認（Webhook URLが有効かつON）
+
+### Phase 1.2 — 品質向上（運用開始後2週間以内）
+6. knowledge_documents にコンテンツ投入（基礎栄養知識、FAQ、指導方針）
+7. 相談AIにDB上のプロンプトを接続（bot_versions.system_prompt → ハードコード置換）
+8. 個人コンテキスト注入（相談時にuser_profiles + 直近記録をプロンプトに追加）
+9. SendGridパスワードリセットメール動作確認
+
+### Phase 2 — 機能拡張
+10. RAG実装（knowledge_documents のembedding検索）
+11. 管理画面プロンプトエディタ
+12. サブスクリプション管理・課金
+13. LINE Rich Menu 設定
+14. 運動記録機能
