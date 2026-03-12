@@ -1507,19 +1507,39 @@ async function loadRichMenuList() {
     const menus = data.data.richmenus || [];
     const defaultId = data.data.defaultRichMenuId;
 
+    // Always show preset info card
+    const presetHtml = `
+      <div class="bg-gradient-to-r from-green-50 to-teal-50 rounded-xl border border-green-200 p-4 mb-4">
+        <h4 class="font-bold text-green-800 mb-2"><i class="fas fa-magic mr-2"></i>プリセット Rich Menu 構成</h4>
+        <div class="grid grid-cols-2 gap-2 text-sm mb-3">
+          <div class="bg-white rounded p-2 text-center border"><i class="fas fa-pencil-alt text-green-500 mr-1"></i>記録する<br><span class="text-xs text-gray-400">→ 記録モード</span></div>
+          <div class="bg-white rounded p-2 text-center border"><i class="fas fa-camera text-blue-500 mr-1"></i>写真を送る<br><span class="text-xs text-gray-400">→ 写真案内</span></div>
+          <div class="bg-white rounded p-2 text-center border"><i class="fas fa-weight text-purple-500 mr-1"></i>体重記録<br><span class="text-xs text-gray-400">→ 体重入力案内</span></div>
+          <div class="bg-white rounded p-2 text-center border"><i class="fas fa-comment text-orange-500 mr-1"></i>相談する<br><span class="text-xs text-gray-400">→ 相談モード</span></div>
+          <div class="bg-white rounded p-2 text-center border"><i class="fas fa-chart-bar text-teal-500 mr-1"></i>ダッシュボード<br><span class="text-xs text-gray-400">→ LIFF起動</span></div>
+          <div class="bg-white rounded p-2 text-center border"><i class="fas fa-clipboard-list text-red-500 mr-1"></i>問診やり直し<br><span class="text-xs text-gray-400">→ 問診リセット</span></div>
+        </div>
+        <p class="text-xs text-gray-500">画像サイズ: 2500×1686px (2列×3行) ・ プリセット画像: <code>/static/richmenu.png</code></p>
+      </div>`;
+
     if (menus.length === 0) {
-      container.innerHTML = `
+      container.innerHTML = presetHtml + `
         <div class="text-center py-8 text-gray-500">
           <i class="fas fa-bars text-3xl mb-3"></i>
           <p>Rich Menu がまだ作成されていません</p>
-          <button onclick="createRichMenu()" class="mt-4 bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 transition">
-            <i class="fas fa-plus mr-2"></i>Rich Menu を作成
-          </button>
+          <div class="flex justify-center gap-3 mt-4">
+            <button onclick="createRichMenu()" class="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 transition">
+              <i class="fas fa-plus mr-2"></i>Rich Menu を作成（画像付き）
+            </button>
+            <button onclick="createRichMenuWithoutImage()" class="bg-gray-500 text-white px-4 py-2 rounded-lg hover:bg-gray-600 transition">
+              <i class="fas fa-plus mr-2"></i>メニューのみ作成
+            </button>
+          </div>
         </div>`;
       return;
     }
 
-    container.innerHTML = menus.map(m => `
+    container.innerHTML = presetHtml + menus.map(m => `
       <div class="bg-white rounded-xl shadow-sm border p-4 mb-3">
         <div class="flex items-center justify-between">
           <div>
@@ -1528,11 +1548,12 @@ async function loadRichMenuList() {
             <p class="text-xs text-gray-500">chatBarText: ${esc(m.chatBarText)}</p>
             <p class="text-xs text-gray-500">areas: ${m.areas?.length || 0}個</p>
           </div>
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 flex-wrap justify-end">
             ${m.richMenuId === defaultId
               ? '<span class="bg-green-100 text-green-700 text-xs px-2 py-1 rounded-full"><i class="fas fa-check mr-1"></i>デフォルト</span>'
               : `<button onclick="setDefaultRichMenu('${m.richMenuId}')" class="text-xs bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600">デフォルトに設定</button>`
             }
+            <button onclick="uploadRichMenuImage('${m.richMenuId}')" class="text-xs bg-purple-500 text-white px-3 py-1 rounded hover:bg-purple-600"><i class="fas fa-image mr-1"></i>画像</button>
             ${currentAdmin?.role === 'superadmin' ? `<button onclick="deleteRichMenu('${m.richMenuId}')" class="text-xs bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600"><i class="fas fa-trash"></i></button>` : ''}
           </div>
         </div>
@@ -1544,7 +1565,53 @@ async function loadRichMenuList() {
 }
 
 async function createRichMenu() {
-  if (!confirm('LINE Rich Menu を作成しますか？\n\n※ 画像は後からアップロードできます')) return;
+  if (!confirm('プリセット Rich Menu を作成しますか？\n\n6ボタン構成 + プリセット画像で作成し、デフォルトに設定します。')) return;
+
+  try {
+    showToast('Rich Menu を作成中...', 'success');
+
+    // 1. まずプリセット画像を取得
+    const imgRes = await fetch('/static/richmenu.png');
+    let imageBlob = null;
+    if (imgRes.ok) {
+      imageBlob = await imgRes.blob();
+    }
+
+    // 2. Rich Menu 作成（画像付き multipart）
+    let res;
+    if (imageBlob) {
+      const formData = new FormData();
+      formData.append('image', imageBlob, 'richmenu.png');
+      res = await fetch(`${API_BASE}/admin/rich-menu/create`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${authToken}` },
+        body: formData,
+      });
+    } else {
+      res = await fetch(`${API_BASE}/admin/rich-menu/create`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+    }
+
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error);
+
+    const msg = data.data.setAsDefault
+      ? `Rich Menu 作成完了（デフォルト設定済み）: ${data.data.richMenuId}`
+      : `Rich Menu 作成完了: ${data.data.richMenuId}`;
+    showToast(msg, 'success');
+    await loadRichMenuList();
+  } catch (e) {
+    showToast('作成失敗: ' + e.message, 'error');
+  }
+}
+
+async function createRichMenuWithoutImage() {
+  if (!confirm('Rich Menu（画像なし）を作成しますか？\n\n後から画像をアップロードできます。')) return;
 
   try {
     showToast('Rich Menu を作成中...', 'success');

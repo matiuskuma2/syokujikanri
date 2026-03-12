@@ -423,7 +423,7 @@ async function handleTextMessageEvent(
   }
 
   // 「問診やり直し」→ 最初から新規開始
-  if (textTrim === '問診やり直し') {
+  if (textTrim === '問診やり直し' || textTrim === '問診リセット') {
     await upsertUserServiceStatus(env.DB, {
       accountId: effectiveAccountId,
       lineUserId,
@@ -436,6 +436,40 @@ async function handleTextMessageEvent(
   // 「問診再開」→ 途中のステップから続行
   if (textTrim === '問診再開') {
     await resumeIntakeFlow(event.replyToken, lineUserId, effectiveAccountId, env)
+    return
+  }
+
+  // ------------------------------------------------------------------
+  // ⑤a Rich Menu ボタンからの特殊トリガー
+  // ------------------------------------------------------------------
+
+  // 「写真を送る」ボタン → 画像送信を促す案内
+  if (textTrim === '写真を送る') {
+    // record モードへ切替
+    try { await updateThreadMode(env.DB, thread.id, 'record') } catch (e) { console.error('[LINE] updateThreadMode(record) error:', e) }
+    try { await deleteModeSession(env.DB, effectiveAccountId, lineUserId) } catch (e) { /* ignore */ }
+    await replyText(
+      event.replyToken,
+      '📷 食事の写真を送ってください！\n\nAIが自動で栄養素を解析します。\n\n💡 ヒント:\n・真上から撮ると認識精度UP\n・お皿全体が入るように\n・1品ずつでも、まとめてでもOK',
+      env.LINE_CHANNEL_ACCESS_TOKEN
+    )
+    return
+  }
+
+  // 「体重記録」ボタン → 体重入力を促す案内
+  if (textTrim === '体重記録' || textTrim === '体重を記録') {
+    // record モードへ切替
+    try { await updateThreadMode(env.DB, thread.id, 'record') } catch (e) { console.error('[LINE] updateThreadMode(record) error:', e) }
+    try { await deleteModeSession(env.DB, effectiveAccountId, lineUserId) } catch (e) { /* ignore */ }
+    await replyTextWithQuickReplies(
+      event.replyToken,
+      '⚖️ 体重を入力してください！\n\n例: 65.5kg\n例: 58キロ\n\n※ 数字＋kg（またはキロ）で記録されます',
+      [
+        { label: '📝 記録する', text: '記録モード' },
+        { label: '💬 相談する', text: '相談モード' },
+      ],
+      env.LINE_CHANNEL_ACCESS_TOKEN
+    )
     return
   }
 

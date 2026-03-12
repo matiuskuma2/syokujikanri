@@ -49,12 +49,12 @@ function buildDefaultRichMenuObject(liffUrl: string) {
     },
     {
       bounds: { x: cellW, y: 0, width: cellW, height: cellH },
-      action: { type: 'message', label: '写真を送る', text: '食事の写真を送ってください' },
+      action: { type: 'message', label: '写真を送る', text: '写真を送る' },
     },
     // Row 2
     {
       bounds: { x: 0, y: cellH, width: cellW, height: cellH },
-      action: { type: 'message', label: '体重記録', text: '体重を入力してください（例: 65.5kg）' },
+      action: { type: 'message', label: '体重記録', text: '体重記録' },
     },
     {
       bounds: { x: cellW, y: cellH, width: cellW, height: cellH },
@@ -67,7 +67,7 @@ function buildDefaultRichMenuObject(liffUrl: string) {
     },
     {
       bounds: { x: cellW, y: cellH * 2, width: cellW, height: cellH },
-      action: { type: 'message', label: '問診', text: '問診' },
+      action: { type: 'message', label: '問診やり直し', text: '問診やり直し' },
     },
   ]
 
@@ -171,33 +171,34 @@ richMenuRouter.post('/create', async (c) => {
   }
 
   // 2. Rich Menu 画像をアップロード
-  //    public/static/richmenu.png が存在する場合はR2から取得
-  //    なければプレースホルダーを使用
+  //    リクエストボディ（multipart）→ R2 → なしの優先順で取得
   let imageBuffer: ArrayBuffer | null = null
 
-  // R2にrichmenu画像があるか確認
+  // まずリクエストボディから画像を取得（admin UI からのアップロード）
   try {
-    const r2Obj = await c.env.R2.get('assets/richmenu.png')
-    if (r2Obj) {
-      imageBuffer = await r2Obj.arrayBuffer()
+    const contentType = c.req.header('Content-Type') || ''
+    if (contentType.includes('multipart/form-data')) {
+      const formData = await c.req.formData()
+      const file = formData.get('image') as File | null
+      if (file) {
+        imageBuffer = await file.arrayBuffer()
+        console.log(`[RichMenu] Image from request body: ${file.size} bytes`)
+      }
     }
   } catch (e) {
-    console.warn('[RichMenu] R2 richmenu.png not found:', e)
+    console.warn('[RichMenu] Failed to parse multipart image:', e)
   }
 
-  // R2になければリクエストボディから画像を受け取る（multipart対応）
+  // リクエストになければ R2 からフォールバック
   if (!imageBuffer) {
     try {
-      const contentType = c.req.header('Content-Type') || ''
-      if (contentType.includes('multipart/form-data')) {
-        const formData = await c.req.formData()
-        const file = formData.get('image') as File | null
-        if (file) {
-          imageBuffer = await file.arrayBuffer()
-        }
+      const r2Obj = await c.env.R2.get('assets/richmenu.png')
+      if (r2Obj) {
+        imageBuffer = await r2Obj.arrayBuffer()
+        console.log(`[RichMenu] Image from R2: ${imageBuffer.byteLength} bytes`)
       }
     } catch (e) {
-      console.warn('[RichMenu] Failed to parse multipart image:', e)
+      console.warn('[RichMenu] R2 richmenu.png not found:', e)
     }
   }
 
