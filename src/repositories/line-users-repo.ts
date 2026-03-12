@@ -154,6 +154,23 @@ export async function findUserAccount(
   return row ?? null
 }
 
+/** LINE User ID だけで UserAccount を検索（superadmin 用：最初にヒットしたものを返す） */
+export async function findUserAccountByLineUserId(
+  db: D1Database,
+  lineUserId: string
+): Promise<UserAccount | null> {
+  const row = await db
+    .prepare(`
+      SELECT * FROM user_accounts
+      WHERE line_user_id = ?1 AND status = 'active'
+      ORDER BY joined_at DESC
+      LIMIT 1
+    `)
+    .bind(lineUserId)
+    .first<UserAccount>()
+  return row ?? null
+}
+
 /** user_account_id（内部ID）で取得 */
 export async function findUserAccountById(
   db: D1Database,

@@ -7,7 +7,7 @@
 
 import { Hono } from 'hono'
 import type { HonoEnv } from '../../middleware/auth'
-import { listUserAccountsWithDetails, findUserAccount } from '../../repositories/line-users-repo'
+import { listUserAccountsWithDetails, findUserAccount, findUserAccountByLineUserId } from '../../repositories/line-users-repo'
 import { listRecentDailyLogs } from '../../repositories/daily-logs-repo'
 import { listMealEntriesByDailyLogIds } from '../../repositories/meal-entries-repo'
 import { listWeightHistory } from '../../repositories/body-metrics-repo'
@@ -107,11 +107,16 @@ usersRouter.get('/:lineUserId', async (c) => {
   const payload = c.get('jwtPayload')
   const lineUserId = c.req.param('lineUserId')
   const accountId = payload.accountId
+  const isSuperadmin = payload.role === 'superadmin'
 
-  const userAccount = await findUserAccount(c.env.DB, lineUserId, accountId)
+  // superadmin はアカウント横断で検索
+  const userAccount = isSuperadmin
+    ? await findUserAccountByLineUserId(c.env.DB, lineUserId)
+    : await findUserAccount(c.env.DB, lineUserId, accountId)
   if (!userAccount) return notFound(c, 'User not found')
 
-  const svc = await findUserServiceStatus(c.env.DB, accountId, lineUserId)
+  const effectiveAccountId = userAccount.client_account_id
+  const svc = await findUserServiceStatus(c.env.DB, effectiveAccountId, lineUserId)
   const recentLogs = await listRecentDailyLogs(c.env.DB, userAccount.id, 30)
 
   const lineUser = await c.env.DB.prepare(
@@ -173,9 +178,14 @@ usersRouter.patch('/:lineUserId/service', async (c) => {
   const payload = c.get('jwtPayload')
   const lineUserId = c.req.param('lineUserId')
   const accountId = payload.accountId
+  const isSuperadmin = payload.role === 'superadmin'
 
-  const userAccount = await findUserAccount(c.env.DB, lineUserId, accountId)
+  const userAccount = isSuperadmin
+    ? await findUserAccountByLineUserId(c.env.DB, lineUserId)
+    : await findUserAccount(c.env.DB, lineUserId, accountId)
   if (!userAccount) return notFound(c, 'User not found')
+
+  const effectiveAccountId = userAccount.client_account_id
 
   const body = await c.req.json<{
     bot_enabled?: boolean
@@ -185,7 +195,7 @@ usersRouter.patch('/:lineUserId/service', async (c) => {
   }>()
 
   await upsertUserServiceStatus(c.env.DB, {
-    accountId,
+    accountId: effectiveAccountId,
     lineUserId,
     botEnabled:      body.bot_enabled !== undefined ? (body.bot_enabled ? 1 : 0) : undefined,
     recordEnabled:   body.record_enabled !== undefined ? (body.record_enabled ? 1 : 0) : undefined,
@@ -205,9 +215,12 @@ usersRouter.get('/:lineUserId/logs', async (c) => {
   const payload = c.get('jwtPayload')
   const lineUserId = c.req.param('lineUserId')
   const accountId = payload.accountId
+  const isSuperadmin = payload.role === 'superadmin'
   const limit = parseInt(c.req.query('limit') || '30', 10)
 
-  const userAccount = await findUserAccount(c.env.DB, lineUserId, accountId)
+  const userAccount = isSuperadmin
+    ? await findUserAccountByLineUserId(c.env.DB, lineUserId)
+    : await findUserAccount(c.env.DB, lineUserId, accountId)
   if (!userAccount) return notFound(c, 'User not found')
 
   const logs = await listRecentDailyLogs(c.env.DB, userAccount.id, limit)
@@ -243,9 +256,12 @@ usersRouter.get('/:lineUserId/photos', async (c) => {
   const payload = c.get('jwtPayload')
   const lineUserId = c.req.param('lineUserId')
   const accountId = payload.accountId
+  const isSuperadmin = payload.role === 'superadmin'
   const limit = parseInt(c.req.query('limit') || '20', 10)
 
-  const userAccount = await findUserAccount(c.env.DB, lineUserId, accountId)
+  const userAccount = isSuperadmin
+    ? await findUserAccountByLineUserId(c.env.DB, lineUserId)
+    : await findUserAccount(c.env.DB, lineUserId, accountId)
   if (!userAccount) return notFound(c, 'User not found')
 
   const { results: photos } = await c.env.DB.prepare(`
@@ -277,9 +293,12 @@ usersRouter.get('/:lineUserId/reports', async (c) => {
   const payload = c.get('jwtPayload')
   const lineUserId = c.req.param('lineUserId')
   const accountId = payload.accountId
+  const isSuperadmin = payload.role === 'superadmin'
   const limit = parseInt(c.req.query('limit') || '12', 10)
 
-  const userAccount = await findUserAccount(c.env.DB, lineUserId, accountId)
+  const userAccount = isSuperadmin
+    ? await findUserAccountByLineUserId(c.env.DB, lineUserId)
+    : await findUserAccount(c.env.DB, lineUserId, accountId)
   if (!userAccount) return notFound(c, 'User not found')
 
   const { results: reports } = await c.env.DB.prepare(`

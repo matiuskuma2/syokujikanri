@@ -19,6 +19,7 @@ import adminAuthRouter from './routes/admin/auth'
 import adminUsersRouter from './routes/admin/users'
 import adminDashboardRouter from './routes/admin/dashboard'
 import inviteCodesRouter from './routes/admin/invite-codes'
+import richMenuRouter from './routes/admin/rich-menu'
 import userRouter from './routes/user/index'
 import meRouter from './routes/user/me'
 import filesRouter from './routes/user/files'
@@ -86,6 +87,7 @@ app.use('/api/admin/*', authMiddleware)
 app.route('/api/admin/users', adminUsersRouter)
 app.route('/api/admin/dashboard', adminDashboardRouter)
 app.route('/api/admin/invite-codes', inviteCodesRouter)
+app.route('/api/admin/rich-menu', richMenuRouter)
 
 // ===================================================================
 // User API（後方互換: マジックリンク方式 /api/user/*）
@@ -417,6 +419,10 @@ function getAdminDashboardHtml(): string {
         <button id="nav-bot-settings" onclick="showPage('bot-settings')"
           class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-300 hover:bg-gray-700 transition-colors text-left">
           <i class="fas fa-robot w-5 text-center"></i><span>BOT/ナレッジ設定</span>
+        </button>
+        <button id="nav-rich-menu" onclick="showPage('rich-menu')"
+          class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-300 hover:bg-gray-700 transition-colors text-left">
+          <i class="fas fa-bars w-5 text-center"></i><span>Rich Menu管理</span>
         </button>
       </div>
     </nav>
@@ -1254,6 +1260,59 @@ https://lin.ee/n4PoXrR</div>
             <span class="text-gray-700">/api/users/me</span>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- ===== Rich Menu 管理ページ (Superadmin Only) ===== -->
+    <div id="page-rich-menu" class="hidden p-8">
+      <h1 class="text-2xl font-bold text-gray-800 mb-6"><i class="fas fa-bars mr-2 text-blue-500"></i>Rich Menu 管理</h1>
+
+      <div class="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 text-sm text-blue-800">
+        <i class="fas fa-info-circle mr-2"></i>
+        LINE Rich Menu（トーク画面下部のメニュー）を管理します。作成 → 画像アップロード → デフォルト設定 の順で進めてください。
+      </div>
+
+      <!-- Rich Menu 一覧 -->
+      <div class="bg-white rounded-xl shadow p-6 mb-6">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="font-bold text-gray-800"><i class="fas fa-list mr-2 text-gray-500"></i>Rich Menu 一覧</h2>
+          <button onclick="createRichMenu()" class="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+            <i class="fas fa-plus mr-1"></i>新規作成
+          </button>
+        </div>
+        <div id="rich-menu-list" class="text-gray-400 text-sm">読み込み中...</div>
+      </div>
+
+      <!-- Rich Menu 設計仕様 -->
+      <div class="bg-white rounded-xl shadow p-6">
+        <h2 class="font-bold text-gray-800 mb-4"><i class="fas fa-grid-2 mr-2 text-purple-500"></i>メニューレイアウト仕様</h2>
+        <div class="grid grid-cols-3 gap-2 max-w-md mb-4">
+          <div class="bg-green-50 border border-green-200 rounded-lg p-3 text-center">
+            <i class="fas fa-pen-to-square text-green-600 text-lg mb-1"></i>
+            <p class="text-xs font-medium text-gray-700">📝 記録</p>
+          </div>
+          <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 text-center">
+            <i class="fas fa-camera text-blue-600 text-lg mb-1"></i>
+            <p class="text-xs font-medium text-gray-700">📷 写真送信</p>
+          </div>
+          <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-center">
+            <i class="fas fa-weight-scale text-amber-600 text-lg mb-1"></i>
+            <p class="text-xs font-medium text-gray-700">⚖️ 体重記録</p>
+          </div>
+          <div class="bg-purple-50 border border-purple-200 rounded-lg p-3 text-center">
+            <i class="fas fa-comments text-purple-600 text-lg mb-1"></i>
+            <p class="text-xs font-medium text-gray-700">💬 相談</p>
+          </div>
+          <div class="bg-teal-50 border border-teal-200 rounded-lg p-3 text-center">
+            <i class="fas fa-chart-bar text-teal-600 text-lg mb-1"></i>
+            <p class="text-xs font-medium text-gray-700">📊 ダッシュボード</p>
+          </div>
+          <div class="bg-rose-50 border border-rose-200 rounded-lg p-3 text-center">
+            <i class="fas fa-clipboard-list text-rose-600 text-lg mb-1"></i>
+            <p class="text-xs font-medium text-gray-700">📋 問診やり直し</p>
+          </div>
+        </div>
+        <p class="text-xs text-gray-500">画像サイズ: 2500 × 1686 px（2列3行） / chatBarText: 「メニューを開く」</p>
       </div>
     </div>
 

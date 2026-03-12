@@ -271,7 +271,7 @@ function dismissGuide() {
 // ページ切替
 // ================================================================
 function showPage(page) {
-  const pages = ['overview', 'users', 'invite-codes', 'members', 'line-guide', 'checklist', 'account', 'system', 'bot-settings'];
+  const pages = ['overview', 'users', 'invite-codes', 'members', 'line-guide', 'checklist', 'account', 'system', 'bot-settings', 'rich-menu'];
   pages.forEach(p => {
     const el = document.getElementById('page-' + p);
     if (el) el.classList.add('hidden');
@@ -302,6 +302,7 @@ function showPage(page) {
   else if (page === 'account') loadAccount();
   else if (page === 'system') loadSystem();
   else if (page === 'bot-settings') loadBotSettings();
+  else if (page === 'rich-menu') loadRichMenuList();
   else if (page === 'checklist') updateChecklistProgress();
   // line-guide は静的なので読み込み不要
 }
@@ -1484,6 +1485,142 @@ async function loadBotKbLinks() {
   } catch {
     el.innerHTML = '<p class="text-red-400">紐付け情報の取得に失敗しました</p>';
   }
+}
+
+// ================================================================
+// Rich Menu 管理 (Admin / Superadmin)
+// ================================================================
+
+async function loadRichMenuList() {
+  const container = document.getElementById('rich-menu-list');
+  if (!container) return;
+
+  container.innerHTML = '<div class="text-center py-4"><div class="animate-spin w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full mx-auto"></div></div>';
+
+  try {
+    const res = await fetch(`${API_BASE}/admin/rich-menu/list`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error);
+
+    const menus = data.data.richmenus || [];
+    const defaultId = data.data.defaultRichMenuId;
+
+    if (menus.length === 0) {
+      container.innerHTML = `
+        <div class="text-center py-8 text-gray-500">
+          <i class="fas fa-bars text-3xl mb-3"></i>
+          <p>Rich Menu がまだ作成されていません</p>
+          <button onclick="createRichMenu()" class="mt-4 bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 transition">
+            <i class="fas fa-plus mr-2"></i>Rich Menu を作成
+          </button>
+        </div>`;
+      return;
+    }
+
+    container.innerHTML = menus.map(m => `
+      <div class="bg-white rounded-xl shadow-sm border p-4 mb-3">
+        <div class="flex items-center justify-between">
+          <div>
+            <h4 class="font-semibold text-gray-800">${esc(m.name)}</h4>
+            <p class="text-xs text-gray-500 mt-1">ID: ${esc(m.richMenuId)}</p>
+            <p class="text-xs text-gray-500">chatBarText: ${esc(m.chatBarText)}</p>
+            <p class="text-xs text-gray-500">areas: ${m.areas?.length || 0}個</p>
+          </div>
+          <div class="flex items-center gap-2">
+            ${m.richMenuId === defaultId
+              ? '<span class="bg-green-100 text-green-700 text-xs px-2 py-1 rounded-full"><i class="fas fa-check mr-1"></i>デフォルト</span>'
+              : `<button onclick="setDefaultRichMenu('${m.richMenuId}')" class="text-xs bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600">デフォルトに設定</button>`
+            }
+            ${currentAdmin?.role === 'superadmin' ? `<button onclick="deleteRichMenu('${m.richMenuId}')" class="text-xs bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600"><i class="fas fa-trash"></i></button>` : ''}
+          </div>
+        </div>
+      </div>
+    `).join('');
+  } catch (e) {
+    container.innerHTML = `<div class="text-red-500 text-center py-4"><i class="fas fa-exclamation-circle mr-2"></i>${esc(e.message)}</div>`;
+  }
+}
+
+async function createRichMenu() {
+  if (!confirm('LINE Rich Menu を作成しますか？\n\n※ 画像は後からアップロードできます')) return;
+
+  try {
+    showToast('Rich Menu を作成中...', 'success');
+    const res = await fetch(`${API_BASE}/admin/rich-menu/create`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error);
+
+    showToast(`Rich Menu 作成完了: ${data.data.richMenuId}`, 'success');
+    await loadRichMenuList();
+  } catch (e) {
+    showToast('作成失敗: ' + e.message, 'error');
+  }
+}
+
+async function setDefaultRichMenu(richMenuId) {
+  if (!confirm('このRich Menuをデフォルトに設定しますか？')) return;
+  try {
+    const res = await fetch(`${API_BASE}/admin/rich-menu/set-default/${richMenuId}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error);
+    showToast('デフォルトに設定しました', 'success');
+    await loadRichMenuList();
+  } catch (e) {
+    showToast('設定失敗: ' + e.message, 'error');
+  }
+}
+
+async function deleteRichMenu(richMenuId) {
+  if (!confirm('このRich Menuを削除しますか？\n※ ユーザー全員のメニューが消えます')) return;
+  try {
+    const res = await fetch(`${API_BASE}/admin/rich-menu/${richMenuId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error);
+    showToast('削除しました', 'success');
+    await loadRichMenuList();
+  } catch (e) {
+    showToast('削除失敗: ' + e.message, 'error');
+  }
+}
+
+async function uploadRichMenuImage(richMenuId) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/png,image/jpeg';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('image', file);
+    try {
+      showToast('画像アップロード中...', 'success');
+      const res = await fetch(`${API_BASE}/admin/rich-menu/upload-image/${richMenuId}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${authToken}` },
+        body: formData,
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+      showToast('画像アップロード完了', 'success');
+    } catch (e) {
+      showToast('アップロード失敗: ' + e.message, 'error');
+    }
+  };
+  input.click();
 }
 
 // ================================================================
