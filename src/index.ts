@@ -474,15 +474,15 @@ function getAdminDashboardHtml(): string {
           <div class="guide-step">
             <div class="guide-num bg-green-100 text-green-700">1</div>
             <div>
-              <p class="font-bold text-gray-800 text-sm">LINEユーザーを増やす</p>
-              <p class="text-xs text-gray-500">「LINE案内文」メニューから、お客様にLINE登録を案内する文面をコピーできます</p>
+              <p class="font-bold text-gray-800 text-sm">LINE登録を案内する</p>
+              <p class="text-xs text-gray-500">「招待コード」で顧客用コードを発行し、「LINE案内文」からテンプレートをコピーして送りましょう</p>
             </div>
           </div>
           <div class="guide-step">
             <div class="guide-num bg-blue-100 text-blue-700">2</div>
             <div>
-              <p class="font-bold text-gray-800 text-sm">ユーザーの記録を確認する</p>
-              <p class="text-xs text-gray-500">「LINEユーザー管理」で各ユーザーの食事記録・体重・問診結果を確認できます</p>
+              <p class="font-bold text-gray-800 text-sm">ユーザーの状態を確認する</p>
+              <p class="text-xs text-gray-500">「LINEユーザー管理」でLINE登録済みユーザーの問診状況・記録・体重を確認できます</p>
             </div>
           </div>
           <div class="guide-step">
@@ -492,9 +492,14 @@ function getAdminDashboardHtml(): string {
               <p class="text-xs text-gray-500">ユーザーごとにBOT通知・記録・相談機能を個別に制御できます</p>
             </div>
           </div>
-          <button onclick="showPage('line-guide')" class="mt-3 bg-green-500 hover:bg-green-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-colors">
-            <i class="fab fa-line mr-2"></i>LINE案内文を確認する
-          </button>
+          <div class="flex gap-3 mt-3">
+            <button onclick="showPage('invite-codes')" class="bg-green-500 hover:bg-green-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-colors">
+              <i class="fas fa-ticket-alt mr-2"></i>招待コードを発行
+            </button>
+            <button onclick="showPage('line-guide')" class="bg-white border border-green-500 text-green-600 hover:bg-green-50 px-5 py-2.5 rounded-xl text-sm font-medium transition-colors">
+              <i class="fab fa-line mr-2"></i>LINE案内文を確認
+            </button>
+          </div>
         </div>
 
         <!-- staff ガイド（レガシーサポート） -->
@@ -576,12 +581,12 @@ function getAdminDashboardHtml(): string {
       <div class="flex items-center justify-between mb-6">
         <div>
           <h1 class="text-2xl font-bold text-gray-800">LINEユーザー管理</h1>
-          <p class="text-gray-500 text-sm mt-1">diet-bot を利用しているLINEユーザーの一覧・設定管理</p>
+          <p class="text-gray-500 text-sm mt-1">LINE友達追加済みユーザーの状態確認・サービス設定</p>
         </div>
       </div>
       <div class="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 text-sm text-blue-800">
         <i class="fas fa-info-circle mr-2"></i>
-        LINEユーザーはLINE公式アカウントを友達追加した際に自動的に登録されます。ここでは各ユーザーのサービス設定（BOT・記録・相談機能の有効化）を管理できます。
+        ユーザーは <strong>LINE友達追加 → 招待コード送信</strong> で自動登録されます。ここで手動追加する必要はありません。まだユーザーがいない場合は「招待コード」を発行し「LINE案内文」を送ってください。
       </div>
       <!-- ステータスタブ -->
       <div class="flex gap-2 mb-4 flex-wrap">
@@ -892,22 +897,25 @@ https://lin.ee/n4PoXrR</div>
 
     <!-- ===== フローチェックリスト ===== -->
     <div id="page-checklist" class="hidden p-8">
-      <h1 class="text-2xl font-bold text-gray-800 mb-2"><i class="fas fa-clipboard-check text-green-500 mr-2"></i>操作フローチェックリスト</h1>
-      <p class="text-gray-500 text-sm mb-6">各ロールの操作手順と期待結果を確認できます。実機テスト時にご活用ください。</p>
+      <h1 class="text-2xl font-bold text-gray-800 mb-2"><i class="fas fa-clipboard-check text-green-500 mr-2"></i>実運用チェックリスト</h1>
+      <p class="text-gray-500 text-sm mb-6">初回セットアップから実際のユーザー利用まで、順番に確認してください。各項目に具体的な操作と期待結果を記載しています。</p>
 
-      <!-- Superadmin フロー -->
+      <!-- Phase 1: Superadmin -->
       <div class="bg-white rounded-2xl shadow p-6 mb-6">
         <h2 class="font-bold text-gray-800 mb-4 flex items-center gap-2">
-          <span class="text-xs px-2 py-0.5 rounded-full role-badge-superadmin font-medium">superadmin</span>
-          スーパー管理者フロー
+          <span class="text-xs px-2 py-0.5 rounded-full role-badge-superadmin font-medium">Phase 1</span>
+          superadmin のセットアップ
         </h2>
-        <div class="space-y-3" id="checklist-superadmin">
+        <div class="space-y-3">
           <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
             <input type="checkbox" class="mt-1 w-4 h-4 text-green-500 rounded" onchange="updateChecklistProgress()">
             <div class="flex-1">
               <p class="text-sm font-medium text-gray-800">1. /admin にアクセス</p>
-              <p class="text-xs text-gray-500">期待結果: ログイン画面が表示され、「初回セットアップはこちら（superadmin用）」リンクが見える</p>
-              <button onclick="window.open('/admin','_blank')" class="mt-1 text-xs bg-green-100 text-green-700 px-3 py-1 rounded-lg hover:bg-green-200 transition-colors">
+              <div class="mt-1 text-xs text-gray-500 space-y-1">
+                <p><strong>操作</strong>: ブラウザで <code class="bg-gray-100 px-1 rounded">https://diet-bot.pages.dev/admin</code> を開く</p>
+                <p><strong>期待</strong>: ログイン画面が表示。superadmin未登録なら「初回セットアップはこちら」リンクが見える</p>
+              </div>
+              <button onclick="window.open('https://diet-bot.pages.dev/admin','_blank')" class="mt-2 text-xs bg-green-100 text-green-700 px-3 py-1.5 rounded-lg hover:bg-green-200 transition-colors">
                 <i class="fas fa-external-link-alt mr-1"></i>/admin を開く
               </button>
             </div>
@@ -915,23 +923,43 @@ https://lin.ee/n4PoXrR</div>
           <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
             <input type="checkbox" class="mt-1 w-4 h-4 text-green-500 rounded" onchange="updateChecklistProgress()">
             <div class="flex-1">
-              <p class="text-sm font-medium text-gray-800">2. 初回セットアップでsuperadmin作成</p>
-              <p class="text-xs text-gray-500">期待結果: アカウント作成後、自動的にログイン画面に戻り、メール・パスワードが入力済み</p>
+              <p class="text-sm font-medium text-gray-800">2. superadmin アカウントを作成</p>
+              <div class="mt-1 text-xs text-gray-500 space-y-1">
+                <p><strong>操作</strong>: 「初回セットアップはこちら」→ メール・パスワード(8文字以上)を入力 → 「作成」ボタン</p>
+                <p><strong>期待</strong>: 「スーパー管理者アカウントを作成しました」トースト → ログイン画面にメール・パスワードが入力済み</p>
+                <p><strong>注意</strong>: superadminは<strong>1人だけ</strong>。2回目以降はこのリンクが表示されません</p>
+              </div>
             </div>
           </div>
           <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
             <input type="checkbox" class="mt-1 w-4 h-4 text-green-500 rounded" onchange="updateChecklistProgress()">
             <div class="flex-1">
-              <p class="text-sm font-medium text-gray-800">3. ログインしてダッシュボード表示</p>
-              <p class="text-xs text-gray-500">期待結果: ウェルカムガイドが表示、サイドバーに「スーパー管理者」バッジ</p>
+              <p class="text-sm font-medium text-gray-800">3. superadmin でログイン</p>
+              <div class="mt-1 text-xs text-gray-500 space-y-1">
+                <p><strong>操作</strong>: メール・パスワードで「ログイン」ボタンをクリック</p>
+                <p><strong>期待</strong>: ダッシュボードが表示。左上にアカウント名、<span class="inline-block bg-amber-100 text-amber-800 px-1 rounded font-medium">スーパー管理者</span> バッジが表示</p>
+              </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- Phase 2: Admin 作成 -->
+      <div class="bg-white rounded-2xl shadow p-6 mb-6">
+        <h2 class="font-bold text-gray-800 mb-4 flex items-center gap-2">
+          <span class="text-xs px-2 py-0.5 rounded-full role-badge-admin font-medium">Phase 2</span>
+          admin を作成してログイン
+        </h2>
+        <div class="space-y-3">
           <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
             <input type="checkbox" class="mt-1 w-4 h-4 text-green-500 rounded" onchange="updateChecklistProgress()">
             <div class="flex-1">
-              <p class="text-sm font-medium text-gray-800">4. 「管理者管理」でadminを作成</p>
-              <p class="text-xs text-gray-500">期待結果: メール+仮パスワードで作成成功。管理者一覧に表示される</p>
-              <button onclick="showPage('members')" class="mt-1 text-xs bg-blue-100 text-blue-700 px-3 py-1 rounded-lg hover:bg-blue-200 transition-colors">
+              <p class="text-sm font-medium text-gray-800">4. 「管理者管理」で admin を作成</p>
+              <div class="mt-1 text-xs text-gray-500 space-y-1">
+                <p><strong>操作</strong>: サイドバー「管理者管理」→ メールと仮パスワードを入力 → 「管理者を作成」</p>
+                <p><strong>期待</strong>: 「管理者を作成しました」トースト。管理者一覧に新しいadminが表示される</p>
+              </div>
+              <button onclick="showPage('members')" class="mt-2 text-xs bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg hover:bg-blue-200 transition-colors">
                 <i class="fas fa-user-shield mr-1"></i>管理者管理を開く
               </button>
             </div>
@@ -939,43 +967,22 @@ https://lin.ee/n4PoXrR</div>
           <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
             <input type="checkbox" class="mt-1 w-4 h-4 text-green-500 rounded" onchange="updateChecklistProgress()">
             <div class="flex-1">
-              <p class="text-sm font-medium text-gray-800">5. adminの停止/有効化テスト</p>
-              <p class="text-xs text-gray-500">期待結果: admin停止で従属ユーザーのBOTも自動停止。有効化で復帰</p>
+              <p class="text-sm font-medium text-gray-800">5. ログアウト → admin でログイン</p>
+              <div class="mt-1 text-xs text-gray-500 space-y-1">
+                <p><strong>操作</strong>: 左下「ログアウト」→ 作成したadminのメール・仮パスワードでログイン</p>
+                <p><strong>期待</strong>: ダッシュボードが表示。左上にアカウント名、<span class="inline-block bg-blue-100 text-blue-800 px-1 rounded font-medium">管理者</span> バッジ。「管理者管理」に作成フォームがない</p>
+              </div>
             </div>
           </div>
           <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
             <input type="checkbox" class="mt-1 w-4 h-4 text-green-500 rounded" onchange="updateChecklistProgress()">
             <div class="flex-1">
-              <p class="text-sm font-medium text-gray-800">6. LINEユーザー管理で所属admin確認</p>
-              <p class="text-xs text-gray-500">期待結果: 各ユーザーの横に所属admin（メールアドレス）が表示される</p>
-              <button onclick="showPage('users')" class="mt-1 text-xs bg-blue-100 text-blue-700 px-3 py-1 rounded-lg hover:bg-blue-200 transition-colors">
-                <i class="fas fa-users mr-1"></i>LINEユーザー管理を開く
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Admin フロー -->
-      <div class="bg-white rounded-2xl shadow p-6 mb-6">
-        <h2 class="font-bold text-gray-800 mb-4 flex items-center gap-2">
-          <span class="text-xs px-2 py-0.5 rounded-full role-badge-admin font-medium">admin</span>
-          管理者フロー
-        </h2>
-        <div class="space-y-3" id="checklist-admin">
-          <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
-            <input type="checkbox" class="mt-1 w-4 h-4 text-green-500 rounded" onchange="updateChecklistProgress()">
-            <div class="flex-1">
-              <p class="text-sm font-medium text-gray-800">1. superadminが作成した仮パスワードでログイン</p>
-              <p class="text-xs text-gray-500">期待結果: ダッシュボードに遷移、「管理者」バッジが表示</p>
-            </div>
-          </div>
-          <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
-            <input type="checkbox" class="mt-1 w-4 h-4 text-green-500 rounded" onchange="updateChecklistProgress()">
-            <div class="flex-1">
-              <p class="text-sm font-medium text-gray-800">2. 招待コードを発行</p>
-              <p class="text-xs text-gray-500">期待結果: 「招待コード」メニューで新しいコード（例: ABC-1234）が生成される</p>
-              <button onclick="showPage('invite-codes')" class="mt-1 text-xs bg-purple-100 text-purple-700 px-3 py-1 rounded-lg hover:bg-purple-200 transition-colors">
+              <p class="text-sm font-medium text-gray-800">6. 招待コードを発行する</p>
+              <div class="mt-1 text-xs text-gray-500 space-y-1">
+                <p><strong>操作</strong>: サイドバー「招待コード」→ ラベル(任意)を入力 → 「招待コードを発行」</p>
+                <p><strong>期待</strong>: <code class="bg-green-50 text-green-700 px-1 rounded">ABC-1234</code> のようなコードが生成される。クリップボードに自動コピー</p>
+              </div>
+              <button onclick="showPage('invite-codes')" class="mt-2 text-xs bg-purple-100 text-purple-700 px-3 py-1.5 rounded-lg hover:bg-purple-200 transition-colors">
                 <i class="fas fa-ticket-alt mr-1"></i>招待コードを開く
               </button>
             </div>
@@ -983,46 +990,37 @@ https://lin.ee/n4PoXrR</div>
           <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
             <input type="checkbox" class="mt-1 w-4 h-4 text-green-500 rounded" onchange="updateChecklistProgress()">
             <div class="flex-1">
-              <p class="text-sm font-medium text-gray-800">3. LINE案内文をコピーしてお客様に送信</p>
-              <p class="text-xs text-gray-500">期待結果: 案内文テンプレートをコピーし、招待コードを添えて送信できる</p>
-              <button onclick="showPage('line-guide')" class="mt-1 text-xs bg-green-100 text-green-700 px-3 py-1 rounded-lg hover:bg-green-200 transition-colors">
+              <p class="text-sm font-medium text-gray-800">7. LINE案内文をコピーして顧客に送信</p>
+              <div class="mt-1 text-xs text-gray-500 space-y-1">
+                <p><strong>操作</strong>: サイドバー「LINE案内文」→ テンプレートの「コピー」ボタン → 顧客にメール/チャットで送信</p>
+                <p><strong>送る内容</strong>: テンプレート + さっき発行した招待コード</p>
+                <p><strong>期待</strong>: 「コピーしました」トースト。顧客が手順通りにLINE登録できる</p>
+              </div>
+              <button onclick="showPage('line-guide')" class="mt-2 text-xs bg-green-100 text-green-700 px-3 py-1.5 rounded-lg hover:bg-green-200 transition-colors">
                 <i class="fab fa-line mr-1"></i>LINE案内文を開く
               </button>
-            </div>
-          </div>
-          <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
-            <input type="checkbox" class="mt-1 w-4 h-4 text-green-500 rounded" onchange="updateChecklistProgress()">
-            <div class="flex-1">
-              <p class="text-sm font-medium text-gray-800">4. ユーザー一覧でステータスタブ確認</p>
-              <p class="text-xs text-gray-500">期待結果: 「全件」「未問診」「利用中」「停止中」タブで絞り込みができる</p>
-              <button onclick="showPage('users')" class="mt-1 text-xs bg-blue-100 text-blue-700 px-3 py-1 rounded-lg hover:bg-blue-200 transition-colors">
-                <i class="fas fa-users mr-1"></i>LINEユーザー管理を開く
-              </button>
-            </div>
-          </div>
-          <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
-            <input type="checkbox" class="mt-1 w-4 h-4 text-green-500 rounded" onchange="updateChecklistProgress()">
-            <div class="flex-1">
-              <p class="text-sm font-medium text-gray-800">5. ユーザー詳細モーダルで記録確認</p>
-              <p class="text-xs text-gray-500">期待結果: 概要・食事記録・写真・レポートタブが表示される</p>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- User（LINE）フロー -->
+      <!-- Phase 3: User (LINE) フロー -->
       <div class="bg-white rounded-2xl shadow p-6 mb-6">
         <h2 class="font-bold text-gray-800 mb-4 flex items-center gap-2">
           <i class="fab fa-line text-green-500 mr-1"></i>
-          ユーザー（LINE）フロー
+          <span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-800 font-medium">Phase 3</span>
+          user の LINE 操作（顧客がやること）
         </h2>
-        <div class="space-y-3" id="checklist-user">
+        <div class="space-y-3">
           <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
             <input type="checkbox" class="mt-1 w-4 h-4 text-green-500 rounded" onchange="updateChecklistProgress()">
             <div class="flex-1">
-              <p class="text-sm font-medium text-gray-800">1. LINE友達追加</p>
-              <p class="text-xs text-gray-500">期待結果: BOTから「ようこそ！招待コードを送信してください」メッセージが届く</p>
-              <a href="https://lin.ee/n4PoXrR" target="_blank" class="mt-1 inline-block text-xs bg-green-500 text-white px-3 py-1 rounded-lg hover:bg-green-600 transition-colors">
+              <p class="text-sm font-medium text-gray-800">8. LINE友達追加</p>
+              <div class="mt-1 text-xs text-gray-500 space-y-1">
+                <p><strong>操作</strong>: LINE で <code class="bg-gray-100 px-1 rounded">@054eyzbj</code> を検索して友達追加（または https://lin.ee/n4PoXrR を開く）</p>
+                <p><strong>期待</strong>: BOTから「ようこそ！担当者から受け取った<strong>招待コード</strong>を送信してください」メッセージが届く</p>
+              </div>
+              <a href="https://lin.ee/n4PoXrR" target="_blank" class="mt-2 inline-block text-xs bg-green-500 text-white px-3 py-1.5 rounded-lg hover:bg-green-600 transition-colors">
                 <i class="fab fa-line mr-1"></i>友達追加リンク
               </a>
             </div>
@@ -1030,46 +1028,109 @@ https://lin.ee/n4PoXrR</div>
           <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
             <input type="checkbox" class="mt-1 w-4 h-4 text-green-500 rounded" onchange="updateChecklistProgress()">
             <div class="flex-1">
-              <p class="text-sm font-medium text-gray-800">2. 招待コードを送信</p>
-              <p class="text-xs text-gray-500">期待結果: 「コード認証完了！問診を開始します」メッセージが届き、初回問診が始まる</p>
+              <p class="text-sm font-medium text-gray-800">9. 招待コードを送信</p>
+              <div class="mt-1 text-xs text-gray-500 space-y-1">
+                <p><strong>操作</strong>: LINE のトーク画面で招待コード（例: <code class="bg-green-50 text-green-700 px-1 rounded font-bold">ABC-1234</code>）をそのまま送信</p>
+                <p><strong>期待</strong>: 「コード認証完了！初回問診を開始します」→ 最初の質問（ニックネーム）が届く</p>
+              </div>
             </div>
           </div>
           <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
             <input type="checkbox" class="mt-1 w-4 h-4 text-green-500 rounded" onchange="updateChecklistProgress()">
             <div class="flex-1">
-              <p class="text-sm font-medium text-gray-800">3. 9問の問診に回答</p>
-              <p class="text-xs text-gray-500">期待結果: 各質問に順番に回答、完了後「問診完了！」メッセージ</p>
+              <p class="text-sm font-medium text-gray-800">10. 問診9問に回答</p>
+              <div class="mt-1 text-xs text-gray-500 space-y-1">
+                <p><strong>操作</strong>: BOTの質問に順番に回答（ニックネーム→性別→年代→身長→体重→目標体重→理由→気になること→活動レベル）</p>
+                <p><strong>期待</strong>: 全問完了後「問診完了しました！これから食事管理を始めましょう」メッセージ</p>
+                <p><strong>所要時間</strong>: 約2分</p>
+              </div>
             </div>
           </div>
           <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
             <input type="checkbox" class="mt-1 w-4 h-4 text-green-500 rounded" onchange="updateChecklistProgress()">
             <div class="flex-1">
-              <p class="text-sm font-medium text-gray-800">4. 体重を記録（例: 72.5kg）</p>
-              <p class="text-xs text-gray-500">期待結果: 「体重 72.5kg を記録しました」と返信される</p>
+              <p class="text-sm font-medium text-gray-800">11. 体重を記録する</p>
+              <div class="mt-1 text-xs text-gray-500 space-y-1">
+                <p><strong>操作</strong>: LINE で <code class="bg-gray-100 px-1 rounded font-bold">72.5</code> または <code class="bg-gray-100 px-1 rounded font-bold">72.5kg</code> と送信</p>
+                <p><strong>期待</strong>: 「体重 72.5kg を記録しました」と返信される</p>
+              </div>
             </div>
           </div>
           <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
             <input type="checkbox" class="mt-1 w-4 h-4 text-green-500 rounded" onchange="updateChecklistProgress()">
             <div class="flex-1">
-              <p class="text-sm font-medium text-gray-800">5. 食事写真を送信</p>
-              <p class="text-xs text-gray-500">期待結果: AI分析結果が届き、「確定/取消」選択肢が表示される</p>
+              <p class="text-sm font-medium text-gray-800">12. 食事写真を送信する</p>
+              <div class="mt-1 text-xs text-gray-500 space-y-1">
+                <p><strong>操作</strong>: LINE で食事の写真を撮影して送信</p>
+                <p><strong>期待</strong>: AI分析中メッセージ → カロリー・PFC分析結果 →「確定」「取消」選択肢が表示される →「確定」で保存</p>
+              </div>
             </div>
           </div>
           <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
             <input type="checkbox" class="mt-1 w-4 h-4 text-green-500 rounded" onchange="updateChecklistProgress()">
             <div class="flex-1">
-              <p class="text-sm font-medium text-gray-800">6. 「相談」モードに切替</p>
-              <p class="text-xs text-gray-500">期待結果: 「相談モードに切り替えました」と返信。AIに質問すると回答が返る</p>
+              <p class="text-sm font-medium text-gray-800">13. AI相談モードを試す</p>
+              <div class="mt-1 text-xs text-gray-500 space-y-1">
+                <p><strong>操作</strong>: LINE で <code class="bg-gray-100 px-1 rounded font-bold">相談</code> と送信 → 好きな質問を入力</p>
+                <p><strong>期待</strong>: 「相談モードに切り替えました」→ AIが栄養アドバイスを返信</p>
+                <p><strong>戻し方</strong>: <code class="bg-gray-100 px-1 rounded">記録モード</code> と送信</p>
+              </div>
             </div>
           </div>
           <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
             <input type="checkbox" class="mt-1 w-4 h-4 text-green-500 rounded" onchange="updateChecklistProgress()">
             <div class="flex-1">
-              <p class="text-sm font-medium text-gray-800">7. LIFFダッシュボードを確認</p>
-              <p class="text-xs text-gray-500">期待結果: 体重推移グラフ、カロリー履歴、過去の記録が表示される</p>
-              <a href="https://diet-bot.pages.dev/liff" target="_blank" class="mt-1 inline-block text-xs bg-blue-100 text-blue-700 px-3 py-1 rounded-lg hover:bg-blue-200 transition-colors">
-                <i class="fas fa-gauge-high mr-1"></i>LIFFダッシュボード
+              <p class="text-sm font-medium text-gray-800">14. LIFFダッシュボードを確認する</p>
+              <div class="mt-1 text-xs text-gray-500 space-y-1">
+                <p><strong>操作</strong>: スマホで <code class="bg-gray-100 px-1 rounded">https://liff.line.me/2009409790-DekZRh4t</code> を開く</p>
+                <p><strong>期待</strong>: LINE認証 → ダッシュボードに遷移。体重推移、今日の記録、食事一覧が表示される</p>
+              </div>
+              <a href="https://diet-bot.pages.dev/liff" target="_blank" class="mt-2 inline-block text-xs bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg hover:bg-blue-200 transition-colors">
+                <i class="fas fa-gauge-high mr-1"></i>LIFF（PC確認用）
               </a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Phase 4: Admin で結果確認 -->
+      <div class="bg-white rounded-2xl shadow p-6 mb-6">
+        <h2 class="font-bold text-gray-800 mb-4 flex items-center gap-2">
+          <span class="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 font-medium">Phase 4</span>
+          admin 画面でユーザーの反映を確認
+        </h2>
+        <div class="space-y-3">
+          <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
+            <input type="checkbox" class="mt-1 w-4 h-4 text-green-500 rounded" onchange="updateChecklistProgress()">
+            <div class="flex-1">
+              <p class="text-sm font-medium text-gray-800">15. LINEユーザー管理でユーザーが表示されている</p>
+              <div class="mt-1 text-xs text-gray-500 space-y-1">
+                <p><strong>操作</strong>: admin でログイン → サイドバー「LINEユーザー管理」</p>
+                <p><strong>期待</strong>: LINE友達追加したユーザーが一覧に表示。「利用中」タブに問診完了ユーザーが入っている</p>
+              </div>
+              <button onclick="showPage('users')" class="mt-2 text-xs bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg hover:bg-blue-200 transition-colors">
+                <i class="fas fa-users mr-1"></i>LINEユーザー管理を開く
+              </button>
+            </div>
+          </div>
+          <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
+            <input type="checkbox" class="mt-1 w-4 h-4 text-green-500 rounded" onchange="updateChecklistProgress()">
+            <div class="flex-1">
+              <p class="text-sm font-medium text-gray-800">16. ユーザー詳細モーダルで記録を確認</p>
+              <div class="mt-1 text-xs text-gray-500 space-y-1">
+                <p><strong>操作</strong>: ユーザーの行をクリック → モーダルが開く</p>
+                <p><strong>期待</strong>: プロフィール（問診結果）、サービス設定、直近の記録が表示。食事記録・写真・レポートタブも確認</p>
+              </div>
+            </div>
+          </div>
+          <div class="flex items-start gap-3 p-3 bg-gray-50 rounded-xl">
+            <input type="checkbox" class="mt-1 w-4 h-4 text-green-500 rounded" onchange="updateChecklistProgress()">
+            <div class="flex-1">
+              <p class="text-sm font-medium text-gray-800">17. ステータスタブのフィルターを確認</p>
+              <div class="mt-1 text-xs text-gray-500 space-y-1">
+                <p><strong>操作</strong>: 「全件」「未問診」「利用中」「停止中」タブを切り替え</p>
+                <p><strong>期待</strong>: 各タブで正しいユーザーが絞り込まれる。件数バッジも正しい</p>
+              </div>
             </div>
           </div>
         </div>
@@ -1081,7 +1142,7 @@ https://lin.ee/n4PoXrR</div>
         <div class="w-full bg-gray-200 rounded-full h-3">
           <div id="checklist-progress-bar" class="bg-green-500 h-3 rounded-full transition-all" style="width: 0%"></div>
         </div>
-        <p class="text-xs text-gray-500 mt-2" id="checklist-progress-text">0 / 0 完了</p>
+        <p class="text-xs text-gray-500 mt-2" id="checklist-progress-text">0 / 17 完了</p>
       </div>
     </div>
 

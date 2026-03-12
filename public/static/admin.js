@@ -413,12 +413,17 @@ function renderUsersTable(users) {
   if (users.length === 0) {
     tableEl.innerHTML = `
       <div class="text-center py-12 text-gray-400">
-        <i class="fas fa-users text-4xl mb-3"></i>
-        <p>LINEユーザーがまだいません</p>
-        <p class="text-xs mt-2">LINE公式アカウントを友達追加したユーザーが自動的にここに表示されます</p>
-        <button onclick="showPage('line-guide')" class="mt-4 bg-green-500 hover:bg-green-600 text-white px-5 py-2 rounded-xl text-sm font-medium transition-colors">
-          <i class="fab fa-line mr-1"></i>LINE案内文を確認
-        </button>
+        <i class="fab fa-line text-4xl mb-3 text-green-400"></i>
+        <p class="text-gray-600 font-medium">まだLINEユーザーがいません</p>
+        <p class="text-xs mt-2 text-gray-400">ユーザーは手動追加ではなく、<strong>LINE友達追加 → 招待コード送信</strong>で自動登録されます</p>
+        <div class="flex gap-3 justify-center mt-4">
+          <button onclick="showPage('invite-codes')" class="bg-green-500 hover:bg-green-600 text-white px-5 py-2 rounded-xl text-sm font-medium transition-colors">
+            <i class="fas fa-ticket-alt mr-1"></i>招待コードを発行
+          </button>
+          <button onclick="showPage('line-guide')" class="bg-white border border-green-400 text-green-600 hover:bg-green-50 px-5 py-2 rounded-xl text-sm font-medium transition-colors">
+            <i class="fab fa-line mr-1"></i>LINE案内文をコピー
+          </button>
+        </div>
       </div>`;
     return;
   }
