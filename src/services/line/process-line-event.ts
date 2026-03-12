@@ -19,7 +19,7 @@ import type {
   LineMessageEvent,
 } from '../../types/bindings'
 
-import { getUserProfile, replyText, replyTextWithQuickReplies, replyWithQuickReplies, getMessageContent } from './reply'
+import { getUserProfile, replyText, replyTextWithQuickReplies, replyWithQuickReplies, getMessageContent, pushText } from './reply'
 import { startIntakeFlow, handleIntakeStep, beginIntakeFromStart, resumeIntakeFlow } from './intake-flow'
 import { upsertLineUser, ensureUserAccount, findUserAccount } from '../../repositories/line-users-repo'
 import { upsertUserServiceStatus, checkServiceAccess } from '../../repositories/subscriptions-repo'
@@ -43,6 +43,8 @@ type ProcessContext = {
   lineChannelId: string
   /** LINE チャンネルの client_account_id */
   clientAccountId: string
+  /** waitUntil for background processing (from ExecutionContext) */
+  waitUntil?: (promise: Promise<unknown>) => void
 }
 
 // テキスト分類用キーワード
@@ -370,20 +372,28 @@ async function handleTextMessageEvent(
   }
 
   if (SWITCH_TO_CONSULT.some(kw => textTrim.includes(kw))) {
-    await updateThreadMode(env.DB, thread.id, 'consult')
-    await upsertModeSession(env.DB, {
-      clientAccountId: effectiveAccountId,
-      lineUserId,
-      currentMode: 'consult',
-      currentStep: 'idle',
-    })
+    try {
+      await updateThreadMode(env.DB, thread.id, 'consult')
+    } catch (e) { console.error('[LINE] updateThreadMode(consult) error:', e) }
+    try {
+      await upsertModeSession(env.DB, {
+        clientAccountId: effectiveAccountId,
+        lineUserId,
+        currentMode: 'consult',
+        currentStep: 'idle',
+      })
+    } catch (e) { console.error('[LINE] upsertModeSession(consult) error:', e) }
     await replyText(event.replyToken, '💬 相談モードに切り替えました。\nお気軽にご相談ください！', env.LINE_CHANNEL_ACCESS_TOKEN)
     return
   }
 
   if (SWITCH_TO_RECORD.some(kw => textTrim.includes(kw))) {
-    await updateThreadMode(env.DB, thread.id, 'record')
-    await deleteModeSession(env.DB, effectiveAccountId, lineUserId)
+    try {
+      await updateThreadMode(env.DB, thread.id, 'record')
+    } catch (e) { console.error('[LINE] updateThreadMode(record) error:', e) }
+    try {
+      await deleteModeSession(env.DB, effectiveAccountId, lineUserId)
+    } catch (e) { console.error('[LINE] deleteModeSession error:', e) }
     await replyText(event.replyToken, '📝 記録モードに切り替えました。\n体重・食事・運動などを記録しましょう！', env.LINE_CHANNEL_ACCESS_TOKEN)
     return
   }
@@ -658,151 +668,178 @@ async function handleImageMessageEvent(
   ctx: ProcessContext
 ): Promise<void> {
   const lineUserId = event.source.userId
-  if (!lineUserId || !event.replyToken) return
+  if (!lineUserId) return
 
   const { env, lineChannelId, clientAccountId } = ctx
+  const replyToken = event.replyToken
+
+  console.log(`[LINE] handleImage START: lineUserId=${lineUserId}, messageId=${event.message.id}`)
 
   // ------------------------------------------------------------------
-  // 1. ユーザー初期化フォールバック（effectiveAccountId を使う）
+  // 1. サービスアクセス確認
   // ------------------------------------------------------------------
-  // Note: ensureUserInitialized はサービスアクセス確認後に行う（正しいaccountIdで初期化するため）
+  let access: Awaited<ReturnType<typeof checkServiceAccess>> = null
+  try {
+    access = await checkServiceAccess(env.DB, { accountId: clientAccountId, lineUserId })
+  } catch (e) {
+    console.error('[LINE] handleImage checkServiceAccess error:', e)
+  }
 
-  // ------------------------------------------------------------------
-  // 2. サービスアクセス確認（lineUserIdだけで検索 — 招待コードで別アカウントに紐付済みの場合に対応）
-  // ------------------------------------------------------------------
-  const access = await checkServiceAccess(env.DB, { accountId: clientAccountId, lineUserId })
   if (!access || !access.botEnabled) {
-    console.warn(`[LINE] image service access denied: lineUserId=${lineUserId}, accountId=${clientAccountId}`)
-    await replyText(event.replyToken, '📋 まずは招待コードを入力してください。\n\n担当者から受け取ったコード（例: ABC-1234）を送信すると、画像解析機能が利用できるようになります。', env.LINE_CHANNEL_ACCESS_TOKEN)
-    return
-  }
-
-  // 実効アカウントID
-  const effectiveAccountId = access.accountId
-
-  // ------------------------------------------------------------------
-  // 2.5. ユーザー初期化フォールバック（正しいaccountIdで実行）
-  // ------------------------------------------------------------------
-  await ensureUserInitialized(env, lineChannelId, lineUserId, effectiveAccountId)
-
-  // ------------------------------------------------------------------
-  // 3. ユーザー・スレッドの確保
-  // ------------------------------------------------------------------
-  const userAccount = await ensureUserAccount(env.DB, lineUserId, effectiveAccountId)
-  const thread = await ensureOpenThread(env.DB, {
-    lineChannelId,
-    lineUserId,
-    clientAccountId: effectiveAccountId,
-    userAccountId: userAccount.id,
-  })
-
-  // ------------------------------------------------------------------
-  // 4. LINE Content API から画像バイナリを取得
-  // ------------------------------------------------------------------
-  const content = await getMessageContent(event.message.id, env.LINE_CHANNEL_ACCESS_TOKEN)
-  if (!content) {
-    await replyText(event.replyToken, '画像の取得に失敗しました。もう一度お試しください。', env.LINE_CHANNEL_ACCESS_TOKEN)
-    return
-  }
-
-  // ------------------------------------------------------------------
-  // 4. R2 に保存（intake/{userAccountId}/{messageId}.jpg）
-  // ------------------------------------------------------------------
-  const today = todayJst()
-  const r2Key = `intake/${userAccount.id}/${today}-${event.message.id}.jpg`
-
-  try {
-    await env.R2.put(r2Key, content.data, {
-      httpMetadata: { contentType: content.contentType },
-    })
-  } catch (err) {
-    console.error('[LINE] R2 put error:', err)
-    await replyText(event.replyToken, '画像の保存に失敗しました。しばらくしてから再度お試しください。', env.LINE_CHANNEL_ACCESS_TOKEN)
-    return
-  }
-
-  // ------------------------------------------------------------------
-  // 5. conversation_messages に image メッセージを保存
-  // ------------------------------------------------------------------
-  const msg = await createConversationMessage(env.DB, {
-    threadId: thread.id,
-    senderType: 'user',
-    lineMessageId: event.message.id,
-    messageType: 'image',
-    modeAtSend: thread.current_mode,
-    sentAt: new Date(event.timestamp).toISOString().replace('T', ' ').substring(0, 19),
-  })
-
-  // ------------------------------------------------------------------
-  // 6. message_attachments にレコードを確定
-  //    ※ Queue 投入前に必ず DB レコードを確定させる
-  // ------------------------------------------------------------------
-  const attachment = await createMessageAttachment(env.DB, {
-    messageId: msg.id,
-    storageKey: r2Key,
-    contentType: content.contentType,
-    fileSizeBytes: content.data.byteLength,
-  })
-
-  // ------------------------------------------------------------------
-  // 7. image_analysis_jobs を作成
-  // ------------------------------------------------------------------
-  await createImageAnalysisJob(env.DB, {
-    messageAttachmentId: attachment.id,
-    providerRoute: 'openai_vision',
-  })
-
-  // ------------------------------------------------------------------
-  // 8. ユーザーへの即時返信（解析中メッセージ）— reply を先に消費
-  // ------------------------------------------------------------------
-  await replyText(
-    event.replyToken,
-    '📷 画像を受け取りました！\n解析中です。少しお待ちください...',
-    env.LINE_CHANNEL_ACCESS_TOKEN
-  )
-
-  // ------------------------------------------------------------------
-  // 9. Queue に投入 or 直接処理（Pages では Queue が利用不可の場合がある）
-  // ------------------------------------------------------------------
-  const queuePayload = {
-    type: 'image_analysis' as const,
-    attachmentId: attachment.id,
-    userAccountId: userAccount.id,
-    clientAccountId: effectiveAccountId,
-    threadId: thread.id,
-    r2Key,
-    lineUserId,
-  }
-
-  let queueSent = false
-  try {
-    if (env.LINE_EVENTS_QUEUE) {
-      await env.LINE_EVENTS_QUEUE.send(queuePayload)
-      queueSent = true
-      console.log(`[LINE] image queued: attachment=${attachment.id} r2Key=${r2Key}`)
+    console.warn(`[LINE] image access denied: lineUserId=${lineUserId}`)
+    if (replyToken) {
+      await replyText(replyToken, '📋 まずは招待コードを入力してください。\n\n担当者から受け取ったコード（例: ABC-1234）を送信すると、画像解析機能が利用できるようになります。', env.LINE_CHANNEL_ACCESS_TOKEN).catch(e => console.error('[LINE] reply error:', e))
     }
-  } catch (err) {
-    console.error('[LINE] Queue send error (will process directly):', err)
+    return
   }
 
-  // Queue に送信できなかった場合は ctx.executionCtx.waitUntil で直接処理
-  if (!queueSent) {
-    console.log(`[LINE] Queue unavailable, processing image directly: attachment=${attachment.id}`)
+  const effectiveAccountId = access.accountId
+  console.log(`[LINE] handleImage: access OK, effectiveAccountId=${effectiveAccountId}`)
+
+  // ------------------------------------------------------------------
+  // 2. ユーザー・スレッドの確保（エラーでも続行を試みる）
+  // ------------------------------------------------------------------
+  let userAccount: Awaited<ReturnType<typeof ensureUserAccount>>
+  let thread: Awaited<ReturnType<typeof ensureOpenThread>>
+  try {
+    userAccount = await ensureUserAccount(env.DB, lineUserId, effectiveAccountId)
+    thread = await ensureOpenThread(env.DB, {
+      lineChannelId,
+      lineUserId,
+      clientAccountId: effectiveAccountId,
+      userAccountId: userAccount.id,
+    })
+  } catch (e) {
+    console.error('[LINE] handleImage user/thread setup error:', e)
+    if (replyToken) {
+      await replyText(replyToken, '⚠️ 一時的なエラーが発生しました。もう一度お試しください。', env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => {})
+    }
+    return
+  }
+
+  console.log(`[LINE] handleImage: userAccount=${userAccount.id}, thread=${thread.id}`)
+
+  // ------------------------------------------------------------------
+  // 3. 即時返信（解析中メッセージ）— 最優先で送信
+  //    replyToken は受信後30秒で失効するため、他の処理より先に返信する
+  // ------------------------------------------------------------------
+  if (replyToken) {
+    await replyText(
+      replyToken,
+      '📷 画像を受け取りました！\n解析中です。少しお待ちください...',
+      env.LINE_CHANNEL_ACCESS_TOKEN
+    ).catch(e => console.error('[LINE] handleImage reply error:', e))
+  }
+
+  // ------------------------------------------------------------------
+  // 4. 以降のバックグラウンド処理を waitUntil で実行
+  //    （webhook は即座に 200 を返し、画像処理はバックグラウンドで継続）
+  // ------------------------------------------------------------------
+  const bgWork = (async () => {
     try {
-      // 直接 image-analysis ジョブを実行（非同期バックグラウンド）
-      const { processImageDirectly } = await import('../../jobs/image-analysis')
-      // waitUntil がなくても動くように同期的に実行
-      await processImageDirectly(queuePayload, env)
-    } catch (err) {
-      console.error('[LINE] Direct image processing failed:', err)
-      // エラー時は push で通知
-      const { pushText: pushMsg } = await import('./reply')
-      await pushMsg(
+      // 4a. LINE Content API から画像バイナリを取得
+      let content: Awaited<ReturnType<typeof getMessageContent>> = null
+      try {
+        content = await getMessageContent(event.message.id, env.LINE_CHANNEL_ACCESS_TOKEN)
+      } catch (e) {
+        console.error('[LINE] handleImage getMessageContent error:', e)
+      }
+
+      if (!content) {
+        console.error(`[LINE] handleImage: content is null for messageId=${event.message.id}`)
+        await pushText(lineUserId, '画像の取得に失敗しました。もう一度お試しください。', env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => {})
+        return
+      }
+
+      console.log(`[LINE] handleImage: content fetched, size=${content.data.byteLength}, type=${content.contentType}`)
+
+      // 4b. R2 に保存
+      const today = todayJst()
+      const r2Key = `intake/${userAccount.id}/${today}-${event.message.id}.jpg`
+
+      try {
+        await env.R2.put(r2Key, content.data, {
+          httpMetadata: { contentType: content.contentType },
+        })
+        console.log(`[LINE] handleImage: R2 saved: ${r2Key}`)
+      } catch (err) {
+        console.error('[LINE] handleImage R2 put error:', err)
+        await pushText(lineUserId, '画像の保存に失敗しました。しばらくしてから再度お試しください。', env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => {})
+        return
+      }
+
+      // 4c. DB レコード作成（message → attachment → job）
+      let attachment: Awaited<ReturnType<typeof createMessageAttachment>>
+      try {
+        const msg = await createConversationMessage(env.DB, {
+          threadId: thread.id,
+          senderType: 'user',
+          lineMessageId: event.message.id,
+          messageType: 'image',
+          modeAtSend: thread.current_mode,
+          sentAt: new Date(event.timestamp).toISOString().replace('T', ' ').substring(0, 19),
+        })
+
+        attachment = await createMessageAttachment(env.DB, {
+          messageId: msg.id,
+          storageKey: r2Key,
+          contentType: content.contentType,
+          fileSizeBytes: content.data.byteLength,
+        })
+
+        await createImageAnalysisJob(env.DB, {
+          messageAttachmentId: attachment.id,
+          providerRoute: 'openai_vision',
+        })
+
+        console.log(`[LINE] handleImage: DB records created, attachment=${attachment.id}`)
+      } catch (e) {
+        console.error('[LINE] handleImage DB record creation error:', e)
+        await pushText(lineUserId, '⚠️ データ保存に失敗しました。もう一度お試しください。', env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => {})
+        return
+      }
+
+      // 4d. 画像解析を直接実行
+      const queuePayload = {
+        type: 'image_analysis' as const,
+        attachmentId: attachment.id,
+        userAccountId: userAccount.id,
+        clientAccountId: effectiveAccountId,
+        threadId: thread.id,
+        r2Key,
         lineUserId,
-        '画像の解析に失敗しました。お手数ですが、もう一度お試しください。',
+      }
+
+      console.log(`[LINE] handleImage: starting direct image analysis`)
+      try {
+        const { processImageDirectly } = await import('../../jobs/image-analysis')
+        await processImageDirectly(queuePayload, env)
+        console.log(`[LINE] handleImage: direct processing completed`)
+      } catch (err) {
+        console.error('[LINE] handleImage direct processing failed:', err)
+        await pushText(
+          lineUserId,
+          '画像の解析に失敗しました。お手数ですが、もう一度お試しください。',
+          env.LINE_CHANNEL_ACCESS_TOKEN
+        ).catch(() => {})
+      }
+    } catch (outerErr) {
+      console.error('[LINE] handleImage background work fatal error:', outerErr)
+      await pushText(
+        lineUserId,
+        '⚠️ 画像処理中にエラーが発生しました。もう一度お試しください。',
         env.LINE_CHANNEL_ACCESS_TOKEN
       ).catch(() => {})
     }
+  })()
+
+  // waitUntil が利用可能ならバックグラウンドで実行、なければ await
+  if (ctx.waitUntil) {
+    ctx.waitUntil(bgWork)
+    console.log('[LINE] handleImage: background work dispatched via waitUntil')
+  } else {
+    console.log('[LINE] handleImage: waitUntil not available, awaiting directly')
+    await bgWork
   }
 }
 

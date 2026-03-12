@@ -91,7 +91,12 @@ webhookRouter.post('/', async (c) => {
     lineChannelId = 'default'
   }
 
-  const ctx = { env: c.env, lineChannelId, clientAccountId }
+  // ExecutionContext の waitUntil を取得（バックグラウンド処理用）
+  // Hono の c.executionCtx は Cloudflare Workers の ExecutionContext
+  const execCtx = c.executionCtx as { waitUntil?: (promise: Promise<unknown>) => void } | undefined
+  const waitUntilFn = execCtx?.waitUntil?.bind(execCtx)
+
+  const ctx = { env: c.env, lineChannelId, clientAccountId, waitUntil: waitUntilFn }
 
   // ------------------------------------------------------------------
   // 5. イベント処理（並列・個別 try/catch は processLineEvent 内で行う）
