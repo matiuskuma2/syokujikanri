@@ -3,7 +3,7 @@
 ## プロジェクト概要
 - **名前**: diet-bot（食事指導BOT）
 - **目的**: LINE経由でダイエット（食事・体重・運動）を記録・サポートするAI BOT
-- **フェーズ**: Phase 1.4 — 会話フロー安定化・SSOT v3.0完了 **(v1.2.1)**
+- **フェーズ**: Phase 2.0 — データパイプライン（food_master マッチング統合）**(v1.3.0)**
 
 ## 本番URL
 | 用途 | URL |
@@ -141,6 +141,7 @@
 - **テキスト記録**: 体重（例: `72.5kg`）→ daily_logs・body_metrics に保存
 - **相談モード**: GPT-4o による AI 返信
 - **画像解析**: 食事写真/体重計/経過写真を R2 → Queue → OpenAI Vision → 確認フロー
+- **🆕 food_master マッチング**: AI解析結果の食品名を food_master DB と照合、DB値優先でPFC補正
 
 ### 問診 (Intake) フロー
 - 9問の初回問診（ニックネーム/性別/年代/身長/体重/目標/理由/気になること/活動レベル）
@@ -221,7 +222,7 @@ accounts → line_channels → line_users → user_accounts
 3. **担当者から受け取った招待コード（例: ABC-1234）をLINEで送信**
 4. 初回問診（9問）に回答 → 約2分で完了
 5. `72.5kg` のように体重を送信 → 自動記録
-6. 食事の写真を送信 → AI がカロリー・PFC を自動分析 → 「確定」で保存
+6. 食事の写真を送信 → AI がカロリー・PFC を自動分析 → food_master DB照合でPFC補正 → 「確定」で保存
 7. `相談` → AI 栄養相談モードに切替
 8. `記録モード` → 記録モードに戻る
 9. LIFF URL: https://liff.line.me/2009409790-DekZRh4t → ダッシュボード表示
@@ -235,7 +236,7 @@ accounts → line_channels → line_users → user_accounts
 - **ステータス**: ✅ 本番稼働中
 - **技術スタック**: Hono + TypeScript + Cloudflare D1/R2/Queue + OpenAI GPT-4o
 - **GitHub**: https://github.com/matiuskuma2/syokujikanri
-- **最終デプロイ**: 2026-03-12（v1.2.0: 会話フロー安定化、SSOT v2.0、優先順位修正、画像S3ブロック）
+- **最終デプロイ**: 2026-03-12（v1.3.0: food_master マッチング統合）
 - **デプロイURL**: https://diet-bot.pages.dev
 
 ## ローカル開発
@@ -339,7 +340,11 @@ curl http://localhost:3000/api/health
 8. ✅ 招待コード再送時の問診を「途中から」に統一
 
 ### Phase 2.0 — 機能拡張（P2: 今月）
-9. ⬜ 画像解析結果 × food_master マッチング統合
+9. ✅ 画像解析結果 × food_master マッチング統合
+   - analyzeMealPhoto: AI food_items → matchFoodItems → DB PFC 優先ブレンド
+   - analyzeNutritionLabel: product_name → findFoodByName で補完
+   - confirm時: food_match_json カラムに保存
+   - Migration 0012: meal_entries に food_match_json 追加
 10. ⬜ LINE Rich Menu 設定
 11. ⬜ RAG実装（ベクトル検索）
 12. ⬜ 管理画面プロンプトエディタ
