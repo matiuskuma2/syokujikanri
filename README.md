@@ -3,7 +3,7 @@
 ## プロジェクト概要
 - **名前**: diet-bot（食事指導BOT）
 - **目的**: LINE経由でダイエット（食事・体重・運動）を記録・サポートするAI BOT
-- **フェーズ**: Phase 2.0 — データパイプライン（food_master マッチング統合）**(v1.3.0)**
+- **フェーズ**: Phase 2.0 — UI実装完了（LIFF Dashboard + Admin詳細 + Superadmin BOT設定）**(v1.4.0)**
 
 ## 本番URL
 | 用途 | URL |
@@ -179,6 +179,16 @@
 | GET | `/api/admin/users` | LINEユーザー一覧（superadmin:全件+admin情報） |
 | GET | `/api/admin/users/:id` | ユーザー詳細 |
 | PATCH | `/api/admin/users/:id/service` | サービス設定変更 |
+| GET | `/api/admin/users/:id/logs` | ユーザーの食事記録一覧 |
+| GET | `/api/admin/users/:id/photos` | ユーザーの写真一覧 |
+| GET | `/api/admin/users/:id/reports` | ユーザーの週次レポート一覧 |
+| GET | `/api/admin/dashboard/bots` | **[superadmin]** BOT一覧 |
+| GET | `/api/admin/dashboard/bots/:id/versions` | **[superadmin]** BOTバージョン一覧 |
+| POST | `/api/admin/dashboard/bots/:id/versions` | **[superadmin]** System Prompt保存+公開 |
+| GET | `/api/admin/dashboard/knowledge-bases` | **[superadmin]** ナレッジベース一覧 |
+| GET | `/api/admin/dashboard/knowledge-bases/:id/documents` | **[superadmin]** ドキュメント一覧 |
+| POST | `/api/admin/dashboard/knowledge-bases/:id/documents` | **[superadmin]** ドキュメント作成 |
+| GET | `/api/admin/dashboard/bot-knowledge-links` | **[superadmin]** BOT↔ナレッジ紐付け一覧 |
 
 ---
 
@@ -236,7 +246,7 @@ accounts → line_channels → line_users → user_accounts
 - **ステータス**: ✅ 本番稼働中
 - **技術スタック**: Hono + TypeScript + Cloudflare D1/R2/Queue + OpenAI GPT-4o
 - **GitHub**: https://github.com/matiuskuma2/syokujikanri
-- **最終デプロイ**: 2026-03-12（v1.3.0: food_master マッチング統合）
+- **最終デプロイ**: 2026-03-12（v1.4.0: T7-T9 UI実装完了）
 - **デプロイURL**: https://diet-bot.pages.dev
 
 ## ローカル開発
@@ -345,7 +355,19 @@ curl http://localhost:3000/api/health
    - analyzeNutritionLabel: product_name → findFoodByName で補完
    - confirm時: food_match_json カラムに保存
    - Migration 0012: meal_entries に food_match_json 追加
-10. ⬜ LINE Rich Menu 設定
-11. ⬜ RAG実装（ベクトル検索）
-12. ⬜ 管理画面プロンプトエディタ
-13. ⬜ サブスクリプション・課金管理 (Stripe)
+10. ✅ T7: User LIFF Dashboard 完成
+   - 記録詳細モーダル（体型データ・PFC分解・food_matchDB照合表示）
+   - リッチプロフィールページ（アイコン付き・concern_tagsタグ表示・goal表示）
+   - 体重チャートをbulk API（weight-history）で一括取得（N+1解消）
+11. ✅ T8: Admin ユーザー詳細画面完成
+   - 体重推移チャート（Chart.js）をモーダル概要タブに追加
+   - 食事記録・写真・レポートタブの動作確認
+12. ✅ T9: Superadmin BOT/ナレッジ設定画面
+   - BOT一覧（状態・バージョン・プロンプトエディタ）
+   - System Promptエディタ + バージョン管理 + 即時公開
+   - ナレッジベース一覧 + ドキュメントビューア
+   - BOT↔ナレッジ紐付け表示
+   - 新API: bots, bot-versions, knowledge-bases, documents, bot-kb-links
+13. ⬜ LINE Rich Menu 設定
+14. ⬜ RAG実装（ベクトル検索）
+15. ⬜ サブスクリプション・課金管理 (Stripe)
