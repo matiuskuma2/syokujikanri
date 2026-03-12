@@ -240,14 +240,19 @@ export async function useInviteCode(
     return { success: false, error: 'ALREADY_USED' }
   }
 
-  // 同一ユーザーが別のコードで既に紐付け済みかチェック（再招待シナリオ対応）
+  // 同一ユーザーが別のコードで既に紐付け済みかチェック（SSoT: R3）
   const anyPreviousUsage = await db
     .prepare('SELECT ic.account_id FROM invite_code_usages icu JOIN invite_codes ic ON ic.id = icu.invite_code_id WHERE icu.line_user_id = ?1 ORDER BY icu.used_at DESC LIMIT 1')
     .bind(lineUserId)
     .first<{ account_id: string }>()
-  // 既に同じアカウントに紐付いている場合は ALREADY_USED を返す
-  if (anyPreviousUsage && anyPreviousUsage.account_id === inviteCode.account_id) {
-    return { success: false, error: 'ALREADY_USED' }
+  if (anyPreviousUsage) {
+    if (anyPreviousUsage.account_id === inviteCode.account_id) {
+      // 同じアカウントの別コード → ALREADY_USED（P7）
+      return { success: false, error: 'ALREADY_USED' }
+    } else {
+      // 別アカウントのコード → ALREADY_BOUND（R3: 紐付け変更は不可）
+      return { success: false, error: 'ALREADY_BOUND' }
+    }
   }
 
   // 使用履歴を記録

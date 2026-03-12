@@ -854,7 +854,7 @@ async function handleInviteCode(
   ctx: ProcessContext
 ): Promise<void> {
   const { env, lineChannelId, clientAccountId } = ctx
-  const { useInviteCode, findInviteCodeByCode } = await import('../../repositories/invite-codes-repo')
+  const { useInviteCode, findInviteCodeByCode, findInviteCodeUsageByLineUser } = await import('../../repositories/invite-codes-repo')
   const { findUserAccount, ensureUserAccount: ensureUA } = await import('../../repositories/line-users-repo')
 
   // ---------------------------------------------------------------
@@ -877,25 +877,30 @@ async function handleInviteCode(
   })
 
   // ---------------------------------------------------------------
-  // 1. 既に同じアカウントに紐付け済みか先にチェック
-  //    問診が未完了なら問診を案内する
+  // 1. 既に招待コード使用済みか先にチェック（SSoT: P1, P2）
+  //    送信されたコード自体の有効性も検証し、適切なメッセージを分岐する
   // ---------------------------------------------------------------
-  const { findInviteCodeUsageByLineUser } = await import('../../repositories/invite-codes-repo')
   const existingUsage = await findInviteCodeUsageByLineUser(env.DB, lineUserId)
   if (existingUsage) {
-    // 既に招待コードを使用済み → 問診状態を確認
+    // このユーザーは過去に招待コードを使ったことがある
     const access = await checkServiceAccess(env.DB, { accountId: clientAccountId, lineUserId })
     const effectiveAccountId = access?.accountId ?? clientAccountId
 
+    // 送信されたコード自体の有効性を確認（無効コードを「登録済み」と混同しないため）
+    const sentCode = await findInviteCodeByCode(env.DB, code)
+    const sentCodeInfo = sentCode
+      ? `(valid code for account ${sentCode.account_id})`
+      : '(invalid/revoked code)'
+
     if (access?.intakeCompleted) {
-      // 問診完了済み → 通常利用を案内
+      // P1: 問診完了済み → 通常利用を案内
       await replyText(
         replyToken,
         'ℹ️ 既に登録済みです。\nそのままご利用いただけます！\n\n📷 食事の写真を送ると自動解析\n⚖️ 体重を入力すると記録\n💬「相談モード」と入力でAIに相談',
         env.LINE_CHANNEL_ACCESS_TOKEN
       )
     } else {
-      // 問診未完了 → 1回のreplyで「登録済み案内」+「問診質問1」を同時送信
+      // P2: 問診未完了 → 1回のreplyで「登録済み案内」+「問診質問1」を同時送信
       try {
         await ensureUA(env.DB, lineUserId, effectiveAccountId)
         await upsertModeSession(env.DB, {
@@ -917,7 +922,7 @@ async function handleInviteCode(
         env.LINE_CHANNEL_ACCESS_TOKEN
       )
     }
-    console.log(`[LINE] invite code skipped (already registered): ${code} by ${lineUserId}`)
+    console.log(`[LINE] invite code skipped (already registered): sent=${code} ${sentCodeInfo} by ${lineUserId}`)
     return
   }
 
@@ -927,11 +932,47 @@ async function handleInviteCode(
   const result = await useInviteCode(env.DB, code, lineUserId)
 
   if (!result.success) {
+    // P6/P7 の ALREADY_USED: 通常はP1/P2で先にキャッチされるが、
+    // レースコンディション等で到達した場合も問診状態に応じた適切な応答を返す
+    if (result.error === 'ALREADY_USED' || result.error === 'ALREADY_BOUND') {
+      const access = await checkServiceAccess(env.DB, { accountId: clientAccountId, lineUserId })
+      const effectiveAccountId = access?.accountId ?? clientAccountId
+      if (access && !access.intakeCompleted) {
+        // 問診未完了: P2相当 → 問診を開始
+        try {
+          await ensureUA(env.DB, lineUserId, effectiveAccountId)
+          await upsertModeSession(env.DB, {
+            clientAccountId: effectiveAccountId,
+            lineUserId,
+            currentMode: 'intake',
+            currentStep: 'intake_nickname',
+          })
+        } catch (err) {
+          console.error(`[LINE] handleInviteCode ALREADY_USED intake setup failed:`, err)
+        }
+        await replyMessages(
+          replyToken,
+          [
+            { type: 'text', text: 'ℹ️ 既に登録済みです！\n\n初回ヒアリングがまだ完了していないようですので、続けましょう 😊' },
+            { type: 'text', text: '📋 初回ヒアリングを開始します！\n\n━━━━━━━━━━━━━━━\n【質問 1/9】\nお名前（ニックネームでOK）を教えてください！' },
+          ],
+          env.LINE_CHANNEL_ACCESS_TOKEN
+        )
+        return
+      }
+      // 問診完了済み: P1相当
+      await replyText(
+        replyToken,
+        'ℹ️ 既に登録済みです。\nそのままご利用いただけます！\n\n📷 食事の写真を送ると自動解析\n⚖️ 体重を入力すると記録\n💬「相談モード」と入力でAIに相談',
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+      return
+    }
+
     const errorMessages: Record<string, string> = {
       INVALID_CODE: '❌ この招待コードは無効です。\nコードをもう一度確認してください。',
       CODE_EXPIRED: '⏰ この招待コードは有効期限切れです。\n担当者にお問い合わせください。',
       CODE_EXHAUSTED: '⚠️ この招待コードは使用上限に達しています。\n担当者にお問い合わせください。',
-      ALREADY_USED: 'ℹ️ このコードは既に登録済みです。\nそのままご利用いただけます！\n\n食事の写真を送ったり、「相談モード」と入力してご利用ください。',
     }
     await replyText(
       replyToken,
