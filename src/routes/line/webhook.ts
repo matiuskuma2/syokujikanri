@@ -60,14 +60,36 @@ webhookRouter.post('/', async (c) => {
   // ------------------------------------------------------------------
   // 4. チャンネルコンテキスト解決
   //
-  //    Phase 1 (シングルチャンネル):
-  //      env.LINE_CHANNEL_ID と env.CLIENT_ACCOUNT_ID を直接使用
-  //
-  //    Phase 2+ (マルチチャンネル):
-  //      body.destination の LINE チャンネル UID → line_channels テーブル検索
+  //    line_channels テーブルから DB 内部 ID を取得する。
+  //    env.LINE_CHANNEL_ID は LINE の Channel ID（数値文字列 e.g. "1656660870"）
+  //    だが、line_users.line_channel_id は line_channels.id（内部ID）を参照する。
+  //    このため、line_channels テーブルで channel_id → id のルックアップが必要。
   // ------------------------------------------------------------------
-  const lineChannelId = c.env.LINE_CHANNEL_ID ?? 'default'
+  const envChannelId = c.env.LINE_CHANNEL_ID ?? ''
   const clientAccountId = c.env.CLIENT_ACCOUNT_ID ?? 'default'
+
+  // line_channels テーブルから内部IDを取得
+  let lineChannelId: string
+  try {
+    const channelRow = await c.env.DB.prepare(
+      `SELECT id, account_id FROM line_channels WHERE channel_id = ?1 AND is_active = 1 LIMIT 1`
+    ).bind(envChannelId).first<{ id: string; account_id: string }>()
+
+    if (channelRow) {
+      lineChannelId = channelRow.id
+      console.log(`[Webhook] resolved lineChannelId=${lineChannelId} from channel_id=${envChannelId}`)
+    } else {
+      // フォールバック: 最初のアクティブなチャンネルを使用
+      const fallbackRow = await c.env.DB.prepare(
+        `SELECT id FROM line_channels WHERE is_active = 1 LIMIT 1`
+      ).first<{ id: string }>()
+      lineChannelId = fallbackRow?.id ?? 'default'
+      console.warn(`[Webhook] channel_id=${envChannelId} not found in line_channels, using fallback: ${lineChannelId}`)
+    }
+  } catch (err) {
+    console.error('[Webhook] Failed to resolve lineChannelId:', err)
+    lineChannelId = 'default'
+  }
 
   const ctx = { env: c.env, lineChannelId, clientAccountId }
 
