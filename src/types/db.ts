@@ -261,6 +261,7 @@ export type MealEntry = {
   carbs_g: number | null
   fiber_g: number | null
   alcohol_kcal: number | null
+  food_match_json: string | null  // food_master マッチング結果 JSON
   confirmation_status: 'draft' | 'confirmed' | 'corrected'
   created_at: string
   updated_at: string

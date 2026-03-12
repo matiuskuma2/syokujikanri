@@ -112,6 +112,7 @@ export async function createMealEntry(
     fatG?: number | null
     carbsG?: number | null
     confirmationStatus?: MealEntry['confirmation_status']
+    foodMatchJson?: string | null
   }
 ): Promise<MealEntry> {
   const id = generateId()
@@ -121,8 +122,8 @@ export async function createMealEntry(
       INSERT INTO meal_entries
         (id, daily_log_id, meal_type, consumed_at, meal_text, photo_count,
          calories_kcal, protein_g, fat_g, carbs_g,
-         confirmation_status, created_at, updated_at)
-      VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, ?9, ?10, ?11, ?11)
+         confirmation_status, food_match_json, created_at, updated_at)
+      VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)
     `)
     .bind(
       id,
@@ -135,6 +136,7 @@ export async function createMealEntry(
       params.fatG ?? null,
       params.carbsG ?? null,
       params.confirmationStatus ?? 'draft',
+      params.foodMatchJson ?? null,
       now
     )
     .run()
@@ -154,6 +156,7 @@ export async function updateMealEntryFromEstimate(
     fatG?: number | null
     carbsG?: number | null
     confirmationStatus?: MealEntry['confirmation_status']
+    foodMatchJson?: string | null
   }
 ): Promise<void> {
   const now = nowIso()
@@ -166,8 +169,9 @@ export async function updateMealEntryFromEstimate(
         fat_g               = COALESCE(?4, fat_g),
         carbs_g             = COALESCE(?5, carbs_g),
         confirmation_status = COALESCE(?6, confirmation_status),
-        updated_at          = ?7
-      WHERE id = ?8
+        food_match_json     = COALESCE(?7, food_match_json),
+        updated_at          = ?8
+      WHERE id = ?9
     `)
     .bind(
       params.mealText ?? null,
@@ -176,6 +180,7 @@ export async function updateMealEntryFromEstimate(
       params.fatG ?? null,
       params.carbsG ?? null,
       params.confirmationStatus ?? null,
+      params.foodMatchJson ?? null,
       now,
       id
     )

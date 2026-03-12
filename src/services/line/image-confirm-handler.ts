@@ -151,6 +151,11 @@ async function applyProposedAction(
         ? (mealType as typeof validTypes[number])
         : 'other'
 
+      // food_master マッチ結果を JSON 文字列化
+      const foodMatchJson = action.food_match_data
+        ? JSON.stringify(action.food_match_data)
+        : null
+
       const existing = await findMealEntryByDailyLogAndType(env.DB, dailyLog.id, safeMealType)
       if (existing) {
         await updateMealEntryFromEstimate(env.DB, existing.id, {
@@ -160,6 +165,7 @@ async function applyProposedAction(
           fatG: (action.fat_g as number) ?? null,
           carbsG: (action.carbs_g as number) ?? null,
           confirmationStatus: 'confirmed',
+          foodMatchJson,
         })
         await incrementMealPhotoCount(env.DB, existing.id)
       } else {
@@ -172,6 +178,7 @@ async function applyProposedAction(
           fatG: (action.fat_g as number) ?? null,
           carbsG: (action.carbs_g as number) ?? null,
           confirmationStatus: 'confirmed',
+          foodMatchJson,
         })
       }
       break
@@ -229,10 +236,24 @@ async function applyProposedAction(
 // ===================================================================
 
 function buildConfirmMessage(result: ImageIntakeResult): string {
+  let matchNote = ''
+  // food_match_data が extractedJson にある場合、マッチ情報を追記
+  try {
+    if (result.extracted_json) {
+      const extracted = typeof result.extracted_json === 'string'
+        ? JSON.parse(result.extracted_json)
+        : result.extracted_json
+      const fmd = extracted?.food_match_data
+      if (fmd && fmd.matched_count > 0) {
+        matchNote = `\n📊 食品DB照合済み（${fmd.matched_count}/${fmd.total_count}品マッチ）`
+      }
+    }
+  } catch { /* ignore */ }
+
   switch (result.image_category) {
     case 'meal_photo':
     case 'nutrition_label':
-      return '✅ 食事記録を保存しました！\n\n写真をもっと送ると、1日の栄養バランスが見えてきます 📊'
+      return `✅ 食事記録を保存しました！${matchNote}\n\n写真をもっと送ると、1日の栄養バランスが見えてきます 📊`
     case 'body_scale':
       return '✅ 体重を記録しました！\n\n継続して記録することで体重推移を可視化できます 📈'
     case 'progress_body_photo':
