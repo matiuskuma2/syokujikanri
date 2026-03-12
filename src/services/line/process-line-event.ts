@@ -19,7 +19,7 @@ import type {
   LineMessageEvent,
 } from '../../types/bindings'
 
-import { getUserProfile, replyText, replyTextWithQuickReplies, replyWithQuickReplies, getMessageContent, pushText } from './reply'
+import { getUserProfile, replyText, replyTextWithQuickReplies, replyWithQuickReplies, replyMessages, getMessageContent, pushText } from './reply'
 import { startIntakeFlow, handleIntakeStep, beginIntakeFromStart, resumeIntakeFlow } from './intake-flow'
 import { upsertLineUser, ensureUserAccount, findUserAccount } from '../../repositories/line-users-repo'
 import { upsertUserServiceStatus, checkServiceAccess } from '../../repositories/subscriptions-repo'
@@ -348,7 +348,7 @@ async function handleTextMessageEvent(
   // ------------------------------------------------------------------
 
   // インテーク開始 / 再開コマンド
-  if (['問診', 'ヒアリング', '登録', '初期設定'].includes(textTrim)) {
+  if (['問診', 'ヒアリング', '登録', '初期設定'].includes(textTrim) || /ヒアリング.*(お願い|開始|して|したい)/i.test(textTrim)) {
     await startIntakeFlow(event.replyToken, lineUserId, effectiveAccountId, env, 'command')
     return
   }
@@ -895,30 +895,27 @@ async function handleInviteCode(
         env.LINE_CHANNEL_ACCESS_TOKEN
       )
     } else {
-      // 問診未完了 → 問診を開始/再開する
-      await replyText(
-        replyToken,
-        'ℹ️ 既に登録済みです！\n\n初回ヒアリングがまだ完了していないようですので、続けましょう 😊',
-        env.LINE_CHANNEL_ACCESS_TOKEN
-      )
-
-      // pushで問診開始（replyTokenは使用済み）
+      // 問診未完了 → 1回のreplyで「登録済み案内」+「問診質問1」を同時送信
       try {
-        const ua = await ensureUA(env.DB, lineUserId, effectiveAccountId)
+        await ensureUA(env.DB, lineUserId, effectiveAccountId)
         await upsertModeSession(env.DB, {
           clientAccountId: effectiveAccountId,
           lineUserId,
           currentMode: 'intake',
           currentStep: 'intake_nickname',
         })
-        await pushText(
-          lineUserId,
-          '📋 初回ヒアリングを開始します！\n\n━━━━━━━━━━━━━━━\n【質問 1/9】\nお名前（ニックネームでOK）を教えてください！',
-          env.LINE_CHANNEL_ACCESS_TOKEN
-        )
       } catch (err) {
-        console.warn(`[LINE] intake push after existing code failed:`, err)
+        console.error(`[LINE] handleInviteCode DB setup for intake failed:`, err)
       }
+
+      await replyMessages(
+        replyToken,
+        [
+          { type: 'text', text: 'ℹ️ 既に登録済みです！\n\n初回ヒアリングがまだ完了していないようですので、続けましょう 😊' },
+          { type: 'text', text: '📋 初回ヒアリングを開始します！\n\n━━━━━━━━━━━━━━━\n【質問 1/9】\nお名前（ニックネームでOK）を教えてください！' },
+        ],
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
     }
     console.log(`[LINE] invite code skipped (already registered): ${code} by ${lineUserId}`)
     return
@@ -975,31 +972,26 @@ async function handleInviteCode(
   // ---------------------------------------------------------------
   // 4. 成功返信 → push で問診開始（replyToken は1回しか使えない）
   // ---------------------------------------------------------------
-  await replyText(
-    replyToken,
-    `✅ 招待コード「${code.toUpperCase()}」で登録が完了しました！\n\nこれからダイエットサポートを開始します 😊\nまずは簡単な初回ヒアリングにお答えください。`,
-    env.LINE_CHANNEL_ACCESS_TOKEN
-  )
-
-  // replyToken は使用済みなので、問診開始はpush方式で送信する
-  // startIntakeFlow 内の replyText は失敗するが、push で代替
+  // replyで「登録完了」+「問診開始」を同時送信（pushは不要）
   try {
-    const { pushText: pushMsg } = await import('./reply')
-    // 少し待ってから問診メッセージをpush（replyの表示と被らないように）
     await upsertModeSession(env.DB, {
       clientAccountId: targetAccountId,
       lineUserId,
       currentMode: 'intake',
       currentStep: 'intake_nickname',
     })
-    await pushMsg(
-      lineUserId,
-      '📋 初回ヒアリングを開始します！\n\n━━━━━━━━━━━━━━━\n【質問 1/9】\nお名前（ニックネームでOK）を教えてください！',
-      env.LINE_CHANNEL_ACCESS_TOKEN
-    )
   } catch (err) {
-    console.warn(`[LINE] intake push after invite code failed:`, err)
+    console.error(`[LINE] handleInviteCode: upsertModeSession failed:`, err)
   }
+
+  await replyMessages(
+    replyToken,
+    [
+      { type: 'text', text: `✅ 招待コード「${code.toUpperCase()}」で登録が完了しました！\n\nこれからダイエットサポートを開始します 😊` },
+      { type: 'text', text: '📋 初回ヒアリングを開始します！\n\n━━━━━━━━━━━━━━━\n【質問 1/9】\nお名前（ニックネームでOK）を教えてください！' },
+    ],
+    env.LINE_CHANNEL_ACCESS_TOKEN
+  )
 
   console.log(`[LINE] invite code used: ${code} → account ${targetAccountId} by ${lineUserId}`)
 }
