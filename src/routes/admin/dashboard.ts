@@ -217,4 +217,173 @@ dashboardRouter.get('/db-stats', async (c) => {
   return ok(c, { tables: results })
 })
 
+// ===================================================================
+// 管理者一覧
+// GET /api/admin/dashboard/members
+// ===================================================================
+
+dashboardRouter.get('/members', async (c) => {
+  const payload = c.get('jwtPayload')
+  // superadmin: 全メンバー表示, admin: 同一アカウントのメンバーのみ
+  const isSuperadmin = payload.role === 'superadmin'
+
+  let sql: string
+  let params: any[]
+
+  if (isSuperadmin) {
+    sql = `
+      SELECT am.id, am.account_id, am.email, am.role, am.status, am.last_login_at, am.created_at,
+             a.name AS account_name,
+             (SELECT COUNT(*) FROM user_accounts ua WHERE ua.client_account_id = am.account_id AND ua.status = 'active') AS user_count
+      FROM account_memberships am
+      LEFT JOIN accounts a ON a.id = am.account_id
+      ORDER BY am.created_at DESC
+    `
+    params = []
+  } else {
+    sql = `
+      SELECT am.id, am.account_id, am.email, am.role, am.status, am.last_login_at, am.created_at,
+             a.name AS account_name,
+             (SELECT COUNT(*) FROM user_accounts ua WHERE ua.client_account_id = am.account_id AND ua.status = 'active') AS user_count
+      FROM account_memberships am
+      LEFT JOIN accounts a ON a.id = am.account_id
+      WHERE am.account_id = ?1
+      ORDER BY am.created_at DESC
+    `
+    params = [payload.accountId]
+  }
+
+  const stmt = params.length > 0
+    ? c.env.DB.prepare(sql).bind(...params)
+    : c.env.DB.prepare(sql)
+
+  const { results } = await stmt.all<{
+    id: string
+    account_id: string
+    email: string
+    role: string
+    status: string
+    last_login_at: string | null
+    created_at: string
+    account_name: string | null
+    user_count: number
+  }>()
+
+  return ok(c, { members: results })
+})
+
+// ===================================================================
+// 管理者を直接作成（仮パスワード方式）
+// POST /api/admin/dashboard/members
+// superadmin: admin を作成可能, admin: staff のみ作成可能
+// ===================================================================
+
+dashboardRouter.post('/members', async (c) => {
+  const payload = c.get('jwtPayload')
+  const body = await c.req.json<{
+    email: string
+    password: string
+    role?: string
+    accountId?: string
+  }>().catch(() => ({} as any))
+
+  if (!body.email || !body.password) {
+    return c.json({ success: false, error: 'Email and password are required' }, 400)
+  }
+  if (body.password.length < 8) {
+    return c.json({ success: false, error: 'Password must be at least 8 characters' }, 400)
+  }
+
+  const role = body.role ?? 'staff'
+  if (!['admin', 'staff'].includes(role)) {
+    return c.json({ success: false, error: 'Role must be admin or staff' }, 400)
+  }
+
+  // 権限チェック: superadminのみadminを作成可能
+  if (role === 'admin' && payload.role !== 'superadmin') {
+    return c.json({ success: false, error: 'Only superadmin can create admin accounts' }, 403)
+  }
+  // staffは誰も作成できない
+  if (payload.role === 'staff') {
+    return c.json({ success: false, error: 'Staff cannot create accounts' }, 403)
+  }
+
+  // メール重複チェック
+  const existing = await c.env.DB.prepare(
+    "SELECT id FROM account_memberships WHERE email = ?1 AND status = 'active'"
+  ).bind(body.email).first()
+  if (existing) {
+    return c.json({ success: false, error: 'Email already registered' }, 400)
+  }
+
+  // superadminがadminを作る場合: accountIdが必要。指定がなければクライアントアカウントを自動作成
+  let targetAccountId = body.accountId ?? payload.accountId
+  if (role === 'admin' && payload.role === 'superadmin' && !body.accountId) {
+    // 新しいクライアントアカウントを作成
+    const { createAccount } = await import('../../repositories/accounts-repo')
+    const newAccount = await createAccount(c.env.DB, {
+      name: `${body.email.split('@')[0]} のアカウント`,
+      type: 'clinic',
+    })
+    targetAccountId = newAccount.id
+  }
+
+  // パスワードハッシュ化
+  const { hashPassword } = await import('../../utils/password')
+  const { generateId, nowIso } = await import('../../utils/id')
+  const hash = await hashPassword(body.password)
+  const id = generateId()
+
+  await c.env.DB.prepare(`
+    INSERT INTO account_memberships (id, account_id, user_id, email, role, status, password_hash, created_at)
+    VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7)
+  `).bind(id, targetAccountId, id, body.email, role, hash, nowIso()).run()
+
+  return ok(c, {
+    message: 'Member created successfully',
+    member: { id, email: body.email, role, accountId: targetAccountId },
+  })
+})
+
+// ===================================================================
+// 管理者を停止/有効化
+// PATCH /api/admin/dashboard/members/:id
+// ===================================================================
+
+dashboardRouter.patch('/members/:id', async (c) => {
+  const payload = c.get('jwtPayload')
+  const memberId = c.req.param('id')
+  const body = await c.req.json<{ status?: string }>().catch(() => ({} as any))
+
+  if (!body.status || !['active', 'suspended'].includes(body.status)) {
+    return c.json({ success: false, error: 'Status must be active or suspended' }, 400)
+  }
+
+  // 自分自身は停止できない
+  if (memberId === payload.sub) {
+    return c.json({ success: false, error: 'Cannot change your own status' }, 400)
+  }
+
+  const target = await c.env.DB.prepare(
+    'SELECT * FROM account_memberships WHERE id = ?1'
+  ).bind(memberId).first<{ id: string; role: string; account_id: string }>()
+
+  if (!target) return c.json({ success: false, error: 'Member not found' }, 404)
+
+  // superadminのみsuperadmin以外を操作可能, adminはstaffのみ
+  if (target.role === 'superadmin') {
+    return c.json({ success: false, error: 'Cannot modify superadmin status' }, 403)
+  }
+  if (target.role === 'admin' && payload.role !== 'superadmin') {
+    return c.json({ success: false, error: 'Only superadmin can modify admin status' }, 403)
+  }
+
+  const { nowIso } = await import('../../utils/id')
+  await c.env.DB.prepare(
+    'UPDATE account_memberships SET status = ?1, updated_at = ?2 WHERE id = ?3'
+  ).bind(body.status, nowIso(), memberId).run()
+
+  return ok(c, { message: 'Status updated', id: memberId, status: body.status })
+})
+
 export default dashboardRouter

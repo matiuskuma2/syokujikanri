@@ -229,12 +229,49 @@ function getAdminDashboardHtml(): string {
     .photo-thumb { border-radius: 8px; overflow: hidden; cursor: pointer; }
     .photo-thumb img { width: 100%; height: 120px; object-fit: cover; display: block; }
     .photo-thumb .photo-label { font-size: 11px; padding: 4px 8px; color: #6b7280; }
+    .guide-step { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; }
+    .guide-num { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; flex-shrink: 0; }
+    .line-guide-box { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px; padding: 16px; margin-top: 8px; }
+    .line-guide-box code { background: #dcfce7; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
   </style>
 </head>
 <body class="bg-gray-50">
 
-<!-- Toast通知 -->
+<!-- Toast -->
 <div id="toast-container" class="fixed bottom-4 right-4 z-50 space-y-2"></div>
+
+<!-- ========== 初期セットアップ画面（superadmin未登録時）========== -->
+<div id="setup-screen" class="hidden min-h-screen flex items-center justify-center bg-gradient-to-br from-green-50 to-teal-50">
+  <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md">
+    <div class="text-center mb-6">
+      <div class="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4">
+        <i class="fas fa-cog text-white text-2xl"></i>
+      </div>
+      <h1 class="text-2xl font-bold text-gray-800">初期セットアップ</h1>
+      <p class="text-gray-500 text-sm mt-1">最初の管理者アカウントを作成します</p>
+    </div>
+    <div class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">メールアドレス</label>
+        <input id="setup-email" type="email"
+          class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent"
+          placeholder="admin@example.com">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">パスワード（8文字以上）</label>
+        <input id="setup-password" type="password"
+          class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent"
+          placeholder="8文字以上の安全なパスワード"
+          onkeydown="if(event.key==='Enter')handleSetup()">
+      </div>
+      <div id="setup-error" class="hidden text-red-500 text-sm bg-red-50 p-3 rounded-lg"></div>
+      <button onclick="handleSetup()"
+        class="w-full bg-green-500 hover:bg-green-600 text-white py-3 rounded-xl font-medium transition-colors">
+        <i class="fas fa-user-plus mr-2"></i>スーパー管理者アカウントを作成
+      </button>
+    </div>
+  </div>
+</div>
 
 <!-- ========== ログイン画面 ========== -->
 <div id="login-screen" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-50 to-teal-50">
@@ -327,16 +364,20 @@ function getAdminDashboardHtml(): string {
         <i class="fas fa-users w-5 text-center"></i><span>LINEユーザー管理</span>
       </button>
 
-      <p class="text-gray-500 text-xs font-medium px-3 py-2 mt-3 uppercase tracking-wider">管理者管理</p>
-      <button id="nav-staff" onclick="showPage('staff')"
+      <p class="text-gray-500 text-xs font-medium px-3 py-2 mt-3 uppercase tracking-wider">管理</p>
+      <button id="nav-members" onclick="showPage('members')"
         class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-300 hover:bg-gray-700 transition-colors text-left">
-        <i class="fas fa-user-shield w-5 text-center"></i><span>スタッフ管理</span>
+        <i class="fas fa-user-shield w-5 text-center"></i><span>管理者管理</span>
       </button>
 
       <p class="text-gray-500 text-xs font-medium px-3 py-2 mt-3 uppercase tracking-wider">設定</p>
       <button id="nav-account" onclick="showPage('account')"
         class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-300 hover:bg-gray-700 transition-colors text-left">
         <i class="fas fa-cog w-5 text-center"></i><span>アカウント設定</span>
+      </button>
+      <button id="nav-line-guide" onclick="showPage('line-guide')"
+        class="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-gray-300 hover:bg-gray-700 transition-colors text-left">
+        <i class="fab fa-line w-5 text-center"></i><span>LINE案内文</span>
       </button>
 
       <!-- Superadmin Only -->
@@ -361,6 +402,93 @@ function getAdminDashboardHtml(): string {
 
     <!-- ===== ダッシュボードページ ===== -->
     <div id="page-overview" class="p-8">
+      <!-- ウェルカムガイド（初回表示、閉じられる） -->
+      <div id="welcome-guide" class="bg-gradient-to-r from-green-50 to-teal-50 border border-green-200 rounded-2xl p-6 mb-8">
+        <div class="flex items-start justify-between">
+          <div>
+            <h2 class="text-lg font-bold text-gray-800 mb-1"><i class="fas fa-hand-wave text-green-500 mr-2"></i>ようこそ！最初にやることガイド</h2>
+            <p class="text-sm text-gray-500 mb-4" id="guide-role-desc">管理画面の使い方を確認しましょう</p>
+          </div>
+          <button onclick="dismissGuide()" class="text-gray-400 hover:text-gray-600" title="閉じる">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+
+        <!-- superadmin ガイド -->
+        <div id="guide-superadmin" class="hidden">
+          <div class="guide-step">
+            <div class="guide-num bg-green-100 text-green-700">1</div>
+            <div>
+              <p class="font-bold text-gray-800 text-sm">管理者（admin）を追加する</p>
+              <p class="text-xs text-gray-500">「管理者管理」メニューから、顧客や運営担当者のアカウントを作成します</p>
+            </div>
+          </div>
+          <div class="guide-step">
+            <div class="guide-num bg-blue-100 text-blue-700">2</div>
+            <div>
+              <p class="font-bold text-gray-800 text-sm">管理者の利用状況を確認する</p>
+              <p class="text-xs text-gray-500">各管理者に紐づくLINEユーザー数、利用中/停止中のステータスを管理します</p>
+            </div>
+          </div>
+          <div class="guide-step">
+            <div class="guide-num bg-purple-100 text-purple-700">3</div>
+            <div>
+              <p class="font-bold text-gray-800 text-sm">システム設定を確認する</p>
+              <p class="text-xs text-gray-500">「システム管理」でDB統計・Cronジョブ・APIエンドポイントを確認できます</p>
+            </div>
+          </div>
+          <button onclick="showPage('members')" class="mt-3 bg-green-500 hover:bg-green-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-colors">
+            <i class="fas fa-user-plus mr-2"></i>管理者を追加する
+          </button>
+        </div>
+
+        <!-- admin ガイド -->
+        <div id="guide-admin" class="hidden">
+          <div class="guide-step">
+            <div class="guide-num bg-green-100 text-green-700">1</div>
+            <div>
+              <p class="font-bold text-gray-800 text-sm">LINEユーザーを増やす</p>
+              <p class="text-xs text-gray-500">「LINE案内文」メニューから、お客様にLINE登録を案内する文面をコピーできます</p>
+            </div>
+          </div>
+          <div class="guide-step">
+            <div class="guide-num bg-blue-100 text-blue-700">2</div>
+            <div>
+              <p class="font-bold text-gray-800 text-sm">ユーザーの記録を確認する</p>
+              <p class="text-xs text-gray-500">「LINEユーザー管理」で各ユーザーの食事記録・体重・問診結果を確認できます</p>
+            </div>
+          </div>
+          <div class="guide-step">
+            <div class="guide-num bg-purple-100 text-purple-700">3</div>
+            <div>
+              <p class="font-bold text-gray-800 text-sm">サービスのON/OFFを管理する</p>
+              <p class="text-xs text-gray-500">ユーザーごとにBOT通知・記録・相談機能を個別に制御できます</p>
+            </div>
+          </div>
+          <button onclick="showPage('line-guide')" class="mt-3 bg-green-500 hover:bg-green-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-colors">
+            <i class="fab fa-line mr-2"></i>LINE案内文を確認する
+          </button>
+        </div>
+
+        <!-- staff ガイド -->
+        <div id="guide-staff" class="hidden">
+          <div class="guide-step">
+            <div class="guide-num bg-green-100 text-green-700">1</div>
+            <div>
+              <p class="font-bold text-gray-800 text-sm">ダッシュボードで状況確認</p>
+              <p class="text-xs text-gray-500">この画面で総ユーザー数・今日の記録・アクティブ数を確認できます</p>
+            </div>
+          </div>
+          <div class="guide-step">
+            <div class="guide-num bg-blue-100 text-blue-700">2</div>
+            <div>
+              <p class="font-bold text-gray-800 text-sm">ユーザーの詳細を閲覧</p>
+              <p class="text-xs text-gray-500">「LINEユーザー管理」で各ユーザーの記録を確認できます（閲覧のみ）</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <h1 class="text-2xl font-bold text-gray-800 mb-6">ダッシュボード</h1>
       <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
         <div class="stat-card bg-white rounded-xl shadow p-6">
@@ -440,97 +568,168 @@ function getAdminDashboardHtml(): string {
       </div>
     </div>
 
-    <!-- ===== スタッフ管理ページ ===== -->
-    <div id="page-staff" class="hidden p-8">
+    <!-- ===== 管理者管理ページ（旧スタッフ管理を全面リニューアル） ===== -->
+    <div id="page-members" class="hidden p-8">
       <div class="flex items-center justify-between mb-6">
         <div>
-          <h1 class="text-2xl font-bold text-gray-800">スタッフ管理</h1>
-          <p class="text-gray-500 text-sm mt-1">管理者・スタッフアカウントの招待と権限管理</p>
+          <h1 class="text-2xl font-bold text-gray-800">管理者管理</h1>
+          <p class="text-gray-500 text-sm mt-1" id="members-desc">管理者・スタッフアカウントの作成と権限管理</p>
         </div>
       </div>
 
-      <!-- 役割の説明 -->
+      <!-- 権限の説明 -->
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
         <div class="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
-          <div class="flex items-center gap-2 mb-2">
-            <span class="text-xs px-2 py-0.5 rounded-full role-badge-superadmin font-medium">superadmin</span>
-          </div>
-          <p class="text-sm font-semibold text-gray-800">スーパー管理者</p>
+          <span class="text-xs px-2 py-0.5 rounded-full role-badge-superadmin font-medium">superadmin</span>
+          <p class="text-sm font-semibold text-gray-800 mt-2">スーパー管理者</p>
           <ul class="text-xs text-gray-600 mt-2 space-y-1">
-            <li><i class="fas fa-check text-green-500 mr-1"></i>全機能アクセス</li>
-            <li><i class="fas fa-check text-green-500 mr-1"></i>管理者の追加・削除</li>
-            <li><i class="fas fa-check text-green-500 mr-1"></i>システム設定の変更</li>
-            <li><i class="fas fa-check text-green-500 mr-1"></i>全ユーザーデータ閲覧</li>
+            <li><i class="fas fa-check text-green-500 mr-1"></i>全機能・全アカウントにアクセス</li>
+            <li><i class="fas fa-check text-green-500 mr-1"></i>管理者(admin)の作成・停止</li>
+            <li><i class="fas fa-check text-green-500 mr-1"></i>システム設定の閲覧</li>
           </ul>
         </div>
         <div class="bg-blue-50 border border-blue-200 rounded-xl p-4">
-          <div class="flex items-center gap-2 mb-2">
-            <span class="text-xs px-2 py-0.5 rounded-full role-badge-admin font-medium">admin</span>
-          </div>
-          <p class="text-sm font-semibold text-gray-800">管理者</p>
+          <span class="text-xs px-2 py-0.5 rounded-full role-badge-admin font-medium">admin</span>
+          <p class="text-sm font-semibold text-gray-800 mt-2">管理者</p>
           <ul class="text-xs text-gray-600 mt-2 space-y-1">
-            <li><i class="fas fa-check text-green-500 mr-1"></i>LINEユーザー管理</li>
-            <li><i class="fas fa-check text-green-500 mr-1"></i>スタッフの招待</li>
-            <li><i class="fas fa-check text-green-500 mr-1"></i>ユーザーサービス設定</li>
-            <li><i class="fas fa-times text-red-400 mr-1"></i>管理者の追加・削除</li>
+            <li><i class="fas fa-check text-green-500 mr-1"></i>自分のLINEユーザー管理</li>
+            <li><i class="fas fa-check text-green-500 mr-1"></i>スタッフの招待・作成</li>
+            <li><i class="fas fa-check text-green-500 mr-1"></i>ユーザーサービスON/OFF</li>
           </ul>
         </div>
         <div class="bg-gray-50 border border-gray-200 rounded-xl p-4">
-          <div class="flex items-center gap-2 mb-2">
-            <span class="text-xs px-2 py-0.5 rounded-full role-badge-staff font-medium">staff</span>
-          </div>
-          <p class="text-sm font-semibold text-gray-800">スタッフ</p>
+          <span class="text-xs px-2 py-0.5 rounded-full role-badge-staff font-medium">staff</span>
+          <p class="text-sm font-semibold text-gray-800 mt-2">スタッフ</p>
           <ul class="text-xs text-gray-600 mt-2 space-y-1">
-            <li><i class="fas fa-check text-green-500 mr-1"></i>LINEユーザー閲覧</li>
             <li><i class="fas fa-check text-green-500 mr-1"></i>ダッシュボード閲覧</li>
-            <li><i class="fas fa-times text-red-400 mr-1"></i>設定変更</li>
-            <li><i class="fas fa-times text-red-400 mr-1"></i>招待・管理操作</li>
+            <li><i class="fas fa-check text-green-500 mr-1"></i>ユーザー情報閲覧のみ</li>
+            <li><i class="fas fa-times text-red-400 mr-1"></i>設定変更・招待不可</li>
           </ul>
         </div>
       </div>
 
-      <!-- 招待フォーム（admin/superadminのみ表示） -->
-      <div id="invite-form-section" class="bg-white rounded-xl shadow p-6 mb-6">
+      <!-- 管理者追加フォーム (staff以外に表示) -->
+      <div id="add-member-section" class="bg-white rounded-xl shadow p-6 mb-6">
         <h2 class="font-bold text-gray-800 mb-2 flex items-center gap-2">
-          <i class="fas fa-envelope text-blue-600"></i> スタッフを招待する
+          <i class="fas fa-user-plus text-green-600"></i> 管理者を追加する
         </h2>
-        <p class="text-gray-500 text-sm mb-4">
-          招待リンクをメールで送信します。受信者はそのリンクからアカウントを作成できます（48時間有効）。
-        </p>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 max-w-2xl">
-          <div class="md:col-span-2">
-            <label class="block text-sm font-medium text-gray-700 mb-1">招待先メールアドレス</label>
-            <input id="invite-email" type="email"
-              class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500"
-              placeholder="staff@example.com">
+        <p class="text-gray-500 text-sm mb-4">メールアドレスと仮パスワードを指定してアカウントを即時作成します。</p>
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 max-w-3xl">
+          <div class="md:col-span-1">
+            <label class="block text-sm font-medium text-gray-700 mb-1">メールアドレス</label>
+            <input id="add-member-email" type="email"
+              class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500"
+              placeholder="user@example.com">
+          </div>
+          <div class="md:col-span-1">
+            <label class="block text-sm font-medium text-gray-700 mb-1">仮パスワード</label>
+            <input id="add-member-password" type="text"
+              class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500"
+              placeholder="8文字以上">
           </div>
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">権限</label>
-            <select id="invite-role"
-              class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500">
+            <select id="add-member-role"
+              class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500">
               <option value="staff">スタッフ</option>
-              <option id="invite-role-admin-option" value="admin">管理者</option>
+              <option id="add-member-role-admin" value="admin">管理者 (admin)</option>
             </select>
           </div>
+          <div class="flex items-end">
+            <button onclick="handleAddMember()"
+              class="w-full bg-green-500 hover:bg-green-600 text-white py-3 rounded-xl font-medium transition-colors text-sm">
+              <i class="fas fa-plus mr-1"></i>作成
+            </button>
+          </div>
         </div>
-        <div class="mt-4 p-3 bg-gray-50 rounded-lg text-xs text-gray-600 max-w-2xl" id="role-desc">
-          <i class="fas fa-info-circle mr-1"></i>
-          <span id="role-desc-text">スタッフ：ユーザー閲覧のみ可能。設定変更・招待は不可。</span>
+        <div id="add-member-msg" class="hidden text-sm p-3 rounded-lg mt-3 max-w-3xl"></div>
+      </div>
+
+      <!-- staff権限の場合 -->
+      <div id="members-no-create" class="hidden bg-yellow-50 border border-yellow-200 rounded-xl p-4 mb-6 text-sm text-yellow-800">
+        <i class="fas fa-lock mr-2"></i>スタッフ権限ではアカウント作成はできません。
+      </div>
+
+      <!-- 管理者一覧 -->
+      <div class="bg-white rounded-xl shadow">
+        <div class="p-4 border-b">
+          <h2 class="font-bold text-gray-800"><i class="fas fa-list mr-2 text-gray-500"></i>管理者一覧</h2>
         </div>
-        <div id="invite-msg" class="hidden text-sm p-3 rounded-lg mt-3 max-w-2xl"></div>
-        <div class="mt-4">
-          <button onclick="handleInvite()"
-            class="bg-blue-500 hover:bg-blue-600 text-white px-6 py-3 rounded-xl font-medium transition-colors">
-            <i class="fas fa-paper-plane mr-2"></i>招待メールを送信
+        <div id="members-table" class="p-4">
+          <div class="text-gray-400 text-sm">読み込み中...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== LINE案内文ページ ===== -->
+    <div id="page-line-guide" class="hidden p-8">
+      <h1 class="text-2xl font-bold text-gray-800 mb-6"><i class="fab fa-line text-green-500 mr-2"></i>LINE登録 案内文</h1>
+      <p class="text-gray-500 text-sm mb-6">お客様にLINE登録を案内する際に使えるテンプレートです。コピーしてそのまま送れます。</p>
+
+      <!-- QRコード -->
+      <div class="bg-white rounded-2xl shadow p-6 mb-6 flex flex-col md:flex-row items-center gap-6">
+        <img src="/static/qr-line-friend.png" alt="QRコード" class="w-36 h-36 rounded-xl shadow-sm">
+        <div>
+          <h2 class="font-bold text-gray-800 mb-2">友達追加QRコード</h2>
+          <p class="text-sm text-gray-500 mb-3">印刷して店頭に掲示したり、メールに添付してご利用ください</p>
+          <div class="flex items-center gap-2 bg-gray-100 rounded-xl px-4 py-3 w-fit">
+            <span class="text-gray-500 text-sm">LINE ID:</span>
+            <code class="font-bold text-gray-800">@054eyzbj</code>
+            <button onclick="copyText('@054eyzbj', this)" class="text-gray-400 hover:text-gray-600 ml-1" title="コピー">
+              <i class="fas fa-copy"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 案内文テンプレート -->
+      <div class="bg-white rounded-2xl shadow p-6 mb-6">
+        <h2 class="font-bold text-gray-800 mb-3"><i class="fas fa-envelope mr-2 text-blue-500"></i>メール・メッセージ用テンプレート</h2>
+        <div class="bg-gray-50 rounded-xl p-4 relative">
+          <button onclick="copyText(document.getElementById('guide-text-1').innerText, this)"
+            class="absolute top-3 right-3 text-xs bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-gray-500 hover:bg-gray-50 transition-colors">
+            <i class="fas fa-copy mr-1"></i>コピー
+          </button>
+          <div id="guide-text-1" class="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">食事管理をLINEでかんたんに始められます！
+
+【登録方法】
+1. 下記リンクからLINEで友達追加してください
+   https://lin.ee/n4PoXrR
+   (LINE ID: @054eyzbj)
+
+2. 友達追加すると、初回問診(約2分)が始まります
+
+3. 問診完了後、食事の写真を送るだけでAIが自動でカロリー計算します
+
+※体重は「72.5kg」のようにテキストで送るだけでOKです
+※「相談」と送るとAI栄養相談もできます</div>
+        </div>
+      </div>
+
+      <!-- 短い案内文 -->
+      <div class="bg-white rounded-2xl shadow p-6 mb-6">
+        <h2 class="font-bold text-gray-800 mb-3"><i class="fas fa-comment-dots mr-2 text-purple-500"></i>短い案内文（SMS・チャット用）</h2>
+        <div class="bg-gray-50 rounded-xl p-4 relative">
+          <button onclick="copyText(document.getElementById('guide-text-2').innerText, this)"
+            class="absolute top-3 right-3 text-xs bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-gray-500 hover:bg-gray-50 transition-colors">
+            <i class="fas fa-copy mr-1"></i>コピー
+          </button>
+          <div id="guide-text-2" class="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">食事指導BOTのご案内です。下記リンクからLINEで友達追加して、初回問診にお答えください。写真を送るだけでカロリー記録ができます。
+https://lin.ee/n4PoXrR</div>
+        </div>
+      </div>
+
+      <!-- ウェルカムページURL -->
+      <div class="bg-green-50 border border-green-200 rounded-2xl p-6">
+        <h2 class="font-bold text-gray-800 mb-2"><i class="fas fa-globe mr-2 text-green-600"></i>ウェルカムページ</h2>
+        <p class="text-sm text-gray-500 mb-3">使い方ガイド付きのページです。お客様にそのまま共有できます。</p>
+        <div class="flex items-center gap-2">
+          <code class="bg-white border border-green-200 rounded-lg px-4 py-2 text-sm font-mono text-gray-700">https://diet-bot.pages.dev/welcome</code>
+          <button onclick="copyText('https://diet-bot.pages.dev/welcome', this)" class="text-gray-400 hover:text-gray-600" title="コピー">
+            <i class="fas fa-copy"></i>
           </button>
         </div>
       </div>
-
-      <!-- staff権限の場合は非表示メッセージ -->
-      <div id="staff-no-invite" class="hidden bg-yellow-50 border border-yellow-200 rounded-xl p-4 mb-6 text-sm text-yellow-800">
-        <i class="fas fa-lock mr-2"></i>スタッフ権限では招待機能は使用できません。
-      </div>
-
     </div>
 
     <!-- ===== アカウント設定ページ ===== -->
@@ -728,792 +927,7 @@ function getAdminDashboardHtml(): string {
   </div>
 </div>
 
-<script>
-let authToken = null;
-let currentAdmin = null;
-let allUsers = [];
-const API_BASE = '/api';
-
-// XSS対策: HTML特殊文字エスケープ
-function esc(s) {
-  if (s == null) return '';
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-// ===== 認証 =====
-async function handleLogin() {
-  const email = document.getElementById('login-email').value.trim();
-  const password = document.getElementById('login-password').value;
-  const errEl = document.getElementById('login-error');
-  errEl.classList.add('hidden');
-  if (!email || !password) {
-    errEl.textContent = 'メールアドレスとパスワードを入力してください。';
-    errEl.classList.remove('hidden');
-    return;
-  }
-  try {
-    const res = await axios.post(API_BASE + '/admin/auth/login', { email, password });
-    authToken = res.data.data.token;
-    currentAdmin = res.data.data.admin;
-    localStorage.setItem('diet_bot_token', authToken);
-    localStorage.setItem('diet_bot_admin', JSON.stringify(currentAdmin));
-    showDashboard();
-  } catch (err) {
-    const msg = err.response?.data?.error || 'ログインに失敗しました。メールアドレスとパスワードを確認してください。';
-    errEl.textContent = msg;
-    errEl.classList.remove('hidden');
-  }
-}
-
-function handleLogout() {
-  authToken = null; currentAdmin = null;
-  localStorage.removeItem('diet_bot_token');
-  localStorage.removeItem('diet_bot_admin');
-  document.getElementById('login-screen').classList.remove('hidden');
-  document.getElementById('dashboard-screen').classList.add('hidden');
-}
-
-function showForgotPassword() {
-  document.getElementById('forgot-modal').classList.remove('hidden');
-}
-
-async function handleForgotPassword() {
-  const email = document.getElementById('forgot-email').value.trim();
-  const msgEl = document.getElementById('forgot-msg');
-  if (!email) { showMsg(msgEl, 'メールアドレスを入力してください', 'error'); return; }
-  try {
-    await axios.post(API_BASE + '/admin/auth/forgot-password', { email });
-    showMsg(msgEl, 'リセットリンクを送信しました（登録済みメールの場合）', 'success');
-  } catch {
-    showMsg(msgEl, '送信に失敗しました', 'error');
-  }
-}
-
-// ===== ダッシュボード表示 =====
-async function showDashboard() {
-  document.getElementById('login-screen').classList.add('hidden');
-  document.getElementById('dashboard-screen').classList.remove('hidden');
-  if (currentAdmin) {
-    document.getElementById('sidebar-email').textContent = currentAdmin.email || '-';
-    const roleBadge = document.getElementById('sidebar-role-badge');
-    const roleLabel = { superadmin: 'スーパー管理者', admin: '管理者', staff: 'スタッフ' }[currentAdmin.role] || currentAdmin.role;
-    roleBadge.textContent = roleLabel;
-    roleBadge.className = 'text-xs px-2 py-0.5 rounded-full role-badge-' + (currentAdmin.role || 'staff');
-  }
-  // staff権限の場合はスタッフ管理ページのメニューを制限
-  if (currentAdmin?.role === 'staff') {
-    const staffNavBtn = document.getElementById('nav-staff');
-    if (staffNavBtn) staffNavBtn.style.opacity = '0.5';
-  }
-  // superadminの場合はシステム管理メニューを表示
-  if (currentAdmin?.role === 'superadmin') {
-    const sysSection = document.getElementById('nav-system-section');
-    if (sysSection) sysSection.classList.remove('hidden');
-  }
-  await showPage('overview');
-}
-
-// ===== 概要 =====
-async function loadOverview() {
-  try {
-    const res = await axios.get(API_BASE + '/admin/dashboard/stats', {
-      headers: { Authorization: 'Bearer ' + authToken }
-    });
-    const { stats, recentUsers } = res.data.data;
-    document.getElementById('stat-total-users').textContent = stats.totalActiveUsers ?? 0;
-    document.getElementById('stat-today-logs').textContent = stats.todayLogCount ?? 0;
-    document.getElementById('stat-weekly-active').textContent = stats.weeklyActiveUsers ?? 0;
-    document.getElementById('stat-intake-incomplete').textContent = stats.intakeIncompleteCount ?? 0;
-
-    const listEl = document.getElementById('recent-users-list');
-    if (!recentUsers || recentUsers.length === 0) {
-      listEl.innerHTML = '<p class="text-gray-400 text-sm">まだLINEユーザーがいません</p>';
-    } else {
-      listEl.innerHTML = recentUsers.map(u => \`
-        <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-          <div class="flex items-center space-x-3">
-            <div class="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
-              <i class="fas fa-user text-green-600"></i>
-            </div>
-            <div>
-              <p class="font-medium text-gray-800">\${esc(u.displayName || 'Unknown')}</p>
-              <p class="text-xs text-gray-500">\${esc(u.lastLogDate || '-')}</p>
-            </div>
-          </div>
-          \${u.latestWeight ? '<span class="text-sm font-medium text-gray-600">' + esc(u.latestWeight) + 'kg</span>' : ''}
-        </div>
-      \`).join('');
-    }
-  } catch (err) {
-    console.error('loadOverview error:', err);
-  }
-}
-
-// ===== LINEユーザー管理 =====
-async function loadUsers() {
-  try {
-    const res = await axios.get(API_BASE + '/admin/users', {
-      headers: { Authorization: 'Bearer ' + authToken }
-    });
-    allUsers = res.data.data.users || [];
-    renderUsersTable(allUsers);
-  } catch (err) {
-    console.error('loadUsers error:', err);
-    document.getElementById('users-table').innerHTML = '<p class="text-red-400 text-sm">読み込みに失敗しました</p>';
-  }
-}
-
-function filterUsers() {
-  const q = document.getElementById('user-search').value.toLowerCase();
-  const filtered = q ? allUsers.filter(u =>
-    (u.display_name || '').toLowerCase().includes(q) ||
-    (u.lineUserId || '').toLowerCase().includes(q)
-  ) : allUsers;
-  renderUsersTable(filtered);
-}
-
-function renderUsersTable(users) {
-  const tableEl = document.getElementById('users-table');
-  if (users.length === 0) {
-    tableEl.innerHTML = '<p class="text-gray-400 text-sm py-4 text-center">ユーザーがいません</p>';
-    return;
-  }
-  const isReadOnly = currentAdmin?.role === 'staff';
-  tableEl.innerHTML = \`
-    <div class="overflow-x-auto">
-    <table class="w-full text-sm">
-      <thead><tr class="border-b text-left text-gray-500 bg-gray-50">
-        <th class="pb-3 pt-2 px-3">ユーザー</th>
-        <th class="pb-3 pt-2 px-3">参加日</th>
-        <th class="pb-3 pt-2 px-3 text-center">状態</th>
-        <th class="pb-3 pt-2 px-3 text-center">BOT</th>
-        <th class="pb-3 pt-2 px-3 text-center">記録</th>
-        <th class="pb-3 pt-2 px-3 text-center">相談</th>
-        <th class="pb-3 pt-2 px-3">操作</th>
-      </tr></thead>
-      <tbody>
-        \${users.map(u => \`
-        <tr class="border-b hover:bg-gray-50 cursor-pointer" onclick="openUserModal('\${esc(u.lineUserId)}')">
-          <td class="py-3 px-3">
-            <div class="flex items-center gap-2">
-              <div class="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center flex-shrink-0">
-                <i class="fas fa-user text-green-600 text-xs"></i>
-              </div>
-              <div>
-                <p class="font-medium text-gray-800">\${esc(u.display_name || 'Unknown')}</p>
-                <p class="text-xs text-gray-400">\${esc((u.lineUserId||'').substring(0,12))}...</p>
-              </div>
-            </div>
-          </td>
-          <td class="py-3 px-3 text-gray-500 text-xs">\${esc((u.joinedAt||'').substring(0,10))}</td>
-          <td class="py-3 px-3 text-center">\${userStatusLabel(u)}</td>
-          <td class="py-3 px-3 text-center">\${badge(u.botEnabled)}</td>
-          <td class="py-3 px-3 text-center">\${badge(u.recordEnabled)}</td>
-          <td class="py-3 px-3 text-center">\${badge(u.consultEnabled)}</td>
-          <td class="py-3 px-3">
-            <button onclick="event.stopPropagation();openUserModal('\${esc(u.lineUserId)}')"
-              class="text-xs bg-green-100 text-green-700 hover:bg-green-200 px-3 py-1 rounded-lg transition-colors">
-              詳細
-            </button>
-          </td>
-        </tr>
-        \`).join('')}
-      </tbody>
-    </table>
-    </div>
-    <p class="text-gray-400 text-xs mt-3 px-3">全 \${users.length} 件</p>
-  \`;
-}
-
-function badge(val) {
-  return val
-    ? '<span class="inline-flex items-center justify-center w-5 h-5 bg-green-400 rounded-full" title="有効"><i class="fas fa-check text-white" style="font-size:9px"></i></span>'
-    : '<span class="inline-flex items-center justify-center w-5 h-5 bg-gray-200 rounded-full" title="無効"><i class="fas fa-minus text-gray-400" style="font-size:9px"></i></span>';
-}
-
-function userStatusLabel(u) {
-  // M1-5: 複合ステータスラベル — 優先度順に判定
-  if (u.status === 'blocked') {
-    return '<span class="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-600 font-medium" title="ブロック済み">🚫 ブロック</span>';
-  }
-  if (!u.botEnabled) {
-    return '<span class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium" title="管理者によりBOTが停止中">⏸ 停止中</span>';
-  }
-  if (!u.intakeCompleted) {
-    return '<span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-medium" title="初回問診が未完了">📋 問診未完了</span>';
-  }
-  // 全サービス無効チェック
-  if (!u.recordEnabled && !u.consultEnabled) {
-    return '<span class="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium" title="BOT有効・記録/相談は無効">🔵 制限中</span>';
-  }
-  return '<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium" title="全サービス利用中">✅ 利用中</span>';
-}
-
-// ===== Current modal user context =====
-let modalUser = null;
-let modalLineUserId = null;
-
-async function openUserModal(lineUserId) {
-  document.getElementById('user-modal').classList.remove('hidden');
-  document.getElementById('modal-content').innerHTML = '<div class="text-center py-8"><i class="fas fa-spinner fa-spin text-gray-400 text-2xl"></i></div>';
-  modalLineUserId = lineUserId;
-
-  // reset tabs to overview
-  document.querySelectorAll('.modal-tab').forEach(t => t.classList.remove('active'));
-  document.querySelector('.modal-tab[data-tab="overview"]')?.classList.add('active');
-
-  try {
-    const res = await axios.get(API_BASE + '/admin/users/' + lineUserId, {
-      headers: { Authorization: 'Bearer ' + authToken }
-    });
-    modalUser = res.data.data;
-    document.getElementById('modal-username').textContent = modalUser.display_name || modalUser.profile?.nickname || 'ユーザー詳細';
-    renderModalOverview();
-  } catch {
-    document.getElementById('modal-content').innerHTML = '<p class="text-red-400">読み込みに失敗しました</p>';
-  }
-}
-
-function switchModalTab(tab) {
-  document.querySelectorAll('.modal-tab').forEach(t => t.classList.remove('active'));
-  document.querySelector(\`.modal-tab[data-tab="\${tab}"]\`)?.classList.add('active');
-
-  if (tab === 'overview') renderModalOverview();
-  else if (tab === 'records') loadModalRecords();
-  else if (tab === 'photos') loadModalPhotos();
-  else if (tab === 'reports') loadModalReports();
-}
-
-function renderModalOverview() {
-  const u = modalUser;
-  if (!u) return;
-  const lineUserId = modalLineUserId;
-  const logs = (u.recentLogs || []).slice(0, 7);
-  const profile = u.profile;
-  const answers = u.intakeAnswers || [];
-  const isReadOnly = currentAdmin?.role === 'staff';
-
-  document.getElementById('modal-content').innerHTML = \`
-    <div class="grid grid-cols-2 gap-4 mb-6 text-sm">
-      <div class="bg-gray-50 p-3 rounded-lg">
-        <p class="text-gray-500 text-xs mb-1">LINE User ID</p>
-        <p class="font-mono text-xs truncate">\${esc(lineUserId)}</p>
-      </div>
-      <div class="bg-gray-50 p-3 rounded-lg">
-        <p class="text-gray-500 text-xs mb-1">参加日</p>
-        <p class="font-medium">\${esc((u.joinedAt||'').substring(0,10))}</p>
-      </div>
-    </div>
-
-    \${profile ? \`
-    <div class="mb-6">
-      <h3 class="font-semibold text-gray-700 mb-3"><i class="fas fa-id-card text-green-500 mr-1"></i>プロフィール</h3>
-      <div class="grid grid-cols-2 gap-3 text-sm">
-        <div class="bg-gray-50 p-3 rounded-lg">
-          <p class="text-gray-500 text-xs mb-1">ニックネーム</p>
-          <p class="font-medium">\${esc(profile.nickname || '-')}</p>
-        </div>
-        <div class="bg-gray-50 p-3 rounded-lg">
-          <p class="text-gray-500 text-xs mb-1">性別</p>
-          <p class="font-medium">\${{male:'男性',female:'女性',other:'その他'}[profile.gender] || '-'}</p>
-        </div>
-        <div class="bg-gray-50 p-3 rounded-lg">
-          <p class="text-gray-500 text-xs mb-1">年代</p>
-          <p class="font-medium">\${esc(profile.ageRange || '-')}</p>
-        </div>
-        <div class="bg-gray-50 p-3 rounded-lg">
-          <p class="text-gray-500 text-xs mb-1">身長</p>
-          <p class="font-medium">\${profile.heightCm ? esc(profile.heightCm) + 'cm' : '-'}</p>
-        </div>
-        <div class="bg-gray-50 p-3 rounded-lg">
-          <p class="text-gray-500 text-xs mb-1">現在の体重</p>
-          <p class="font-medium">\${profile.currentWeightKg ? esc(profile.currentWeightKg) + 'kg' : '-'}</p>
-        </div>
-        <div class="bg-gray-50 p-3 rounded-lg">
-          <p class="text-gray-500 text-xs mb-1">目標体重</p>
-          <p class="font-medium">\${profile.targetWeightKg ? esc(profile.targetWeightKg) + 'kg' : '-'}</p>
-        </div>
-        <div class="bg-gray-50 p-3 rounded-lg col-span-2">
-          <p class="text-gray-500 text-xs mb-1">目標・理由</p>
-          <p class="font-medium">\${esc(profile.goalSummary || '-')}</p>
-        </div>
-        <div class="bg-gray-50 p-3 rounded-lg">
-          <p class="text-gray-500 text-xs mb-1">気になること</p>
-          <p class="font-medium">\${formatConcernTags(profile.concernTags)}</p>
-        </div>
-        <div class="bg-gray-50 p-3 rounded-lg">
-          <p class="text-gray-500 text-xs mb-1">活動レベル</p>
-          <p class="font-medium">\${{sedentary:'座り仕事中心',light:'軽い運動あり',moderate:'週3〜5回運動',active:'毎日激しく運動'}[profile.activityLevel] || '-'}</p>
-        </div>
-      </div>
-    </div>
-    \` : '<div class="mb-6 bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800"><i class="fas fa-info-circle mr-2"></i>プロフィール未登録（問診未完了）</div>'}
-
-    <div class="mb-6">
-      <h3 class="font-semibold text-gray-700 mb-3">サービス設定\${isReadOnly ? ' <span class="text-xs text-gray-400 font-normal">(閲覧のみ)</span>' : ''}</h3>
-      <div class="grid grid-cols-2 gap-3">
-        \${serviceToggle(lineUserId, 'bot_enabled', u.service?.bot_enabled, 'BOT有効', isReadOnly)}
-        \${serviceToggle(lineUserId, 'record_enabled', u.service?.record_enabled, '記録機能', isReadOnly)}
-        \${serviceToggle(lineUserId, 'consult_enabled', u.service?.consult_enabled, '相談機能', isReadOnly)}
-        \${serviceToggle(lineUserId, 'intake_completed', u.service?.intake_completed, '問診完了', isReadOnly)}
-      </div>
-    </div>
-
-    \${answers.length > 0 ? \`
-    <div class="mb-6">
-      <h3 class="font-semibold text-gray-700 mb-3"><i class="fas fa-clipboard-list text-blue-500 mr-1"></i>問診回答 (\${answers.length}件)</h3>
-      <div class="space-y-2">
-        \${answers.map(a => \`
-          <div class="flex items-center justify-between bg-gray-50 p-3 rounded-lg text-sm">
-            <span class="text-gray-500 text-xs w-28 flex-shrink-0">\${formatQuestionLabel(a.question_key)}</span>
-            <span class="text-gray-800 font-medium text-right flex-1 ml-3">\${esc(a.answer_value || '-')}</span>
-          </div>
-        \`).join('')}
-      </div>
-    </div>
-    \` : ''}
-
-    <div>
-      <h3 class="font-semibold text-gray-700 mb-3">直近の記録（7日分）</h3>
-      \${logs.length === 0
-        ? '<p class="text-gray-400 text-sm">記録なし</p>'
-        : \`<div class="space-y-2">\${logs.map(log => \`
-          <div class="flex items-center justify-between bg-gray-50 p-3 rounded-lg text-sm">
-            <span class="text-gray-600">\${esc(log.log_date)}</span>
-            <div class="flex gap-4 text-gray-500 text-xs">
-              \${log.total_calories_kcal ? '<span>🔥 '+esc(log.total_calories_kcal)+'kcal</span>' : ''}
-              \${log.weight_snapshot_kg ? '<span>⚖️ '+esc(log.weight_snapshot_kg)+'kg</span>' : ''}
-            </div>
-          </div>
-        \`).join('')}</div>\`
-      }
-    </div>
-  \`;
-}
-
-// ===== Records Tab (食事記録) =====
-async function loadModalRecords() {
-  const el = document.getElementById('modal-content');
-  el.innerHTML = '<div class="text-center py-8"><i class="fas fa-spinner fa-spin text-gray-400 text-2xl"></i></div>';
-  try {
-    const res = await axios.get(API_BASE + '/admin/users/' + modalLineUserId + '/logs?limit=30', {
-      headers: { Authorization: 'Bearer ' + authToken }
-    });
-    const logs = res.data.data.logs || [];
-    if (logs.length === 0) {
-      el.innerHTML = '<div class="text-center py-8 text-gray-400"><i class="fas fa-utensils text-3xl mb-3"></i><p>食事記録がありません</p></div>';
-      return;
-    }
-    el.innerHTML = logs.map(log => {
-      const meals = log.meals || [];
-      const mealHtml = meals.length > 0
-        ? meals.map(m => {
-            const typeLabel = {breakfast:'朝食',lunch:'昼食',dinner:'夕食',snack:'間食',other:'その他'}[m.meal_type] || m.meal_type;
-            const typeColor = {breakfast:'bg-amber-100 text-amber-800',lunch:'bg-green-100 text-green-800',dinner:'bg-purple-100 text-purple-800',snack:'bg-red-100 text-red-800',other:'bg-gray-100 text-gray-700'}[m.meal_type] || 'bg-gray-100 text-gray-700';
-            return \`<div class="flex items-center gap-3 py-2 border-b border-gray-100 last:border-0">
-              <span class="text-xs px-2 py-0.5 rounded-full \${typeColor} font-medium">\${typeLabel}</span>
-              <span class="text-sm text-gray-700 flex-1">\${esc(m.meal_text || '記録あり')}</span>
-              <span class="text-xs text-gray-500">\${m.calories_kcal ? esc(m.calories_kcal)+'kcal' : '-'}</span>
-            </div>\`;
-          }).join('')
-        : '<p class="text-gray-400 text-xs py-2">食事記録なし</p>';
-
-      return \`<div class="bg-white border rounded-xl mb-4 overflow-hidden">
-        <div class="bg-gray-50 px-4 py-3 flex items-center justify-between">
-          <span class="font-semibold text-sm text-gray-800">\${esc(log.log_date)}</span>
-          <div class="flex gap-3 text-xs text-gray-500">
-            \${log.total_calories_kcal ? '<span>🔥 '+esc(log.total_calories_kcal)+'kcal</span>' : ''}
-            \${log.weight_snapshot_kg ? '<span>⚖️ '+esc(log.weight_snapshot_kg)+'kg</span>' : ''}
-          </div>
-        </div>
-        <div class="px-4 py-2">\${mealHtml}</div>
-      </div>\`;
-    }).join('');
-  } catch {
-    el.innerHTML = '<p class="text-red-400 text-sm">食事記録の取得に失敗しました</p>';
-  }
-}
-
-// ===== Photos Tab (写真) =====
-async function loadModalPhotos() {
-  const el = document.getElementById('modal-content');
-  el.innerHTML = '<div class="text-center py-8"><i class="fas fa-spinner fa-spin text-gray-400 text-2xl"></i></div>';
-  try {
-    const res = await axios.get(API_BASE + '/admin/users/' + modalLineUserId + '/photos?limit=20', {
-      headers: { Authorization: 'Bearer ' + authToken }
-    });
-    const photos = res.data.data.photos || [];
-
-    if (photos.length === 0) {
-      el.innerHTML = '<div class="text-center py-8 text-gray-400"><i class="fas fa-images text-3xl mb-3"></i><p>進捗写真がありません</p></div>';
-      return;
-    }
-
-    const poseLabels = { front: '正面', side: '側面', mirror: 'ミラー', unknown: '-' };
-    const typeLabels = { before: 'ビフォー', progress: '途中経過', after: 'アフター' };
-
-    el.innerHTML = \`
-      <div class="grid grid-cols-3 gap-3">
-        \${photos.map(p => \`
-          <div class="photo-thumb bg-gray-50 rounded-lg overflow-hidden">
-            <div style="height:120px;display:flex;align-items:center;justify-content:center;background:#f3f4f6;">
-              <i class="fas fa-image text-gray-300 text-2xl"></i>
-            </div>
-            <div class="photo-label p-2">
-              <p class="text-xs font-medium text-gray-700">\${esc(p.photo_date)}</p>
-              <p class="text-xs text-gray-400">\${typeLabels[p.photo_type] || ''} \${poseLabels[p.pose_label] || ''}</p>
-              \${p.note ? '<p class="text-xs text-gray-500 mt-1 truncate">' + esc(p.note) + '</p>' : ''}
-            </div>
-          </div>
-        \`).join('')}
-      </div>\`;
-  } catch {
-    el.innerHTML = '<p class="text-red-400 text-sm">写真データの取得に失敗しました</p>';
-  }
-}
-
-// ===== Reports Tab (レポート) =====
-async function loadModalReports() {
-  const el = document.getElementById('modal-content');
-  el.innerHTML = '<div class="text-center py-8"><i class="fas fa-spinner fa-spin text-gray-400 text-2xl"></i></div>';
-  try {
-    const res = await axios.get(API_BASE + '/admin/users/' + modalLineUserId + '/reports?limit=12', {
-      headers: { Authorization: 'Bearer ' + authToken }
-    });
-    const reports = res.data.data.reports || [];
-
-    if (reports.length === 0) {
-      el.innerHTML = '<div class="text-center py-8 text-gray-400"><i class="fas fa-chart-bar text-3xl mb-3"></i><p>週次レポートがありません<br><span class="text-xs">7日間記録を続けると自動生成されます</span></p></div>';
-      return;
-    }
-
-    el.innerHTML = reports.map(r => {
-      const weightChange = r.weight_change != null
-        ? (r.weight_change >= 0 ? '+' : '') + Number(r.weight_change).toFixed(1) + 'kg'
-        : '-';
-      const changeColor = r.weight_change < 0 ? 'text-green-600' : r.weight_change > 0 ? 'text-red-600' : 'text-gray-600';
-
-      return \`<div class="bg-white border rounded-xl mb-4 overflow-hidden">
-        <div class="bg-gray-50 px-4 py-3 flex items-center justify-between">
-          <span class="font-semibold text-sm text-gray-800">\${esc(r.week_start)} 〜 \${esc(r.week_end)}</span>
-          \${r.sent_at ? '<span class="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">送信済</span>' : '<span class="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">未送信</span>'}
-        </div>
-        <div class="px-4 py-3">
-          <div class="grid grid-cols-4 gap-3 text-center mb-3">
-            <div>
-              <p class="text-lg font-bold text-gray-800">\${r.avg_weight_kg ? Number(r.avg_weight_kg).toFixed(1) : '-'}</p>
-              <p class="text-xs text-gray-500">平均体重(kg)</p>
-            </div>
-            <div>
-              <p class="text-lg font-bold \${changeColor}">\${weightChange}</p>
-              <p class="text-xs text-gray-500">体重変化</p>
-            </div>
-            <div>
-              <p class="text-lg font-bold text-gray-800">\${r.meal_log_count ?? 0}</p>
-              <p class="text-xs text-gray-500">食事記録数</p>
-            </div>
-            <div>
-              <p class="text-lg font-bold text-gray-800">\${r.log_days ?? 0}</p>
-              <p class="text-xs text-gray-500">記録日数</p>
-            </div>
-          </div>
-          \${r.ai_summary ? '<div class="bg-purple-50 rounded-lg p-3 text-sm text-gray-700 whitespace-pre-wrap">' + esc(r.ai_summary) + '</div>' : ''}
-        </div>
-      </div>\`;
-    }).join('');
-  } catch {
-    el.innerHTML = '<p class="text-red-400 text-sm">レポートデータの取得に失敗しました</p>';
-  }
-}
-
-function formatConcernTags(tags) {
-  if (!tags) return '-';
-  try {
-    const arr = JSON.parse(tags);
-    return Array.isArray(arr) ? arr.map(t => esc(t)).join(', ') : esc(tags);
-  } catch { return esc(tags); }
-}
-
-function formatQuestionLabel(key) {
-  const labels = {
-    nickname: 'ニックネーム',
-    gender: '性別',
-    age_range: '年代',
-    height_cm: '身長',
-    current_weight_kg: '現在体重',
-    target_weight_kg: '目標体重',
-    goal_summary: '目標・理由',
-    concern_tags: '気になること',
-    activity_level: '活動レベル',
-  };
-  return labels[key] || key;
-}
-
-function serviceToggle(lineUserId, key, val, label, isReadOnly) {
-  const isOn = val === 1 || val === true;
-  if (isReadOnly) {
-    return \`
-      <div class="flex items-center justify-between bg-gray-50 p-3 rounded-lg">
-        <span class="text-sm text-gray-700">\${esc(label)}</span>
-        <span class="w-10 h-6 rounded-full \${isOn ? 'bg-green-400' : 'bg-gray-300'} relative inline-block">
-          <span class="absolute top-0.5 \${isOn ? 'right-0.5' : 'left-0.5'} w-5 h-5 bg-white rounded-full shadow"></span>
-        </span>
-      </div>
-    \`;
-  }
-  return \`
-    <div class="flex items-center justify-between bg-gray-50 p-3 rounded-lg">
-      <span class="text-sm text-gray-700">\${esc(label)}</span>
-      <button onclick="toggleService('\${esc(lineUserId)}','\${esc(key)}',\${isOn})"
-        class="w-10 h-6 rounded-full transition-colors \${isOn ? 'bg-green-500' : 'bg-gray-300'} relative">
-        <span class="absolute top-0.5 \${isOn ? 'right-0.5' : 'left-0.5'} w-5 h-5 bg-white rounded-full shadow transition-all"></span>
-      </button>
-    </div>
-  \`;
-}
-
-async function toggleService(lineUserId, key, currentVal) {
-  try {
-    await axios.patch(API_BASE + '/admin/users/' + lineUserId + '/service',
-      { [key]: !currentVal },
-      { headers: { Authorization: 'Bearer ' + authToken } }
-    );
-    showToast('設定を更新しました', 'success');
-    openUserModal(lineUserId);
-  } catch {
-    showToast('更新に失敗しました', 'error');
-  }
-}
-
-function closeUserModal() {
-  document.getElementById('user-modal').classList.add('hidden');
-}
-
-// ===== スタッフ管理 =====
-function loadStaff() {
-  const role = currentAdmin?.role;
-  const inviteSection = document.getElementById('invite-form-section');
-  const noInviteMsg = document.getElementById('staff-no-invite');
-
-  if (role === 'staff') {
-    inviteSection.classList.add('hidden');
-    noInviteMsg.classList.remove('hidden');
-  } else {
-    inviteSection.classList.remove('hidden');
-    noInviteMsg.classList.add('hidden');
-    // superadminのみ「管理者」オプションを表示
-    const adminOption = document.getElementById('invite-role-admin-option');
-    if (adminOption) {
-      adminOption.style.display = role === 'superadmin' ? '' : 'none';
-    }
-  }
-  updateRoleDesc();
-}
-
-function updateRoleDesc() {
-  const role = document.getElementById('invite-role')?.value;
-  const descEl = document.getElementById('role-desc-text');
-  if (!descEl) return;
-  const descs = {
-    staff: 'スタッフ：ユーザー閲覧のみ可能。設定変更・招待は不可。',
-    admin: '管理者：ユーザー管理・スタッフ招待が可能。管理者の追加は不可。'
-  };
-  descEl.textContent = descs[role] || '';
-}
-
-async function handleInvite() {
-  const email = document.getElementById('invite-email').value.trim();
-  const role = document.getElementById('invite-role').value;
-  const msgEl = document.getElementById('invite-msg');
-
-  if (!email) { showMsg(msgEl, 'メールアドレスを入力してください', 'error'); return; }
-
-  try {
-    const res = await axios.post(API_BASE + '/admin/auth/invite', { email, role },
-      { headers: { Authorization: 'Bearer ' + authToken } }
-    );
-    const inviteUrl = res.data.data.inviteUrl;
-    showMsg(msgEl, \`招待メールを送信しました！（\${email}）\`, 'success');
-    document.getElementById('invite-email').value = '';
-    showToast('招待メールを送信しました', 'success');
-    console.log('招待URL:', inviteUrl);
-  } catch (err) {
-    const msg = err.response?.data?.error || '招待に失敗しました';
-    showMsg(msgEl, msg, 'error');
-  }
-}
-
-// ===== アカウント設定 =====
-async function loadAccount() {
-  try {
-    const res = await axios.get(API_BASE + '/admin/auth/me', {
-      headers: { Authorization: 'Bearer ' + authToken }
-    });
-    const admin = res.data.data;
-    document.getElementById('admin-email').textContent = admin.email || '-';
-    const roleLabels = { superadmin: 'スーパー管理者 (superadmin)', admin: '管理者 (admin)', staff: 'スタッフ (staff)' };
-    document.getElementById('admin-role').textContent = roleLabels[admin.role] || admin.role || '-';
-    document.getElementById('admin-last-login').textContent = admin.lastLoginAt
-      ? admin.lastLoginAt.substring(0, 19).replace('T', ' ')
-      : '初回ログイン';
-  } catch { /* ignore */ }
-}
-
-// ===== システム管理 (Superadmin Only) =====
-async function loadSystem() {
-  if (currentAdmin?.role !== 'superadmin') {
-    showToast('アクセス権限がありません', 'error');
-    showPage('overview');
-    return;
-  }
-  const el = document.getElementById('system-db-stats');
-  if (!el) return;
-  el.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>読み込み中...';
-  try {
-    const tables = ['line_users','user_accounts','user_service_statuses','user_profiles','intake_answers',
-                    'daily_logs','meal_entries','body_metrics','conversation_threads','conversation_messages',
-                    'message_attachments','image_analysis_jobs','image_intake_results','bot_mode_sessions',
-                    'progress_photos','weekly_reports','account_memberships'];
-    // Use the health endpoint to verify connectivity
-    await axios.get('/health');
-    
-    // For DB stats, we query a system endpoint
-    try {
-      const res = await axios.get(API_BASE + '/admin/dashboard/db-stats', {
-        headers: { Authorization: 'Bearer ' + authToken }
-      });
-      const stats = res.data.data?.tables || [];
-      if (stats.length > 0) {
-        el.innerHTML = \`
-          <div class="overflow-x-auto">
-          <table class="w-full text-sm">
-            <thead><tr class="border-b text-left text-gray-500 bg-gray-50">
-              <th class="pb-2 pt-1 px-3">テーブル名</th>
-              <th class="pb-2 pt-1 px-3 text-right">行数</th>
-            </tr></thead>
-            <tbody>
-              \${stats.map(t => \`
-                <tr class="border-b hover:bg-gray-50">
-                  <td class="py-2 px-3 font-mono text-xs text-gray-700">\${esc(t.name)}</td>
-                  <td class="py-2 px-3 text-right text-gray-600">\${t.count?.toLocaleString()}</td>
-                </tr>
-              \`).join('')}
-            </tbody>
-          </table>
-          </div>
-        \`;
-      } else {
-        el.innerHTML = '<p class="text-gray-400">テーブル情報を取得できませんでした</p>';
-      }
-    } catch {
-      el.innerHTML = '<p class="text-gray-400">DB統計APIが未実装です。今後のアップデートで追加予定です。</p>';
-    }
-  } catch {
-    el.innerHTML = '<p class="text-red-400">システム情報の取得に失敗しました</p>';
-  }
-}
-
-async function handleChangePassword() {
-  const currentPw = document.getElementById('current-password').value;
-  const newPw = document.getElementById('new-password').value;
-  const confirmPw = document.getElementById('confirm-password').value;
-  const msgEl = document.getElementById('change-pw-msg');
-
-  if (!currentPw || !newPw || !confirmPw) { showMsg(msgEl, '全ての項目を入力してください', 'error'); return; }
-  if (newPw !== confirmPw) { showMsg(msgEl, '新しいパスワードが一致しません', 'error'); return; }
-  if (newPw.length < 8) { showMsg(msgEl, 'パスワードは8文字以上にしてください', 'error'); return; }
-
-  try {
-    await axios.post(API_BASE + '/admin/auth/change-password',
-      { currentPassword: currentPw, newPassword: newPw },
-      { headers: { Authorization: 'Bearer ' + authToken } }
-    );
-    showMsg(msgEl, 'パスワードを変更しました！', 'success');
-    document.getElementById('current-password').value = '';
-    document.getElementById('new-password').value = '';
-    document.getElementById('confirm-password').value = '';
-    showToast('パスワードを変更しました', 'success');
-  } catch (err) {
-    const msg = err.response?.data?.error || 'パスワード変更に失敗しました';
-    showMsg(msgEl, msg, 'error');
-  }
-}
-
-// ===== ページ切替 =====
-function showPage(page) {
-  const pages = ['overview', 'users', 'staff', 'account', 'system'];
-  pages.forEach(p => {
-    const el = document.getElementById('page-' + p);
-    if (el) el.classList.add('hidden');
-    const nav = document.getElementById('nav-' + p);
-    if (nav) {
-      nav.classList.remove('bg-gray-700', 'text-white', 'nav-active');
-      nav.classList.add('text-gray-300');
-    }
-  });
-  const pageEl = document.getElementById('page-' + page);
-  if (pageEl) pageEl.classList.remove('hidden');
-  const navEl = document.getElementById('nav-' + page);
-  if (navEl) {
-    navEl.classList.add('bg-gray-700', 'text-white');
-    navEl.classList.remove('text-gray-300');
-  }
-
-  if (!authToken) {
-    document.getElementById('login-screen').classList.remove('hidden');
-    document.getElementById('dashboard-screen').classList.add('hidden');
-    return;
-  }
-
-  if (page === 'overview') loadOverview();
-  else if (page === 'users') loadUsers();
-  else if (page === 'staff') loadStaff();
-  else if (page === 'account') loadAccount();
-  else if (page === 'system') loadSystem();
-}
-
-// ===== ユーティリティ =====
-function showMsg(el, msg, type) {
-  el.textContent = msg;
-  el.classList.remove('hidden', 'bg-green-50', 'text-green-700', 'bg-red-50', 'text-red-600');
-  if (type === 'success') el.classList.add('bg-green-50', 'text-green-700');
-  else el.classList.add('bg-red-50', 'text-red-600');
-}
-
-function showToast(msg, type = 'success') {
-  const container = document.getElementById('toast-container');
-  const toast = document.createElement('div');
-  toast.className = \`toast px-4 py-3 rounded-xl shadow-lg text-sm font-medium \${
-    type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
-  }\`;
-  toast.innerHTML = \`<i class="fas fa-\${type === 'success' ? 'check' : 'exclamation'} mr-2"></i>\${esc(msg)}\`;
-  container.appendChild(toast);
-  setTimeout(() => toast.remove(), 3500);
-}
-
-// 権限変更時の説明文更新
-document.addEventListener('change', function(e) {
-  if (e.target && e.target.id === 'invite-role') updateRoleDesc();
-});
-
-// 初期化
-window.addEventListener('load', () => {
-  const savedToken = localStorage.getItem('diet_bot_token');
-  const savedAdmin = localStorage.getItem('diet_bot_admin');
-  if (savedToken) {
-    authToken = savedToken;
-    if (savedAdmin) {
-      try { currentAdmin = JSON.parse(savedAdmin); } catch {}
-    }
-    showDashboard();
-  }
-});
-</script>
+<script src="/static/admin.js"></script>
 </body>
 </html>`
 }
