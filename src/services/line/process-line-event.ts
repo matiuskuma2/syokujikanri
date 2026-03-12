@@ -302,19 +302,13 @@ async function handleTextMessageEvent(
   }
 
   // ------------------------------------------------------------------
-  // 1. ユーザー初期化フォールバック
-  //    フォローイベントが未処理（Webhook遅延・エラー等）の場合に備え、
-  //    line_users / user_accounts / user_service_statuses を自動作成
-  // ------------------------------------------------------------------
-  await ensureUserInitialized(env, lineChannelId, lineUserId, clientAccountId)
-
-  // ------------------------------------------------------------------
-  // 2. サービスアクセス確認
+  // 1. サービスアクセス確認（lineUserId だけで検索 — 招待コードで別アカウントに紐付済みの場合に対応）
   // ------------------------------------------------------------------
   const access = await checkServiceAccess(env.DB, { accountId: clientAccountId, lineUserId })
   if (!access || !access.botEnabled) {
+    // まだ招待コードを使っていない新規ユーザー → 招待コード入力を促す
     console.warn(`[LINE] service access denied: lineUserId=${lineUserId}, accountId=${clientAccountId}, access=${JSON.stringify(access)}`)
-    await replyText(event.replyToken, 'このサービスは現在ご利用いただけません。\n\n招待コード（例: ABC-1234）をお持ちの場合は、コードを送信してください。', env.LINE_CHANNEL_ACCESS_TOKEN)
+    await replyText(event.replyToken, '📋 招待コードを入力してください。\n\n担当者から受け取ったコード（例: ABC-1234）を送信すると、サービスが利用できるようになります。', env.LINE_CHANNEL_ACCESS_TOKEN)
     return
   }
 
@@ -669,22 +663,27 @@ async function handleImageMessageEvent(
   const { env, lineChannelId, clientAccountId } = ctx
 
   // ------------------------------------------------------------------
-  // 1. ユーザー初期化フォールバック
+  // 1. ユーザー初期化フォールバック（effectiveAccountId を使う）
   // ------------------------------------------------------------------
-  await ensureUserInitialized(env, lineChannelId, lineUserId, clientAccountId)
+  // Note: ensureUserInitialized はサービスアクセス確認後に行う（正しいaccountIdで初期化するため）
 
   // ------------------------------------------------------------------
-  // 2. サービスアクセス確認
+  // 2. サービスアクセス確認（lineUserIdだけで検索 — 招待コードで別アカウントに紐付済みの場合に対応）
   // ------------------------------------------------------------------
   const access = await checkServiceAccess(env.DB, { accountId: clientAccountId, lineUserId })
   if (!access || !access.botEnabled) {
     console.warn(`[LINE] image service access denied: lineUserId=${lineUserId}, accountId=${clientAccountId}`)
-    await replyText(event.replyToken, 'このサービスは現在ご利用いただけません。\n\n招待コード（例: ABC-1234）をお持ちの場合は、コードを送信してください。', env.LINE_CHANNEL_ACCESS_TOKEN)
+    await replyText(event.replyToken, '📋 まずは招待コードを入力してください。\n\n担当者から受け取ったコード（例: ABC-1234）を送信すると、画像解析機能が利用できるようになります。', env.LINE_CHANNEL_ACCESS_TOKEN)
     return
   }
 
   // 実効アカウントID
   const effectiveAccountId = access.accountId
+
+  // ------------------------------------------------------------------
+  // 2.5. ユーザー初期化フォールバック（正しいaccountIdで実行）
+  // ------------------------------------------------------------------
+  await ensureUserInitialized(env, lineChannelId, lineUserId, effectiveAccountId)
 
   // ------------------------------------------------------------------
   // 3. ユーザー・スレッドの確保
@@ -754,25 +753,7 @@ async function handleImageMessageEvent(
   })
 
   // ------------------------------------------------------------------
-  // 8. Queue に投入（非同期処理へ）
-  // ------------------------------------------------------------------
-  try {
-    await env.LINE_EVENTS_QUEUE.send({
-      type: 'image_analysis',
-      attachmentId: attachment.id,
-      userAccountId: userAccount.id,
-      clientAccountId: effectiveAccountId,
-      threadId: thread.id,
-      r2Key,
-      lineUserId,
-    })
-  } catch (err) {
-    console.error('[LINE] Queue send error:', err)
-    // Queue 失敗は致命的ではない（ジョブは DB に残っている）
-  }
-
-  // ------------------------------------------------------------------
-  // 9. ユーザーへの即時返信（解析中メッセージ）
+  // 8. ユーザーへの即時返信（解析中メッセージ）— reply を先に消費
   // ------------------------------------------------------------------
   await replyText(
     event.replyToken,
@@ -780,7 +761,49 @@ async function handleImageMessageEvent(
     env.LINE_CHANNEL_ACCESS_TOKEN
   )
 
-  console.log(`[LINE] image queued: attachment=${attachment.id} r2Key=${r2Key}`)
+  // ------------------------------------------------------------------
+  // 9. Queue に投入 or 直接処理（Pages では Queue が利用不可の場合がある）
+  // ------------------------------------------------------------------
+  const queuePayload = {
+    type: 'image_analysis' as const,
+    attachmentId: attachment.id,
+    userAccountId: userAccount.id,
+    clientAccountId: effectiveAccountId,
+    threadId: thread.id,
+    r2Key,
+    lineUserId,
+  }
+
+  let queueSent = false
+  try {
+    if (env.LINE_EVENTS_QUEUE) {
+      await env.LINE_EVENTS_QUEUE.send(queuePayload)
+      queueSent = true
+      console.log(`[LINE] image queued: attachment=${attachment.id} r2Key=${r2Key}`)
+    }
+  } catch (err) {
+    console.error('[LINE] Queue send error (will process directly):', err)
+  }
+
+  // Queue に送信できなかった場合は ctx.executionCtx.waitUntil で直接処理
+  if (!queueSent) {
+    console.log(`[LINE] Queue unavailable, processing image directly: attachment=${attachment.id}`)
+    try {
+      // 直接 image-analysis ジョブを実行（非同期バックグラウンド）
+      const { processImageDirectly } = await import('../../jobs/image-analysis')
+      // waitUntil がなくても動くように同期的に実行
+      await processImageDirectly(queuePayload, env)
+    } catch (err) {
+      console.error('[LINE] Direct image processing failed:', err)
+      // エラー時は push で通知
+      const { pushText: pushMsg } = await import('./reply')
+      await pushMsg(
+        lineUserId,
+        '画像の解析に失敗しました。お手数ですが、もう一度お試しください。',
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      ).catch(() => {})
+    }
+  }
 }
 
 // ===================================================================
@@ -794,12 +817,48 @@ async function handleInviteCode(
   ctx: ProcessContext
 ): Promise<void> {
   const { env, lineChannelId, clientAccountId } = ctx
-  const { useInviteCode } = await import('../../repositories/invite-codes-repo')
+  const { useInviteCode, findInviteCodeByCode } = await import('../../repositories/invite-codes-repo')
   const { findUserAccount, ensureUserAccount: ensureUA } = await import('../../repositories/line-users-repo')
 
-  // 招待コード処理の前にユーザー初期化（フォローイベント未到達でも動作するように）
-  await ensureUserInitialized(env, lineChannelId, lineUserId, clientAccountId)
+  // ---------------------------------------------------------------
+  // 0. 招待コードの事前検証（DB に useInviteCode を呼ぶ前に状態を確認）
+  //    LINE ユーザーの line_users レコードだけ先に作っておく（最小限）
+  // ---------------------------------------------------------------
+  let profile: { displayName?: string; pictureUrl?: string; statusMessage?: string } | null = null
+  try {
+    profile = await getUserProfile(lineUserId, env.LINE_CHANNEL_ACCESS_TOKEN)
+  } catch (err) {
+    console.warn(`[LINE] handleInviteCode: profile fetch failed for ${lineUserId}:`, err)
+  }
+  await upsertLineUser(env.DB, {
+    lineChannelId,
+    lineUserId,
+    displayName: profile?.displayName ?? null,
+    pictureUrl: profile?.pictureUrl ?? null,
+    statusMessage: profile?.statusMessage ?? null,
+    followStatus: 'following',
+  })
 
+  // ---------------------------------------------------------------
+  // 1. 既に同じアカウントに紐付け済みか先にチェック
+  //    (useInviteCode の ALREADY_USED 判定に加え、user_service_statuses で確認)
+  // ---------------------------------------------------------------
+  const { findInviteCodeUsageByLineUser } = await import('../../repositories/invite-codes-repo')
+  const existingUsage = await findInviteCodeUsageByLineUser(env.DB, lineUserId)
+  if (existingUsage) {
+    // 既に招待コードを使用済み → 「登録済み」として案内
+    await replyText(
+      replyToken,
+      'ℹ️ このコードは既に登録済みです。\nそのままご利用いただけます！\n\n食事の写真を送ったり、「相談モード」と入力してご利用ください。',
+      env.LINE_CHANNEL_ACCESS_TOKEN
+    )
+    console.log(`[LINE] invite code skipped (already registered): ${code} by ${lineUserId}`)
+    return
+  }
+
+  // ---------------------------------------------------------------
+  // 2. 招待コードを使用
+  // ---------------------------------------------------------------
   const result = await useInviteCode(env.DB, code, lineUserId)
 
   if (!result.success) {
@@ -807,7 +866,7 @@ async function handleInviteCode(
       INVALID_CODE: '❌ この招待コードは無効です。\nコードをもう一度確認してください。',
       CODE_EXPIRED: '⏰ この招待コードは有効期限切れです。\n担当者にお問い合わせください。',
       CODE_EXHAUSTED: '⚠️ この招待コードは使用上限に達しています。\n担当者にお問い合わせください。',
-      ALREADY_USED: 'ℹ️ このコードは既に登録済みです。\nそのままご利用いただけます！',
+      ALREADY_USED: 'ℹ️ このコードは既に登録済みです。\nそのままご利用いただけます！\n\n食事の写真を送ったり、「相談モード」と入力してご利用ください。',
     }
     await replyText(
       replyToken,
@@ -817,7 +876,9 @@ async function handleInviteCode(
     return
   }
 
-  // 紐付け先の account_id
+  // ---------------------------------------------------------------
+  // 3. 紐付け先の account_id でユーザーレコードを整備
+  // ---------------------------------------------------------------
   const targetAccountId = result.accountId
 
   // user_accounts にレコードがあるか確認（既にデフォルトアカウントに紐付いている場合）
@@ -835,7 +896,6 @@ async function handleInviteCode(
   await ensureUA(env.DB, lineUserId, targetAccountId)
 
   // user_service_statuses も正しいアカウントに紐付け
-  const { upsertUserServiceStatus } = await import('../../repositories/subscriptions-repo')
   await upsertUserServiceStatus(env.DB, {
     accountId: targetAccountId,
     lineUserId,
@@ -844,18 +904,34 @@ async function handleInviteCode(
     consultEnabled: 1,
   })
 
+  // ---------------------------------------------------------------
+  // 4. 成功返信 → push で問診開始（replyToken は1回しか使えない）
+  // ---------------------------------------------------------------
   await replyText(
     replyToken,
-    `✅ 招待コード「${code.toUpperCase()}」で登録が完了しました！\n\nこれからダイエットサポートを開始します。\nまずは初回ヒアリングにお答えください 😊`,
+    `✅ 招待コード「${code.toUpperCase()}」で登録が完了しました！\n\nこれからダイエットサポートを開始します 😊\nまずは簡単な初回ヒアリングにお答えください。`,
     env.LINE_CHANNEL_ACCESS_TOKEN
   )
 
-  // 招待コード使用後にインテークフローを開始
-  await startIntakeFlow(replyToken, lineUserId, targetAccountId, env, 'invite_code')
-    .catch(() => {
-      // replyToken は1回しか使えないので、既に返信済みの場合はエラーを無視
-      console.log(`[LINE] intake flow after invite code - reply already used`)
+  // replyToken は使用済みなので、問診開始はpush方式で送信する
+  // startIntakeFlow 内の replyText は失敗するが、push で代替
+  try {
+    const { pushText: pushMsg } = await import('./reply')
+    // 少し待ってから問診メッセージをpush（replyの表示と被らないように）
+    await upsertModeSession(env.DB, {
+      clientAccountId: targetAccountId,
+      lineUserId,
+      currentMode: 'intake',
+      currentStep: 'nickname',
     })
+    await pushMsg(
+      lineUserId,
+      '📋 初回ヒアリングを開始します！\n\nまずは、お名前（ニックネーム）を教えてください 😊\n\n例: たなか、タロウ',
+      env.LINE_CHANNEL_ACCESS_TOKEN
+    )
+  } catch (err) {
+    console.warn(`[LINE] intake push after invite code failed:`, err)
+  }
 
   console.log(`[LINE] invite code used: ${code} → account ${targetAccountId} by ${lineUserId}`)
 }

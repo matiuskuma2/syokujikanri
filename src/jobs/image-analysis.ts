@@ -114,6 +114,18 @@ export async function lineQueueConsumer(
   }
 }
 
+/**
+ * Queue が利用不可の場合の直接処理エントリーポイント
+ * （Cloudflare Pages では Queue consumer が動作しないことがあるため）
+ */
+export async function processImageDirectly(
+  msg: ImageAnalysisQueueMessage,
+  env: Bindings
+): Promise<void> {
+  console.log(`[Direct] Processing image directly: attachment=${msg.attachmentId}`)
+  await processImageAnalysis(msg, env)
+}
+
 // ===================================================================
 // 画像解析メインフロー
 // ===================================================================
