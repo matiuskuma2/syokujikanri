@@ -20,62 +20,82 @@ const dashboardRouter = new Hono<HonoEnv>()
 async function fetchDashboardData(c: Context<HonoEnv>) {
   const payload = c.get('jwtPayload')
   const accountId = payload.accountId
+  const isSuperadmin = payload.role === 'superadmin'
   const today = todayJst()
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
     .toISOString().substring(0, 10)
+
+  // superadmin は全アカウント横断、admin は自アカウントのみ
+  const accountFilter = isSuperadmin ? '' : 'AND client_account_id = ?1'
+  const svcAccountFilter = isSuperadmin ? '' : 'AND account_id = ?1'
+  const bindArgs = isSuperadmin ? [] : [accountId]
 
   const [totalUsersRow, todayLogsRow, weeklyActiveRow, intakeIncompleteRow] = await Promise.all([
     // 総ユーザー数（アクティブな user_accounts）
     c.env.DB.prepare(`
       SELECT COUNT(*) as cnt FROM user_accounts
-      WHERE client_account_id = ?1 AND status = 'active'
-    `).bind(accountId).first<{ cnt: number }>(),
+      WHERE status = 'active' ${accountFilter}
+    `).bind(...bindArgs).first<{ cnt: number }>(),
 
     // 今日の記録件数
     c.env.DB.prepare(`
       SELECT COUNT(*) as cnt FROM daily_logs
-      WHERE client_account_id = ?1 AND log_date = ?2
-    `).bind(accountId, today).first<{ cnt: number }>(),
+      WHERE log_date = ?${isSuperadmin ? '1' : '2'} ${accountFilter}
+    `).bind(...(isSuperadmin ? [today] : [accountId, today])).first<{ cnt: number }>(),
 
     // 週間アクティブユーザー（7日以内に記録）
     c.env.DB.prepare(`
       SELECT COUNT(DISTINCT user_account_id) as cnt FROM daily_logs
-      WHERE client_account_id = ?1 AND log_date >= ?2
-    `).bind(accountId, sevenDaysAgo).first<{ cnt: number }>(),
+      WHERE log_date >= ?${isSuperadmin ? '1' : '2'} ${accountFilter}
+    `).bind(...(isSuperadmin ? [sevenDaysAgo] : [accountId, sevenDaysAgo])).first<{ cnt: number }>(),
 
     // M2-3: 問診未完了ユーザー数
     c.env.DB.prepare(`
       SELECT COUNT(*) as cnt FROM user_service_statuses
-      WHERE account_id = ?1 AND intake_completed = 0 AND bot_enabled = 1
-    `).bind(accountId).first<{ cnt: number }>(),
+      WHERE intake_completed = 0 AND bot_enabled = 1 ${svcAccountFilter}
+    `).bind(...bindArgs).first<{ cnt: number }>(),
   ])
 
   // 最近アクティブなユーザー5件
-  const recentUsers = await c.env.DB.prepare(`
-    SELECT
-      ua.id           AS userAccountId,
-      ua.line_user_id AS lineUserId,
-      lu.display_name AS displayName,
-      bm.weight_kg    AS latestWeight,
-      dl.log_date     AS lastLogDate
-    FROM user_accounts ua
-    LEFT JOIN line_users lu ON lu.line_user_id = ua.line_user_id
-    LEFT JOIN daily_logs dl ON dl.user_account_id = ua.id
-      AND dl.log_date = (
-        SELECT MAX(log_date) FROM daily_logs
-        WHERE user_account_id = ua.id
-      )
-    LEFT JOIN body_metrics bm ON bm.daily_log_id = dl.id
-    WHERE ua.client_account_id = ?1 AND ua.status = 'active'
-    ORDER BY dl.log_date DESC
-    LIMIT 5
-  `).bind(accountId).all<{
-    userAccountId: string
-    lineUserId: string
-    displayName: string | null
-    latestWeight: number | null
-    lastLogDate: string | null
-  }>()
+  const recentUsersQuery = isSuperadmin
+    ? `SELECT
+        ua.id           AS userAccountId,
+        ua.line_user_id AS lineUserId,
+        lu.display_name AS displayName,
+        bm.weight_kg    AS latestWeight,
+        dl.log_date     AS lastLogDate
+      FROM user_accounts ua
+      LEFT JOIN line_users lu ON lu.line_user_id = ua.line_user_id
+      LEFT JOIN daily_logs dl ON dl.user_account_id = ua.id
+        AND dl.log_date = (SELECT MAX(log_date) FROM daily_logs WHERE user_account_id = ua.id)
+      LEFT JOIN body_metrics bm ON bm.daily_log_id = dl.id
+      WHERE ua.status = 'active'
+      ORDER BY ua.joined_at DESC
+      LIMIT 5`
+    : `SELECT
+        ua.id           AS userAccountId,
+        ua.line_user_id AS lineUserId,
+        lu.display_name AS displayName,
+        bm.weight_kg    AS latestWeight,
+        dl.log_date     AS lastLogDate
+      FROM user_accounts ua
+      LEFT JOIN line_users lu ON lu.line_user_id = ua.line_user_id
+      LEFT JOIN daily_logs dl ON dl.user_account_id = ua.id
+        AND dl.log_date = (SELECT MAX(log_date) FROM daily_logs WHERE user_account_id = ua.id)
+      LEFT JOIN body_metrics bm ON bm.daily_log_id = dl.id
+      WHERE ua.client_account_id = ?1 AND ua.status = 'active'
+      ORDER BY dl.log_date DESC
+      LIMIT 5`
+
+  const recentUsers = isSuperadmin
+    ? await c.env.DB.prepare(recentUsersQuery).all<{
+        userAccountId: string; lineUserId: string; displayName: string | null
+        latestWeight: number | null; lastLogDate: string | null
+      }>()
+    : await c.env.DB.prepare(recentUsersQuery).bind(accountId).all<{
+        userAccountId: string; lineUserId: string; displayName: string | null
+        latestWeight: number | null; lastLogDate: string | null
+      }>()
 
   return {
     totalUsers: totalUsersRow?.cnt ?? 0,

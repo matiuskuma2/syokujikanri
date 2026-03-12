@@ -108,6 +108,9 @@ app.route('/api/files', filesRouter)
 
 app.use('/static/*', serveStatic({ root: './' }))
 
+// favicon
+app.get('/favicon.ico', (c) => c.redirect('/static/favicon.svg', 301))
+
 // ===================================================================
 // フロントエンド（SPA）
 // ===================================================================
@@ -203,6 +206,7 @@ function getAdminDashboardHtml(): string {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>diet-bot 管理ダッシュボード</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
