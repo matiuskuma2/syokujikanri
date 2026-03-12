@@ -30,12 +30,27 @@ inviteCodesRouter.get('/', async (c) => {
   const limit = parseInt(c.req.query('limit') || '50', 10)
   const offset = parseInt(c.req.query('offset') || '0', 10)
 
-  let codes
+  let rawCodes
   if (payload.role === 'superadmin') {
-    codes = await listAllInviteCodes(c.env.DB, limit, offset)
+    rawCodes = await listAllInviteCodes(c.env.DB, limit, offset)
   } else {
-    codes = await listInviteCodesByAccount(c.env.DB, payload.accountId, limit, offset)
+    rawCodes = await listInviteCodesByAccount(c.env.DB, payload.accountId, limit, offset)
   }
+
+  // usages_json を parsed な配列に変換
+  const codes = rawCodes.map((c: any) => {
+    let usages: Array<{ line_user_id: string; display_name: string; used_at: string }> = []
+    if (c.usages_json) {
+      try {
+        const parsed = JSON.parse(c.usages_json)
+        // json_group_array はレコードがない場合 [null] を返す場合がある
+        usages = Array.isArray(parsed)
+          ? parsed.filter((u: any) => u && u.line_user_id)
+          : []
+      } catch { /* ignore */ }
+    }
+    return { ...c, usages, usages_json: undefined }
+  })
 
   return ok(c, { codes })
 })

@@ -1044,6 +1044,7 @@ function renderInviteCodesTable(codes) {
         <th class="pb-3 pt-2 px-4">コード</th>
         <th class="pb-3 pt-2 px-4">ラベル</th>
         <th class="pb-3 pt-2 px-4 text-center">使用状況</th>
+        <th class="pb-3 pt-2 px-4">使用者</th>
         <th class="pb-3 pt-2 px-4 text-center">状態</th>
         <th class="pb-3 pt-2 px-4">有効期限</th>
         <th class="pb-3 pt-2 px-4">作成者</th>
@@ -1061,6 +1062,21 @@ function renderInviteCodesTable(codes) {
           const maxLabel = c.max_uses === 0 || c.max_uses === null ? '無制限' : c.max_uses;
           const useInfo = c.use_count + ' / ' + maxLabel;
 
+          // 使用者表示
+          const usages = c.usages || [];
+          let usageHtml = '<span class="text-gray-300">-</span>';
+          if (usages.length > 0) {
+            usageHtml = usages.map(u => {
+              const name = esc(u.display_name || u.line_user_id || '不明');
+              const date = u.used_at ? fmtDate(u.used_at) : '';
+              return `<div class="flex items-center gap-1.5 mb-1">
+                <i class="fas fa-user-check text-green-500 text-xs"></i>
+                <span class="font-medium text-gray-800">${name}</span>
+                ${date ? '<span class="text-gray-400 text-[10px]">(' + date + ')</span>' : ''}
+              </div>`;
+            }).join('');
+          }
+
           return `
           <tr class="border-b hover:bg-gray-50">
             <td class="py-3 px-4">
@@ -1075,6 +1091,7 @@ function renderInviteCodesTable(codes) {
             <td class="py-3 px-4 text-center text-xs">
               <span class="font-bold ${c.use_count > 0 ? 'text-green-600' : 'text-gray-500'}">${useInfo}</span>
             </td>
+            <td class="py-3 px-4 text-xs">${usageHtml}</td>
             <td class="py-3 px-4 text-center">${statusBadge}</td>
             <td class="py-3 px-4 text-xs text-gray-500">${c.expires_at ? fmtDate(c.expires_at) : '無期限'}</td>
             <td class="py-3 px-4 text-xs text-gray-500">${esc(c.creator_email || '-')}</td>

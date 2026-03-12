@@ -34,6 +34,8 @@ export interface InviteCodeUsage {
 
 export interface InviteCodeWithCreator extends InviteCode {
   creator_email?: string
+  /** 使用者情報（JSON配列文字列: [{line_user_id, display_name, used_at}] ） */
+  usages_json?: string
 }
 
 // ===================================================================
@@ -130,7 +132,7 @@ export async function findInviteCodeByCode(
   return row ?? null
 }
 
-/** アカウントの招待コード一覧 */
+/** アカウントの招待コード一覧（使用者情報付き） */
 export async function listInviteCodesByAccount(
   db: D1Database,
   accountId: string,
@@ -139,7 +141,17 @@ export async function listInviteCodesByAccount(
 ): Promise<InviteCodeWithCreator[]> {
   const { results } = await db
     .prepare(`
-      SELECT ic.*, am.email AS creator_email
+      SELECT ic.*, am.email AS creator_email,
+        (
+          SELECT json_group_array(json_object(
+            'line_user_id', icu.line_user_id,
+            'display_name', COALESCE(lu.display_name, icu.line_user_id),
+            'used_at', icu.used_at
+          ))
+          FROM invite_code_usages icu
+          LEFT JOIN line_users lu ON lu.line_user_id = icu.line_user_id
+          WHERE icu.invite_code_id = ic.id
+        ) AS usages_json
       FROM invite_codes ic
       LEFT JOIN account_memberships am ON am.id = ic.created_by
       WHERE ic.account_id = ?1
@@ -151,7 +163,7 @@ export async function listInviteCodesByAccount(
   return results
 }
 
-/** superadmin用: 全招待コード一覧 */
+/** superadmin用: 全招待コード一覧（使用者情報付き） */
 export async function listAllInviteCodes(
   db: D1Database,
   limit = 100,
@@ -159,7 +171,17 @@ export async function listAllInviteCodes(
 ): Promise<InviteCodeWithCreator[]> {
   const { results } = await db
     .prepare(`
-      SELECT ic.*, am.email AS creator_email
+      SELECT ic.*, am.email AS creator_email,
+        (
+          SELECT json_group_array(json_object(
+            'line_user_id', icu.line_user_id,
+            'display_name', COALESCE(lu.display_name, icu.line_user_id),
+            'used_at', icu.used_at
+          ))
+          FROM invite_code_usages icu
+          LEFT JOIN line_users lu ON lu.line_user_id = icu.line_user_id
+          WHERE icu.invite_code_id = ic.id
+        ) AS usages_json
       FROM invite_codes ic
       LEFT JOIN account_memberships am ON am.id = ic.created_by
       ORDER BY ic.created_at DESC
