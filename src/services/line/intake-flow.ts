@@ -81,21 +81,25 @@ function stepToLabel(step: IntakeStep): string {
 // ===================================================================
 
 /**
- * 問診の開始制御（フォロー時 / 「問診」コマンド 共通エントリ）
+ * 問診の開始制御（フォロー時 / 「問診」コマンド / 招待コード再送 共通エントリ）
+ *
+ * SSOT §6.1: 常に現在の質問を返す。「続けますか？」プロンプトは挟まない。
  *
  * 判定ロジック:
- *   1. intake_completed = 1 → 「完了済み。やり直しますか？」
- *   2. mode_session に intake が残っている → 「前回の続き（質問 N/9）から再開しますか？」
- *   3. どちらでもない → 新規開始
+ *   1. intake_completed = 1 + source='follow' → 「おかえりなさい」
+ *   2. intake_completed = 1 + source='command' → やり直し確認
+ *   3. intake_completed = 0 + mode_session に intake あり → その step の質問を送信
+ *   4. intake_completed = 0 + 過去の回答あり → 次の step から質問を送信
+ *   5. いずれでもない → Q1 から新規開始
  *
- * @param source  'follow' | 'command' — フォロー時は新規開始のみ
+ * @param source  'follow' | 'command' | 'invite_code'
  */
 export async function startIntakeFlow(
   replyToken: string,
   lineUserId: string,
   clientAccountId: string,
   env: Bindings,
-  source: 'follow' | 'command' = 'follow'
+  source: 'follow' | 'command' | 'invite_code' = 'follow'
 ): Promise<void> {
   // ----- 1. intake_completed チェック -----
   const access = await checkServiceAccess(env.DB, {
@@ -113,6 +117,15 @@ export async function startIntakeFlow(
       )
       return
     }
+    if (source === 'invite_code') {
+      // 招待コード再送時: 問診完了済み → 利用案内
+      await replyText(
+        replyToken,
+        'ℹ️ 既に登録済みです。\nそのままご利用いただけます！\n\n📷 食事の写真を送ると自動解析\n⚖️ 体重を入力すると記録\n💬「相談モード」と入力でAIに相談',
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+      return
+    }
     // コマンド時: 完了済み → やり直し確認
     await replyWithQuickReplies(
       replyToken,
@@ -126,64 +139,39 @@ export async function startIntakeFlow(
     return
   }
 
-  // ----- 2. 途中セッション確認 -----
+  // ----- 2. 途中セッション確認 → P6: 常に現在の質問を返す -----
   const session = await findActiveModeSession(env.DB, clientAccountId, lineUserId)
 
-  if (session?.current_mode === 'intake' && source === 'command') {
+  if (session?.current_mode === 'intake') {
     const step = session.current_step as IntakeStep
-    const num = stepToNumber(step)
-    const label = stepToLabel(step)
-
-    await replyWithQuickReplies(
-      replyToken,
-      `📋 前回の問診が途中です。\n\n【質問 ${num}/9: ${label}】\nから続けますか？それとも最初からやり直しますか？`,
-      [
-        { label: '続きから', text: '問診再開' },
-        { label: '最初から', text: '問診やり直し' },
-        { label: 'やめる', text: '戻る' },
-      ],
-      env.LINE_CHANNEL_ACCESS_TOKEN
-    )
+    // P6: 「続けますか？」は聞かずに、直接質問を送る
+    await sendQuestionForStep(replyToken, step, env)
     return
   }
 
-  // ----- 3. 未完了だが期限切れ (セッションなし) でコマンド → 前回ステップを復元 -----
-  if (source === 'command') {
-    const lastAnswer = await env.DB.prepare(
-      `SELECT question_key FROM intake_answers
-       WHERE user_account_id = (
-         SELECT id FROM user_accounts
-         WHERE line_user_id = ?1 AND client_account_id = ?2 LIMIT 1
-       )
-       ORDER BY answered_at DESC LIMIT 1`
-    ).bind(lineUserId, clientAccountId).first<{ question_key: string }>()
+  // ----- 3. 未完了だが期限切れ (セッションなし) → 過去回答から復元 -----
+  const lastAnswer = await env.DB.prepare(
+    `SELECT question_key FROM intake_answers
+     WHERE user_account_id = (
+       SELECT id FROM user_accounts
+       WHERE line_user_id = ?1 AND client_account_id = ?2 LIMIT 1
+     )
+     ORDER BY answered_at DESC LIMIT 1`
+  ).bind(lineUserId, clientAccountId).first<{ question_key: string }>()
 
-    if (lastAnswer) {
-      // 最後に回答した質問の「次」のステップを割り出す
-      const resumeStep = getNextStepAfterAnswer(lastAnswer.question_key)
-      if (resumeStep && resumeStep !== 'intake_done') {
-        const num = stepToNumber(resumeStep)
-        const label = stepToLabel(resumeStep)
-
-        await replyWithQuickReplies(
-          replyToken,
-          `📋 以前の問診が途中のようです。\n\n【質問 ${num}/9: ${label}】\nから続けますか？`,
-          [
-            { label: '続きから', text: '問診再開' },
-            { label: '最初から', text: '問診やり直し' },
-            { label: 'やめる', text: '戻る' },
-          ],
-          env.LINE_CHANNEL_ACCESS_TOKEN
-        )
-        // resume 用に mode_session を復元
-        await upsertModeSession(env.DB, {
-          clientAccountId,
-          lineUserId,
-          currentMode: 'intake',
-          currentStep: resumeStep,
-        })
-        return
-      }
+  if (lastAnswer) {
+    // 最後に回答した質問の「次」のステップを割り出す
+    const resumeStep = getNextStepAfterAnswer(lastAnswer.question_key)
+    if (resumeStep && resumeStep !== 'intake_done') {
+      // P6: 確認なしで直接質問を送る
+      await upsertModeSession(env.DB, {
+        clientAccountId,
+        lineUserId,
+        currentMode: 'intake',
+        currentStep: resumeStep,
+      })
+      await sendQuestionForStep(replyToken, resumeStep, env)
+      return
     }
   }
 
@@ -236,8 +224,8 @@ export async function resumeIntakeFlow(
   await sendQuestionForStep(replyToken, step, env)
 }
 
-/** 指定ステップに対応する質問メッセージを送信 */
-async function sendQuestionForStep(
+/** 指定ステップに対応する質問メッセージを送信（外部からも呼び出し可能） */
+export async function sendQuestionForStep(
   replyToken: string,
   step: IntakeStep,
   env: Bindings

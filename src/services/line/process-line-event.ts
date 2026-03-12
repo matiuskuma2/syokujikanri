@@ -20,7 +20,7 @@ import type {
 } from '../../types/bindings'
 
 import { getUserProfile, replyText, replyTextWithQuickReplies, replyWithQuickReplies, replyMessages, getMessageContent, pushText } from './reply'
-import { startIntakeFlow, handleIntakeStep, beginIntakeFromStart, resumeIntakeFlow } from './intake-flow'
+import { startIntakeFlow, handleIntakeStep, beginIntakeFromStart, resumeIntakeFlow, sendQuestionForStep } from './intake-flow'
 import { upsertLineUser, ensureUserAccount, findUserAccount } from '../../repositories/line-users-repo'
 import { upsertUserServiceStatus, checkServiceAccess } from '../../repositories/subscriptions-repo'
 import { ensureOpenThread, createConversationMessage, updateThreadMode } from '../../repositories/conversations-repo'
@@ -48,10 +48,14 @@ type ProcessContext = {
 }
 
 // テキスト分類用キーワード
-const CONSULT_KEYWORDS = ['相談', '質問', 'アドバイス', '教えて', 'どうすれば', '悩み', 'ヘルプ']
+const CONSULT_KEYWORDS = ['相談', '質問', 'アドバイス', '教えて', 'どうすれば', '悩み', 'ヘルプ', '相談したい']
 const RECORD_KEYWORDS = ['記録', 'ログ', 'メモ']
 const SWITCH_TO_CONSULT = ['相談モード', '相談にして', '相談する']
 const SWITCH_TO_RECORD = ['記録モード', '記録にして', '記録する', '戻る']
+
+// 画像確認 — 確定/取消キーワード（SSOT §8.1）
+const IMAGE_CONFIRM_KEYWORDS = ['確定', 'はい', 'yes', 'ok', 'OK', '記録', '保存']
+const IMAGE_CANCEL_KEYWORDS = ['取消', 'キャンセル', 'cancel', 'いいえ', 'no', 'やめる', '削除']
 
 // 体重検出パターン: 例 "58.5kg", "58.5 kg", "58キロ"
 // 招待コード検出パターン: 例 "ABC-1234"
@@ -286,10 +290,63 @@ async function handleTextMessageEvent(
   const text = event.message.type === 'text' ? event.message.text ?? '' : ''
   const textTrim = text.trim()
 
+  // ==================================================================
+  // SSOT 優先順位（docs/07_diet-bot_LINE_運用フロー_画面要件_SSOT.md §2）
+  //   ① 画像確認待ち(S3) — 確定/取消以外は全ブロック
+  //   ② 招待コード(認証前OK)
+  //   ③ サービスアクセス確認
+  //   ④ 問診途中(S1)
+  //   ⑤ モード切替コマンド
+  //   ⑥ 相談キーワード自動切替(CONSULT_KEYWORDS)
+  //   ⑦ 体重記録
+  //   ⑧ 相談テキスト / 通常テキスト
+  // ==================================================================
+
   // ------------------------------------------------------------------
-  // 0. 招待コード検出（最優先 — サービスアクセスチェックの前に処理）
-  //    招待コードは認証前の操作であり、user_service_statuses が
-  //    まだ存在しない段階でも受け付ける必要がある
+  // ① 画像確認待ち（S3）— 最優先。確定/取消以外は全てブロック（P7）
+  //    サービスアクセスチェックより前に処理する。
+  //    session は effectiveAccountId が必要なので、まず access を取得する。
+  // ------------------------------------------------------------------
+  const preAccess = await checkServiceAccess(env.DB, { accountId: clientAccountId, lineUserId })
+  const preEffectiveAccountId = preAccess?.accountId ?? clientAccountId
+
+  const session = await findActiveModeSession(env.DB, preEffectiveAccountId, lineUserId)
+  if (session?.current_step === 'pending_image_confirm') {
+    let sessionData: { intakeResultId?: string } = {}
+    try {
+      sessionData = session.session_data ? JSON.parse(session.session_data) : {}
+    } catch { /* ignore */ }
+
+    const intakeResultId = sessionData.intakeResultId
+    if (!intakeResultId) {
+      // データ不整合 — セッションをクリアして通常処理へ
+      await deleteModeSession(env.DB, preEffectiveAccountId, lineUserId)
+      // fall through to normal processing
+    } else if (IMAGE_CONFIRM_KEYWORDS.some(kw => textTrim.includes(kw))) {
+      const { handleImageConfirm } = await import('./image-confirm-handler')
+      await handleImageConfirm(event.replyToken, intakeResultId, lineUserId, preEffectiveAccountId, env)
+      return
+    } else if (IMAGE_CANCEL_KEYWORDS.some(kw => textTrim.includes(kw))) {
+      const { handleImageDiscard } = await import('./image-confirm-handler')
+      await handleImageDiscard(event.replyToken, intakeResultId, lineUserId, preEffectiveAccountId, env)
+      return
+    } else {
+      // P7: S3中は全ての他入力をブロック（招待コード・モード切替・体重等含む）
+      await replyWithQuickReplies(
+        event.replyToken,
+        '🔄 いま画像の確認中です。\n「確定」または「取消」で応答してください。',
+        [
+          { label: '✅ 確定', text: '確定' },
+          { label: '❌ 取消', text: '取消' },
+        ],
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+      return
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // ② 招待コード検出（認証前OK — S0 でも受付）
   // ------------------------------------------------------------------
   const inviteMatch = textTrim.match(INVITE_CODE_PATTERN)
   if (inviteMatch) {
@@ -304,22 +361,19 @@ async function handleTextMessageEvent(
   }
 
   // ------------------------------------------------------------------
-  // 1. サービスアクセス確認（lineUserId だけで検索 — 招待コードで別アカウントに紐付済みの場合に対応）
+  // ③ サービスアクセス確認（S0 → ブロック）
   // ------------------------------------------------------------------
-  const access = await checkServiceAccess(env.DB, { accountId: clientAccountId, lineUserId })
+  const access = preAccess // 既に取得済みを再利用
   if (!access || !access.botEnabled) {
-    // まだ招待コードを使っていない新規ユーザー → 招待コード入力を促す
     console.warn(`[LINE] service access denied: lineUserId=${lineUserId}, accountId=${clientAccountId}, access=${JSON.stringify(access)}`)
     await replyText(event.replyToken, '📋 招待コードを入力してください。\n\n担当者から受け取ったコード（例: ABC-1234）を送信すると、サービスが利用できるようになります。', env.LINE_CHANNEL_ACCESS_TOKEN)
     return
   }
 
-  // 実効アカウントID: 招待コードで別アカウントに紐付けられている場合は
-  // checkServiceAccess が返す accountId を使う
   const effectiveAccountId = access.accountId
 
   // ------------------------------------------------------------------
-  // 3. ユーザー・スレッドの確保
+  // ユーザー・スレッド確保 + メッセージ保存
   // ------------------------------------------------------------------
   const userAccount = await ensureUserAccount(env.DB, lineUserId, effectiveAccountId)
   const thread = await ensureOpenThread(env.DB, {
@@ -329,9 +383,6 @@ async function handleTextMessageEvent(
     userAccountId: userAccount.id,
   })
 
-  // ------------------------------------------------------------------
-  // 4. メッセージ保存（user 発言）
-  // ------------------------------------------------------------------
   await createConversationMessage(env.DB, {
     threadId: thread.id,
     senderType: 'user',
@@ -344,10 +395,28 @@ async function handleTextMessageEvent(
   })
 
   // ------------------------------------------------------------------
-  // 5. モード切替コマンド判定
+  // ④ 問診途中（S1: mode=intake）— モード切替コマンドより前に評価
+  // ------------------------------------------------------------------
+  const currentMode = session?.current_mode ?? thread.current_mode
+
+  if (currentMode === 'intake') {
+    const handled = await handleIntakeStep(
+      event.replyToken,
+      textTrim,
+      lineUserId,
+      userAccount.id,
+      effectiveAccountId,
+      env
+    )
+    if (handled) return
+    // handleIntakeStep が false を返した場合（セッション不整合）→ 通常処理へ
+  }
+
+  // ------------------------------------------------------------------
+  // ⑤ モード切替コマンド判定
   // ------------------------------------------------------------------
 
-  // インテーク開始 / 再開コマンド
+  // 問診開始 / 再開コマンド
   if (['問診', 'ヒアリング', '登録', '初期設定'].includes(textTrim) || /ヒアリング.*(お願い|開始|して|したい)/i.test(textTrim)) {
     await startIntakeFlow(event.replyToken, lineUserId, effectiveAccountId, env, 'command')
     return
@@ -355,7 +424,6 @@ async function handleTextMessageEvent(
 
   // 「問診やり直し」→ 最初から新規開始
   if (textTrim === '問診やり直し') {
-    // intake_completed を 0 にリセット
     await upsertUserServiceStatus(env.DB, {
       accountId: effectiveAccountId,
       lineUserId,
@@ -371,10 +439,9 @@ async function handleTextMessageEvent(
     return
   }
 
+  // 明示的モード切替
   if (SWITCH_TO_CONSULT.some(kw => textTrim.includes(kw))) {
-    try {
-      await updateThreadMode(env.DB, thread.id, 'consult')
-    } catch (e) { console.error('[LINE] updateThreadMode(consult) error:', e) }
+    try { await updateThreadMode(env.DB, thread.id, 'consult') } catch (e) { console.error('[LINE] updateThreadMode(consult) error:', e) }
     try {
       await upsertModeSession(env.DB, {
         clientAccountId: effectiveAccountId,
@@ -388,69 +455,34 @@ async function handleTextMessageEvent(
   }
 
   if (SWITCH_TO_RECORD.some(kw => textTrim.includes(kw))) {
-    try {
-      await updateThreadMode(env.DB, thread.id, 'record')
-    } catch (e) { console.error('[LINE] updateThreadMode(record) error:', e) }
-    try {
-      await deleteModeSession(env.DB, effectiveAccountId, lineUserId)
-    } catch (e) { console.error('[LINE] deleteModeSession error:', e) }
+    try { await updateThreadMode(env.DB, thread.id, 'record') } catch (e) { console.error('[LINE] updateThreadMode(record) error:', e) }
+    try { await deleteModeSession(env.DB, effectiveAccountId, lineUserId) } catch (e) { console.error('[LINE] deleteModeSession error:', e) }
     await replyText(event.replyToken, '📝 記録モードに切り替えました。\n体重・食事・運動などを記録しましょう！', env.LINE_CHANNEL_ACCESS_TOKEN)
     return
   }
 
   // ------------------------------------------------------------------
-  // 5. 現在のモードに応じて処理
+  // ⑥ CONSULT_KEYWORDS 暗黙的切替（record モード中のみ）
+  //    「相談」「教えて」等のキーワードで自動的に consult へ切替
   // ------------------------------------------------------------------
-  const session = await findActiveModeSession(env.DB, effectiveAccountId, lineUserId)
-  const currentMode = session?.current_mode ?? thread.current_mode
-
-  // 画像確認 pending 中の応答を優先処理
-  if (session?.current_step === 'pending_image_confirm') {
-    let sessionData: { intakeResultId?: string } = {}
+  if (currentMode !== 'consult' && CONSULT_KEYWORDS.some(kw => textTrim.includes(kw))) {
+    try { await updateThreadMode(env.DB, thread.id, 'consult') } catch (e) { console.error('[LINE] auto-switch consult error:', e) }
     try {
-      sessionData = session.session_data ? JSON.parse(session.session_data) : {}
-    } catch { /* ignore */ }
-
-    const intakeResultId = sessionData.intakeResultId
-    if (!intakeResultId) {
-      // データ不整合 — セッションをクリアして通常処理へ
-      await deleteModeSession(env.DB, effectiveAccountId, lineUserId)
-    } else if (['確定', 'はい', 'yes', 'ok', 'OK', '記録', '保存'].some(kw => textTrim.includes(kw))) {
-      const { handleImageConfirm } = await import('./image-confirm-handler')
-      await handleImageConfirm(event.replyToken, intakeResultId, lineUserId, effectiveAccountId, env)
-      return
-    } else if (['取消', 'キャンセル', 'cancel', 'いいえ', 'no', 'やめる', '削除'].some(kw => textTrim.includes(kw))) {
-      const { handleImageDiscard } = await import('./image-confirm-handler')
-      await handleImageDiscard(event.replyToken, intakeResultId, lineUserId, effectiveAccountId, env)
-      return
-    } else {
-      // 判定できないテキスト → 再度確認を促す
-      await replyWithQuickReplies(
-        event.replyToken,
-        '画像の解析結果を記録しますか？\n「確定」または「取消」で応答してください。',
-        [
-          { label: '✅ 確定', text: '確定' },
-          { label: '❌ 取消', text: '取消' },
-        ],
-        env.LINE_CHANNEL_ACCESS_TOKEN
-      )
-      return
-    }
+      await upsertModeSession(env.DB, {
+        clientAccountId: effectiveAccountId,
+        lineUserId,
+        currentMode: 'consult',
+        currentStep: 'idle',
+      })
+    } catch (e) { console.error('[LINE] auto-switch consult session error:', e) }
+    // 自動切替の場合、切替メッセージは送らず直接相談処理へ
+    await handleConsultText(event.replyToken, textTrim, thread.id, userAccount.id, ctx)
+    return
   }
 
-  // インテーク（問診）モード中は優先処理
-  if (currentMode === 'intake') {
-    const handled = await handleIntakeStep(
-      event.replyToken,
-      textTrim,
-      lineUserId,
-      userAccount.id,
-      effectiveAccountId,
-      env
-    )
-    if (handled) return
-  }
-
+  // ------------------------------------------------------------------
+  // ⑦⑧ 現在のモードに応じて処理
+  // ------------------------------------------------------------------
   if (currentMode === 'consult') {
     await handleConsultText(event.replyToken, textTrim, thread.id, userAccount.id, ctx)
   } else {
@@ -697,6 +729,25 @@ async function handleImageMessageEvent(
   console.log(`[LINE] handleImage: access OK, effectiveAccountId=${effectiveAccountId}`)
 
   // ------------------------------------------------------------------
+  // 1.5 画像確認待ち(S3)中は新しい画像をブロック（SSOT §8.2）
+  // ------------------------------------------------------------------
+  const imgSession = await findActiveModeSession(env.DB, effectiveAccountId, lineUserId)
+  if (imgSession?.current_step === 'pending_image_confirm') {
+    if (replyToken) {
+      await replyWithQuickReplies(
+        replyToken,
+        '🔄 いま画像の確認中です。\n先に確認が完了してから新しい画像を送ってください。',
+        [
+          { label: '✅ 確定', text: '確定' },
+          { label: '❌ 取消', text: '取消' },
+        ],
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      ).catch(e => console.error('[LINE] reply error:', e))
+    }
+    return
+  }
+
+  // ------------------------------------------------------------------
   // 2. ユーザー・スレッドの確保（エラーでも続行を試みる）
   // ------------------------------------------------------------------
   let userAccount: Awaited<ReturnType<typeof ensureUserAccount>>
@@ -858,8 +909,7 @@ async function handleInviteCode(
   const { findUserAccount, ensureUserAccount: ensureUA } = await import('../../repositories/line-users-repo')
 
   // ---------------------------------------------------------------
-  // 0. 招待コードの事前検証（DB に useInviteCode を呼ぶ前に状態を確認）
-  //    LINE ユーザーの line_users レコードだけ先に作っておく（最小限）
+  // 0. LINE ユーザーの line_users レコードを先に作っておく
   // ---------------------------------------------------------------
   let profile: { displayName?: string; pictureUrl?: string; statusMessage?: string } | null = null
   try {
@@ -877,90 +927,53 @@ async function handleInviteCode(
   })
 
   // ---------------------------------------------------------------
-  // 1. 既に招待コード使用済みか先にチェック（SSoT: P1, P2）
-  //    送信されたコード自体の有効性も検証し、適切なメッセージを分岐する
+  // 1. 既に招待コード使用済みか先にチェック（SSOT Pattern B/C）
   // ---------------------------------------------------------------
   const existingUsage = await findInviteCodeUsageByLineUser(env.DB, lineUserId)
   if (existingUsage) {
-    // このユーザーは過去に招待コードを使ったことがある
     const access = await checkServiceAccess(env.DB, { accountId: clientAccountId, lineUserId })
     const effectiveAccountId = access?.accountId ?? clientAccountId
 
-    // 送信されたコード自体の有効性を確認（無効コードを「登録済み」と混同しないため）
-    const sentCode = await findInviteCodeByCode(env.DB, code)
-    const sentCodeInfo = sentCode
-      ? `(valid code for account ${sentCode.account_id})`
-      : '(invalid/revoked code)'
-
     if (access?.intakeCompleted) {
-      // P1: 問診完了済み → 通常利用を案内
+      // Pattern B: 問診完了済み → 通常利用を案内
       await replyText(
         replyToken,
         'ℹ️ 既に登録済みです。\nそのままご利用いただけます！\n\n📷 食事の写真を送ると自動解析\n⚖️ 体重を入力すると記録\n💬「相談モード」と入力でAIに相談',
         env.LINE_CHANNEL_ACCESS_TOKEN
       )
     } else {
-      // P2: 問診未完了 → 1回のreplyで「登録済み案内」+「問診質問1」を同時送信
+      // Pattern C: 問診未完了 → 現在の質問を直接返す（P6: 「続けますか？」不要）
       try {
         await ensureUA(env.DB, lineUserId, effectiveAccountId)
-        await upsertModeSession(env.DB, {
-          clientAccountId: effectiveAccountId,
-          lineUserId,
-          currentMode: 'intake',
-          currentStep: 'intake_nickname',
-        })
       } catch (err) {
         console.error(`[LINE] handleInviteCode DB setup for intake failed:`, err)
       }
-
-      await replyMessages(
-        replyToken,
-        [
-          { type: 'text', text: 'ℹ️ 既に登録済みです！\n\n初回ヒアリングがまだ完了していないようですので、続けましょう 😊' },
-          { type: 'text', text: '📋 初回ヒアリングを開始します！\n\n━━━━━━━━━━━━━━━\n【質問 1/9】\nお名前（ニックネームでOK）を教えてください！' },
-        ],
-        env.LINE_CHANNEL_ACCESS_TOKEN
-      )
+      // startIntakeFlow('invite_code') が途中の質問を直接返す
+      await startIntakeFlow(replyToken, lineUserId, effectiveAccountId, env, 'invite_code')
     }
-    console.log(`[LINE] invite code skipped (already registered): sent=${code} ${sentCodeInfo} by ${lineUserId}`)
+    console.log(`[LINE] invite code skipped (already registered): sent=${code} by ${lineUserId}`)
     return
   }
 
   // ---------------------------------------------------------------
-  // 2. 招待コードを使用
+  // 2. 招待コードを使用（新規ユーザー）
   // ---------------------------------------------------------------
   const result = await useInviteCode(env.DB, code, lineUserId)
 
   if (!result.success) {
-    // P6/P7 の ALREADY_USED: 通常はP1/P2で先にキャッチされるが、
-    // レースコンディション等で到達した場合も問診状態に応じた適切な応答を返す
+    // ALREADY_USED/ALREADY_BOUND: レースコンディション対応
     if (result.error === 'ALREADY_USED' || result.error === 'ALREADY_BOUND') {
       const access = await checkServiceAccess(env.DB, { accountId: clientAccountId, lineUserId })
       const effectiveAccountId = access?.accountId ?? clientAccountId
       if (access && !access.intakeCompleted) {
-        // 問診未完了: P2相当 → 問診を開始
         try {
           await ensureUA(env.DB, lineUserId, effectiveAccountId)
-          await upsertModeSession(env.DB, {
-            clientAccountId: effectiveAccountId,
-            lineUserId,
-            currentMode: 'intake',
-            currentStep: 'intake_nickname',
-          })
         } catch (err) {
           console.error(`[LINE] handleInviteCode ALREADY_USED intake setup failed:`, err)
         }
-        await replyMessages(
-          replyToken,
-          [
-            { type: 'text', text: 'ℹ️ 既に登録済みです！\n\n初回ヒアリングがまだ完了していないようですので、続けましょう 😊' },
-            { type: 'text', text: '📋 初回ヒアリングを開始します！\n\n━━━━━━━━━━━━━━━\n【質問 1/9】\nお名前（ニックネームでOK）を教えてください！' },
-          ],
-          env.LINE_CHANNEL_ACCESS_TOKEN
-        )
+        await startIntakeFlow(replyToken, lineUserId, effectiveAccountId, env, 'invite_code')
         return
       }
-      // 問診完了済み: P1相当
       await replyText(
         replyToken,
         'ℹ️ 既に登録済みです。\nそのままご利用いただけます！\n\n📷 食事の写真を送ると自動解析\n⚖️ 体重を入力すると記録\n💬「相談モード」と入力でAIに相談',
@@ -983,14 +996,12 @@ async function handleInviteCode(
   }
 
   // ---------------------------------------------------------------
-  // 3. 紐付け先の account_id でユーザーレコードを整備
+  // 3. Pattern A: 新規成功 — アカウント紐付け + 問診開始
   // ---------------------------------------------------------------
   const targetAccountId = result.accountId
 
-  // user_accounts にレコードがあるか確認（既にデフォルトアカウントに紐付いている場合）
   const existingDefault = await findUserAccount(env.DB, lineUserId, clientAccountId)
   if (existingDefault && clientAccountId !== targetAccountId) {
-    // デフォルトアカウントの紐付けから、正しいアカウントに更新
     await env.DB.prepare(`
       UPDATE user_accounts 
       SET client_account_id = ?1, updated_at = ?2
@@ -998,10 +1009,8 @@ async function handleInviteCode(
     `).bind(targetAccountId, nowIso(), lineUserId, clientAccountId).run()
   }
 
-  // 正しいアカウントへの紐付けを確保
   await ensureUA(env.DB, lineUserId, targetAccountId)
 
-  // user_service_statuses も正しいアカウントに紐付け
   await upsertUserServiceStatus(env.DB, {
     accountId: targetAccountId,
     lineUserId,
@@ -1010,10 +1019,7 @@ async function handleInviteCode(
     consultEnabled: 1,
   })
 
-  // ---------------------------------------------------------------
-  // 4. 成功返信 → push で問診開始（replyToken は1回しか使えない）
-  // ---------------------------------------------------------------
-  // replyで「登録完了」+「問診開始」を同時送信（pushは不要）
+  // replyで「登録完了」+「問診開始 Q1」を同時送信
   try {
     await upsertModeSession(env.DB, {
       clientAccountId: targetAccountId,
