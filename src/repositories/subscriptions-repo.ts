@@ -68,7 +68,11 @@ export async function findUserServiceStatus(
 
 /**
  * サービスアクセス可否を判定
- * returns: { botEnabled, recordEnabled, consultEnabled, intakeCompleted }
+ * 
+ * 1. まず accountId + lineUserId で検索
+ * 2. 見つからなければ lineUserId のみで検索（招待コードで別アカウントに紐付け済みの場合）
+ * 
+ * returns: { botEnabled, recordEnabled, consultEnabled, intakeCompleted, accountId }
  */
 export async function checkServiceAccess(
   db: D1Database,
@@ -78,10 +82,13 @@ export async function checkServiceAccess(
   recordEnabled: boolean
   consultEnabled: boolean
   intakeCompleted: boolean
+  accountId: string
 } | null> {
-  const row = await db
+  // 1. 指定アカウントで検索
+  let row = await db
     .prepare(`
       SELECT
+        uss.account_id,
         uss.bot_enabled,
         uss.record_enabled,
         uss.consult_enabled,
@@ -92,11 +99,38 @@ export async function checkServiceAccess(
     `)
     .bind(params.accountId, params.lineUserId)
     .first<{
+      account_id: string
       bot_enabled: number
       record_enabled: number
       consult_enabled: number
       intake_completed: number
     }>()
+
+  // 2. 見つからない場合、lineUserId のみで検索（別アカウントに紐付いている可能性）
+  if (!row) {
+    row = await db
+      .prepare(`
+        SELECT
+          uss.account_id,
+          uss.bot_enabled,
+          uss.record_enabled,
+          uss.consult_enabled,
+          uss.intake_completed
+        FROM user_service_statuses uss
+        WHERE uss.line_user_id = ?1
+          AND uss.bot_enabled = 1
+        ORDER BY uss.updated_at DESC
+        LIMIT 1
+      `)
+      .bind(params.lineUserId)
+      .first<{
+        account_id: string
+        bot_enabled: number
+        record_enabled: number
+        consult_enabled: number
+        intake_completed: number
+      }>()
+  }
 
   if (!row) return null
   return {
@@ -104,6 +138,7 @@ export async function checkServiceAccess(
     recordEnabled: row.record_enabled === 1,
     consultEnabled: row.consult_enabled === 1,
     intakeCompleted: row.intake_completed === 1,
+    accountId: row.account_id,
   }
 }
 

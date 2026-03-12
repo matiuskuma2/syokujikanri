@@ -108,6 +108,65 @@ export async function processLineEvent(
 }
 
 // ===================================================================
+// ensureUserInitialized — フォローイベント未到達時のフォールバック
+// ===================================================================
+
+/**
+ * フォローイベントが処理されていない（Webhook遅延・エラー等）場合に備え、
+ * メッセージ受信時に line_users / user_accounts / user_service_statuses を
+ * 自動作成する。既に存在する場合は何もしない。
+ */
+async function ensureUserInitialized(
+  env: Bindings,
+  lineChannelId: string,
+  lineUserId: string,
+  clientAccountId: string
+): Promise<void> {
+  try {
+    // user_service_statuses の存在チェック（最軽量なクエリ）
+    const existing = await checkServiceAccess(env.DB, { accountId: clientAccountId, lineUserId })
+    if (existing) return // 既に初期化済み
+
+    console.log(`[LINE] ensureUserInitialized: creating records for ${lineUserId} (follow event may have been missed)`)
+
+    // line_users の upsert（プロフィールは取得できなくてもOK）
+    let profile: { displayName?: string; pictureUrl?: string; statusMessage?: string } | null = null
+    try {
+      profile = await getUserProfile(lineUserId, env.LINE_CHANNEL_ACCESS_TOKEN)
+    } catch (err) {
+      console.warn(`[LINE] ensureUserInitialized: profile fetch failed for ${lineUserId}:`, err)
+    }
+
+    await upsertLineUser(env.DB, {
+      lineChannelId,
+      lineUserId,
+      displayName: profile?.displayName ?? null,
+      pictureUrl: profile?.pictureUrl ?? null,
+      statusMessage: profile?.statusMessage ?? null,
+      followStatus: 'following',
+    })
+
+    // user_accounts 作成
+    await ensureUserAccount(env.DB, lineUserId, clientAccountId)
+
+    // user_service_statuses 初期化（bot_enabled=1）
+    await upsertUserServiceStatus(env.DB, {
+      accountId: clientAccountId,
+      lineUserId,
+      botEnabled: 1,
+      recordEnabled: 1,
+      consultEnabled: 1,
+      intakeCompleted: 0,
+    })
+
+    console.log(`[LINE] ensureUserInitialized: records created for ${lineUserId}`)
+  } catch (err) {
+    console.error(`[LINE] ensureUserInitialized error for ${lineUserId}:`, err)
+    // エラーでも処理は続行（checkServiceAccess で再度チェックされる）
+  }
+}
+
+// ===================================================================
 // handleFollowEvent — フォロー
 // ===================================================================
 
@@ -182,7 +241,7 @@ async function handleFollowEvent(
     }
   }
 
-  console.log(`[LINE] follow: ${lineUserId} (${profile?.displayName})`)
+  console.log(`[LINE] follow: ${lineUserId} (${profile?.displayName}) — service status created with accountId=${clientAccountId}`)
 }
 
 // ===================================================================
@@ -224,27 +283,56 @@ async function handleTextMessageEvent(
   const textTrim = text.trim()
 
   // ------------------------------------------------------------------
-  // 1. サービスアクセス確認
+  // 0. 招待コード検出（最優先 — サービスアクセスチェックの前に処理）
+  //    招待コードは認証前の操作であり、user_service_statuses が
+  //    まだ存在しない段階でも受け付ける必要がある
   // ------------------------------------------------------------------
-  const access = await checkServiceAccess(env.DB, { accountId: clientAccountId, lineUserId })
-  if (!access || !access.botEnabled) {
-    await replyText(event.replyToken, 'このサービスは現在ご利用いただけません。', env.LINE_CHANNEL_ACCESS_TOKEN)
+  const inviteMatch = textTrim.match(INVITE_CODE_PATTERN)
+  if (inviteMatch) {
+    console.log(`[LINE] invite code detected (pre-auth): ${inviteMatch[1]} from ${lineUserId}`)
+    await handleInviteCode(
+      event.replyToken,
+      inviteMatch[1],
+      lineUserId,
+      ctx
+    )
     return
   }
 
   // ------------------------------------------------------------------
-  // 2. ユーザー・スレッドの確保
+  // 1. ユーザー初期化フォールバック
+  //    フォローイベントが未処理（Webhook遅延・エラー等）の場合に備え、
+  //    line_users / user_accounts / user_service_statuses を自動作成
   // ------------------------------------------------------------------
-  const userAccount = await ensureUserAccount(env.DB, lineUserId, clientAccountId)
+  await ensureUserInitialized(env, lineChannelId, lineUserId, clientAccountId)
+
+  // ------------------------------------------------------------------
+  // 2. サービスアクセス確認
+  // ------------------------------------------------------------------
+  const access = await checkServiceAccess(env.DB, { accountId: clientAccountId, lineUserId })
+  if (!access || !access.botEnabled) {
+    console.warn(`[LINE] service access denied: lineUserId=${lineUserId}, accountId=${clientAccountId}, access=${JSON.stringify(access)}`)
+    await replyText(event.replyToken, 'このサービスは現在ご利用いただけません。\n\n招待コード（例: ABC-1234）をお持ちの場合は、コードを送信してください。', env.LINE_CHANNEL_ACCESS_TOKEN)
+    return
+  }
+
+  // 実効アカウントID: 招待コードで別アカウントに紐付けられている場合は
+  // checkServiceAccess が返す accountId を使う
+  const effectiveAccountId = access.accountId
+
+  // ------------------------------------------------------------------
+  // 3. ユーザー・スレッドの確保
+  // ------------------------------------------------------------------
+  const userAccount = await ensureUserAccount(env.DB, lineUserId, effectiveAccountId)
   const thread = await ensureOpenThread(env.DB, {
     lineChannelId,
     lineUserId,
-    clientAccountId,
+    clientAccountId: effectiveAccountId,
     userAccountId: userAccount.id,
   })
 
   // ------------------------------------------------------------------
-  // 3. メッセージ保存（user 発言）
+  // 4. メッセージ保存（user 発言）
   // ------------------------------------------------------------------
   await createConversationMessage(env.DB, {
     threadId: thread.id,
@@ -258,24 +346,12 @@ async function handleTextMessageEvent(
   })
 
   // ------------------------------------------------------------------
-  // 4. モード切替コマンド判定
+  // 5. モード切替コマンド判定
   // ------------------------------------------------------------------
-
-  // 4a. 招待コード検出（最優先）
-  const inviteMatch = textTrim.match(INVITE_CODE_PATTERN)
-  if (inviteMatch) {
-    await handleInviteCode(
-      event.replyToken,
-      inviteMatch[1],
-      lineUserId,
-      ctx
-    )
-    return
-  }
 
   // インテーク開始 / 再開コマンド
   if (['問診', 'ヒアリング', '登録', '初期設定'].includes(textTrim)) {
-    await startIntakeFlow(event.replyToken, lineUserId, clientAccountId, env, 'command')
+    await startIntakeFlow(event.replyToken, lineUserId, effectiveAccountId, env, 'command')
     return
   }
 
@@ -283,24 +359,24 @@ async function handleTextMessageEvent(
   if (textTrim === '問診やり直し') {
     // intake_completed を 0 にリセット
     await upsertUserServiceStatus(env.DB, {
-      accountId: clientAccountId,
+      accountId: effectiveAccountId,
       lineUserId,
       intakeCompleted: 0,
     })
-    await beginIntakeFromStart(event.replyToken, lineUserId, clientAccountId, env)
+    await beginIntakeFromStart(event.replyToken, lineUserId, effectiveAccountId, env)
     return
   }
 
   // 「問診再開」→ 途中のステップから続行
   if (textTrim === '問診再開') {
-    await resumeIntakeFlow(event.replyToken, lineUserId, clientAccountId, env)
+    await resumeIntakeFlow(event.replyToken, lineUserId, effectiveAccountId, env)
     return
   }
 
   if (SWITCH_TO_CONSULT.some(kw => textTrim.includes(kw))) {
     await updateThreadMode(env.DB, thread.id, 'consult')
     await upsertModeSession(env.DB, {
-      clientAccountId,
+      clientAccountId: effectiveAccountId,
       lineUserId,
       currentMode: 'consult',
       currentStep: 'idle',
@@ -311,7 +387,7 @@ async function handleTextMessageEvent(
 
   if (SWITCH_TO_RECORD.some(kw => textTrim.includes(kw))) {
     await updateThreadMode(env.DB, thread.id, 'record')
-    await deleteModeSession(env.DB, clientAccountId, lineUserId)
+    await deleteModeSession(env.DB, effectiveAccountId, lineUserId)
     await replyText(event.replyToken, '📝 記録モードに切り替えました。\n体重・食事・運動などを記録しましょう！', env.LINE_CHANNEL_ACCESS_TOKEN)
     return
   }
@@ -319,7 +395,7 @@ async function handleTextMessageEvent(
   // ------------------------------------------------------------------
   // 5. 現在のモードに応じて処理
   // ------------------------------------------------------------------
-  const session = await findActiveModeSession(env.DB, clientAccountId, lineUserId)
+  const session = await findActiveModeSession(env.DB, effectiveAccountId, lineUserId)
   const currentMode = session?.current_mode ?? thread.current_mode
 
   // 画像確認 pending 中の応答を優先処理
@@ -332,14 +408,14 @@ async function handleTextMessageEvent(
     const intakeResultId = sessionData.intakeResultId
     if (!intakeResultId) {
       // データ不整合 — セッションをクリアして通常処理へ
-      await deleteModeSession(env.DB, clientAccountId, lineUserId)
+      await deleteModeSession(env.DB, effectiveAccountId, lineUserId)
     } else if (['確定', 'はい', 'yes', 'ok', 'OK', '記録', '保存'].some(kw => textTrim.includes(kw))) {
       const { handleImageConfirm } = await import('./image-confirm-handler')
-      await handleImageConfirm(event.replyToken, intakeResultId, lineUserId, clientAccountId, env)
+      await handleImageConfirm(event.replyToken, intakeResultId, lineUserId, effectiveAccountId, env)
       return
     } else if (['取消', 'キャンセル', 'cancel', 'いいえ', 'no', 'やめる', '削除'].some(kw => textTrim.includes(kw))) {
       const { handleImageDiscard } = await import('./image-confirm-handler')
-      await handleImageDiscard(event.replyToken, intakeResultId, lineUserId, clientAccountId, env)
+      await handleImageDiscard(event.replyToken, intakeResultId, lineUserId, effectiveAccountId, env)
       return
     } else {
       // 判定できないテキスト → 再度確認を促す
@@ -363,7 +439,7 @@ async function handleTextMessageEvent(
       textTrim,
       lineUserId,
       userAccount.id,
-      clientAccountId,
+      effectiveAccountId,
       env
     )
     if (handled) return
@@ -372,7 +448,7 @@ async function handleTextMessageEvent(
   if (currentMode === 'consult') {
     await handleConsultText(event.replyToken, textTrim, thread.id, userAccount.id, ctx)
   } else {
-    await handleRecordText(event.replyToken, textTrim, userAccount.id, clientAccountId, thread.id, ctx)
+    await handleRecordText(event.replyToken, textTrim, userAccount.id, effectiveAccountId, thread.id, ctx)
   }
 }
 
@@ -558,27 +634,36 @@ async function handleImageMessageEvent(
   const { env, lineChannelId, clientAccountId } = ctx
 
   // ------------------------------------------------------------------
-  // 1. サービスアクセス確認
+  // 1. ユーザー初期化フォールバック
+  // ------------------------------------------------------------------
+  await ensureUserInitialized(env, lineChannelId, lineUserId, clientAccountId)
+
+  // ------------------------------------------------------------------
+  // 2. サービスアクセス確認
   // ------------------------------------------------------------------
   const access = await checkServiceAccess(env.DB, { accountId: clientAccountId, lineUserId })
   if (!access || !access.botEnabled) {
-    await replyText(event.replyToken, 'このサービスは現在ご利用いただけません。', env.LINE_CHANNEL_ACCESS_TOKEN)
+    console.warn(`[LINE] image service access denied: lineUserId=${lineUserId}, accountId=${clientAccountId}`)
+    await replyText(event.replyToken, 'このサービスは現在ご利用いただけません。\n\n招待コード（例: ABC-1234）をお持ちの場合は、コードを送信してください。', env.LINE_CHANNEL_ACCESS_TOKEN)
     return
   }
 
+  // 実効アカウントID
+  const effectiveAccountId = access.accountId
+
   // ------------------------------------------------------------------
-  // 2. ユーザー・スレッドの確保
+  // 3. ユーザー・スレッドの確保
   // ------------------------------------------------------------------
-  const userAccount = await ensureUserAccount(env.DB, lineUserId, clientAccountId)
+  const userAccount = await ensureUserAccount(env.DB, lineUserId, effectiveAccountId)
   const thread = await ensureOpenThread(env.DB, {
     lineChannelId,
     lineUserId,
-    clientAccountId,
+    clientAccountId: effectiveAccountId,
     userAccountId: userAccount.id,
   })
 
   // ------------------------------------------------------------------
-  // 3. LINE Content API から画像バイナリを取得
+  // 4. LINE Content API から画像バイナリを取得
   // ------------------------------------------------------------------
   const content = await getMessageContent(event.message.id, env.LINE_CHANNEL_ACCESS_TOKEN)
   if (!content) {
@@ -641,7 +726,7 @@ async function handleImageMessageEvent(
       type: 'image_analysis',
       attachmentId: attachment.id,
       userAccountId: userAccount.id,
-      clientAccountId,
+      clientAccountId: effectiveAccountId,
       threadId: thread.id,
       r2Key,
       lineUserId,
@@ -676,6 +761,9 @@ async function handleInviteCode(
   const { env, lineChannelId, clientAccountId } = ctx
   const { useInviteCode } = await import('../../repositories/invite-codes-repo')
   const { findUserAccount, ensureUserAccount: ensureUA } = await import('../../repositories/line-users-repo')
+
+  // 招待コード処理の前にユーザー初期化（フォローイベント未到達でも動作するように）
+  await ensureUserInitialized(env, lineChannelId, lineUserId, clientAccountId)
 
   const result = await useInviteCode(env.DB, code, lineUserId)
 
