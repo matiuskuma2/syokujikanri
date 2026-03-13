@@ -1,7 +1,7 @@
 # LINE 会話フロー SSOT（Single Source of Truth）
 
-> **最終更新**: 2026-03-12  
-> **対象**: diet-bot v1.1.0  
+> **最終更新**: 2026-03-13  
+> **対象**: diet-bot v1.2.0  
 > **ソースファイル**: `src/services/line/process-line-event.ts`, `src/services/line/intake-flow.ts`, `src/services/line/image-confirm-handler.ts`, `src/jobs/image-analysis.ts`  
 > **本ドキュメントが会話設計の正本**。コード変更時は必ずここを先に更新する。
 
@@ -13,7 +13,7 @@
 |---|------|------|
 | P1 | **3レーン分離** | 接続(Connection) / 問診(Hearing) / 運用(Operation) を独立レーンで管理 |
 | P2 | **決定論的ステートマシン** | 招待コード検証・問診進行・モード切替は**AI不使用**。正規表現・キーワード・DB状態のみで分岐 |
-| P3 | **AI使用箇所の限定** | OpenAIは画像分類・栄養推定・相談応答・週次レポート要約の4箇所のみ |
+| P3 | **AI使用箇所の限定** | OpenAIは画像分類・栄養推定・**会話解釈（v2.0）**・相談応答・週次レポート要約・**メモリ抽出（v2.0）** |
 | P4 | **1ユーザー=1アカウント不変** | 最初の招待コード使用でアカウント紐付け確定。以降変更不可 |
 | P5 | **replyToken は1回限り** | 同一イベントでの reply は1回。追加送信は push を使用 |
 | P6 | **問診は常に現在の質問を返す** | 「続けますか？」等の確認プロンプトを挟まない（招待コード再送時を除く） |
@@ -43,10 +43,15 @@
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   LANE 3: 運用 (Operation)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  record: 体重/食事テキスト記録（決定論的）
+  record: 体重/食事テキスト記録
+          v1.x: 決定論的（キーワード＋正規表現）
+          v2.0: Phase A（AI解釈）→ Phase B（明確化）→ Phase C（保存）
+          → 詳細は 11_会話解釈SSOT.md / 12_記録確認フローSSOT.md
   consult: AI相談（OpenAI使用）
+           v2.0: 相談中の記録自動検出（intent_secondary）
   image:  画像送信→AI解析→確認（OpenAI使用）
   cron:   リマインダー/週次レポート（OpenAI使用:レポート要約のみ）
+          v2.0: メモリ推定バッチ追加
 ```
 
 ### 1.2 レーン間の遷移条件
@@ -274,6 +279,8 @@ handleTextMessageEvent(text)
 | 16 | **AI相談応答** | **AI** | ✅ | process-line-event.ts L560-660 | OpenAI Chat + RAG + ナレッジ |
 | 17 | **週次レポート要約** | **AI** | ✅ | jobs/weekly-report.ts (予定) | OpenAI Chat |
 | 18 | **リマインダー文面** | **AI** | ✅ | jobs/daily-reminder.ts (予定) | OpenAI Chat (パーソナライズ) |
+| 19 | **会話解釈（v2.0）** | **AI** | ✅ | services/ai/interpret.ts (予定) | OpenAI Chat `INTERPRETATION_PROMPT` temp=0.2, json_object → `11_会話解釈SSOT.md` §3 |
+| 20 | **メモリ抽出（v2.0）** | **AI** | ✅ | services/ai/memory-extractor.ts (予定) | OpenAI Chat `MEMORY_EXTRACTION_PROMPT` temp=0.3, json_object → `13_パーソナルメモリSSOT.md` §2 |
 
 ### 3.2 境界ルール
 
@@ -552,12 +559,19 @@ UPDATE bot_mode_sessions SET current_step = ?, updated_at = ? WHERE client_accou
 3. ~~**【短期】** CONSULT_KEYWORDS をモード自動切替に組み込み~~ ✅ 実装済み
 4. ~~**【短期】** Rich Menu 設定（記録/相談/ダッシュボード）~~ ✅ 3ボタン設定完了
 5. ~~**【短期】** 画像解析 × food_master マッチング統合~~ ✅ 実装済み
-6. **【最優先】** 記録モードのAI解析化（G6/G7対応: 日付・食事区分・内容をAIで抽出、不明時は確認）
-7. **【高】** 過去記録修正機能（G8対応）
-8. **【高】** 相談モード中の自動記録検出（G9対応）
-9. **【中期】** RAG実装（LIKE検索→ベクトル検索）
-10. **【中期】** 管理画面プロンプトエディタ
-11. **【中期】** user/admin/superadmin画面微調整
+6. **【最優先】** 記録モードのAI解析化（G6/G7対応）→ **設計完了: `11_会話解釈SSOT.md`**
+   - Phase A: 全メッセージをAIで解釈し Unified Intent JSON に変換
+   - Phase B: 不足情報をユーザーに確認 → **設計完了: `12_記録確認フローSSOT.md`**
+   - Phase C: 確定した記録を DB に保存
+7. **【高】** 過去記録修正機能（G8対応）→ **設計完了: `11_会話解釈SSOT.md` §7**
+   - correct_record intent で修正対象を特定 → 更新 → correction_history に記録
+8. **【高】** 相談モード中の自動記録検出（G9対応）→ **設計完了: `11_会話解釈SSOT.md` §6.2**
+   - intent_secondary で記録情報を検出し、相談応答と並行して記録
+9. **【中期】** パーソナルメモリ導入 → **設計完了: `13_パーソナルメモリSSOT.md`**
+   - user_memory_items テーブルで嗜好・習慣・アレルギーを蓄積
+10. **【中期】** RAG実装（LIKE検索→ベクトル検索）
+11. **【中期】** 管理画面プロンプトエディタ
+12. **【中期】** user/admin/superadmin画面微調整
 
 ---
 
@@ -568,3 +582,4 @@ UPDATE bot_mode_sessions SET current_step = ?, updated_at = ? WHERE client_accou
 | 2026-03-12 | v1.0 | 初版作成。コード実装ベースでSSOTを文書化 |
 | 2026-03-13 | v1.1 | 画像テキスト修正機能(handleImageCorrection)追加。P7原則をブロック→AI再解析に変更。Rich Menu 3ボタン設定完了。BOT文言統一 |
 | 2026-03-13 | v1.2 | G6-G9追加: 食事日付固定・食事区分キーワード限定・過去記録修正不可・相談中自動記録なし。改善優先順位を更新 |
+| 2026-03-13 | v1.3 | v2.0設計ドキュメント参照を追加。P3原則にAI使用箇所追加（会話解釈・メモリ抽出）。LANE3運用レーンにv2.0アーキテクチャ記述追加。AI分類マトリクスに#19,#20追加。改善優先順位にドキュメントリンク追加。新ドキュメント: `11_会話解釈SSOT.md`, `12_記録確認フローSSOT.md`, `13_パーソナルメモリSSOT.md` |

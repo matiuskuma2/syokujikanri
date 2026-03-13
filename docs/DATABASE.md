@@ -46,6 +46,9 @@ Cloudflare D1（SQLite）を使用。
 | 34 | `progress_photos` | 進捗写真 |
 | 35 | `weekly_reports` | 週次レポート |
 | 36 | `audit_logs` | 監査ログ |
+| 37 | `pending_clarifications` | 明確化待ち状態（v2.0） |
+| 38 | `correction_history` | 記録修正履歴（v2.0） |
+| 39 | `user_memory_items` | パーソナルメモリ（v2.0） |
 
 ---
 
@@ -588,6 +591,80 @@ CREATE INDEX idx_audit_logs_account ON audit_logs(account_id, created_at);
 | 日時は TEXT ISO8601 | `"2026-03-10T08:00:00Z"` |
 | 日付は TEXT YYYY-MM-DD | `"2026-03-10"` |
 
+### pending_clarifications（明確化待ち状態）— v2.0
+> 正本: `docs/12_記録確認フローSSOT.md` §3
+
+```sql
+CREATE TABLE pending_clarifications (
+  id                TEXT PRIMARY KEY,
+  user_account_id   TEXT NOT NULL REFERENCES user_accounts(id),
+  client_account_id TEXT NOT NULL REFERENCES accounts(id),
+  intent_json       TEXT NOT NULL,           -- Unified Intent JSON（Phase A 途中結果）
+  original_message  TEXT NOT NULL,           -- 元のユーザーメッセージ
+  message_id        TEXT REFERENCES conversation_messages(id),
+  missing_fields    TEXT NOT NULL,           -- JSON配列: ["target_date", "meal_type"]
+  current_field     TEXT NOT NULL,           -- 現在質問中のフィールド
+  answers_json      TEXT NOT NULL DEFAULT '{}',  -- 回答済みの値
+  status            TEXT NOT NULL DEFAULT 'asking',  -- 'asking' | 'answered' | 'expired' | 'cancelled'
+  ask_count         INTEGER NOT NULL DEFAULT 0,
+  expires_at        TEXT NOT NULL,           -- 24時間後
+  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_pending_clarifications_user
+  ON pending_clarifications(user_account_id, status);
+CREATE INDEX idx_pending_clarifications_expires
+  ON pending_clarifications(expires_at) WHERE status = 'asking';
+```
+
+### correction_history（記録修正履歴）— v2.0
+> 正本: `docs/12_記録確認フローSSOT.md` §4
+
+```sql
+CREATE TABLE correction_history (
+  id                TEXT PRIMARY KEY,
+  user_account_id   TEXT NOT NULL REFERENCES user_accounts(id),
+  target_table      TEXT NOT NULL,           -- 'meal_entries' | 'body_metrics' | 'daily_logs'
+  target_record_id  TEXT NOT NULL,
+  correction_type   TEXT NOT NULL,           -- 'meal_type_change' | 'content_change' | 'date_change' | 'nutrition_change' | 'delete'
+  old_value_json    TEXT NOT NULL,
+  new_value_json    TEXT,                    -- deleteの場合はnull
+  triggered_by      TEXT NOT NULL DEFAULT 'user',  -- 'user' | 'system' | 'admin'
+  message_id        TEXT REFERENCES conversation_messages(id),
+  reason            TEXT,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_correction_history_user
+  ON correction_history(user_account_id, created_at);
+CREATE INDEX idx_correction_history_target
+  ON correction_history(target_table, target_record_id);
+```
+
+### user_memory_items（パーソナルメモリ）— v2.0
+> 正本: `docs/13_パーソナルメモリSSOT.md` §1
+
+```sql
+CREATE TABLE user_memory_items (
+  id                TEXT PRIMARY KEY,
+  user_account_id   TEXT NOT NULL REFERENCES user_accounts(id),
+  category          TEXT NOT NULL,           -- 'food_preference' | 'allergy' | 'dietary_restriction' | 'eating_habit' | 'lifestyle' | 'exercise_habit' | 'health_condition' | 'goal_detail' | 'favorite_food' | 'context'
+  memory_key        TEXT NOT NULL,
+  memory_value      TEXT NOT NULL,
+  structured_json   TEXT,                    -- JSON（任意）
+  source_type       TEXT NOT NULL DEFAULT 'conversation',  -- 'conversation' | 'intake' | 'admin' | 'system'
+  source_message_id TEXT REFERENCES conversation_messages(id),
+  confidence_score  REAL NOT NULL DEFAULT 0.8,
+  is_active         INTEGER NOT NULL DEFAULT 1,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(user_account_id, category, memory_key)
+);
+CREATE INDEX idx_memory_items_user
+  ON user_memory_items(user_account_id, is_active);
+CREATE INDEX idx_memory_items_category
+  ON user_memory_items(user_account_id, category, is_active);
+```
+
 ---
 
 ## マイグレーション管理
@@ -606,7 +683,9 @@ CREATE INDEX idx_audit_logs_account ON audit_logs(account_id, created_at);
 | `0006_user_data.sql` | `0006_daily_logs.sql` | daily_logs, meal_entries, body_metrics, activity_logs, sleep_logs, hydration_logs, bowel_logs |
 | `0007_reports.sql` | `0007_images_reports.sql` | image_analysis_jobs, image_intake_results, progress_photos, weekly_reports, audit_logs, knowledge_document_pages, knowledge_chunks, knowledge_chunk_embeddings, retrieval_logs |
 
-> **Note**: マイグレーション追加時は `0008_` から連番で命名する。
+> **Note**: マイグレーション追加時は次の連番で命名する。
+> 現在の最新: `0012_meal_food_match.sql`
+> 次の番号: `0013_` から
 
 ### ローカル開発
 ```bash
@@ -651,6 +730,9 @@ npx wrangler d1 migrations apply diet-bot-production --local
 | `progress_photos` | `progress-photos-repo.ts` | createProgressPhoto, listProgressPhotos |
 | `knowledge_chunks` | `knowledge-repo.ts` | getKnowledgeChunksByIds |
 | `weekly_reports` | `weekly-reports-repo.ts` | findWeeklyReport, createWeeklyReport, listRecentWeeklyReports |
+| `pending_clarifications` | `pending-clarifications-repo.ts` | createPendingClarification, findActiveClarification, updateClarification, expirePendingClarifications |
+| `correction_history` | `correction-history-repo.ts` | createCorrectionHistory, findCorrectionsByUser |
+| `user_memory_items` | `user-memory-repo.ts` | upsertMemoryItem, findActiveMemories, findMemoriesByCategory, deactivateMemoryItem |
 
 > **⚠️ 注意**: 上記の Repository ファイルはすべて `src/repositories/` 配下に新規作成する。  
 > 現在存在する `src/repository/index.ts` は誤実装のため削除対象。詳細は `docs/PROJECT_PLAN.md` 参照。
