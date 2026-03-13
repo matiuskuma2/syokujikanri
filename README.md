@@ -3,7 +3,7 @@
 ## プロジェクト概要
 - **名前**: diet-bot（食事指導BOT）
 - **目的**: LINE経由でダイエット（食事・体重・運動）を記録・サポートするAI BOT
-- **フェーズ**: Phase 2.0 — UI実装完了（LIFF Dashboard + Admin詳細 + Superadmin BOT設定）**(v1.4.0)**
+- **フェーズ**: Phase 2.0 — SSOT v2.0 会話解釈パイプライン統合完了 **(v2.0.0)**
 
 ## 本番URL
 | 用途 | URL |
@@ -138,10 +138,19 @@
 ### LINE Webhook
 - **follow イベント**: line_users・user_accounts 自動作成、招待コード入力を促すメッセージ送信
 - **招待コード検出**: `ABC-1234` パターンのテキスト → 検証 → アカウント紐付け
-- **テキスト記録**: 体重（例: `72.5kg`）→ daily_logs・body_metrics に保存
-- **相談モード**: GPT-4o による AI 返信
-- **画像解析**: 食事写真/体重計/経過写真を R2 → Queue → OpenAI Vision → 確認フロー
-- **🆕 food_master マッチング**: AI解析結果の食品名を food_master DB と照合、DB値優先でPFC補正
+- **🆕 SSOT v2.0 会話解釈パイプライン（Phase A → B → C）**:
+  - **Phase A**: AI解釈 — `interpretMessage()` がテキストを Unified Intent JSON に変換（gpt-4o）
+  - **Phase B**: 明確化 — 不足フィールド（日付/食事区分/内容/体重値）をユーザーに質問
+  - **Phase C**: 永続化 — `persistRecord()` が daily_logs/meal_entries/body_metrics に保存
+  - **即時保存**: 日付+食事区分+内容が揃った食事、20-300kgの体重は Phase C 直行
+  - **確認付き保存**: timestamp由来の日付/食事区分は保存+確認メッセージ
+  - **修正/削除**: 「鮭じゃなくて卵焼き」「昨日の記録消して」等に対応
+  - **フォールバック**: AI失敗時は regex ベースの簡易解釈
+- **🆕 パーソナルメモリ（Layer 3）**: 会話からアレルギー・食習慣・目標等を自動抽出・蓄積
+- **相談モード**: GPT-4o によるAI返信（メモリ・ナレッジ注入済み）
+  - 相談中の体重・食事記録も副次意図として検出・自動保存
+- **画像解析**: 食事写真/体重計/経過写真を R2 → OpenAI Vision → 確認フロー
+- **food_master マッチング**: AI解析結果の食品名を food_master DB と照合、DB値優先でPFC補正
 
 ### 問診 (Intake) フロー
 - 9問の初回問診（ニックネーム/性別/年代/身長/体重/目標/理由/気になること/活動レベル）
@@ -208,6 +217,17 @@ accounts → line_channels → line_users → user_accounts
                                       weekly_reports
                                       bot_mode_sessions (intake/record/consult/pending_image_confirm)
 
+SSOT v2.0 追加テーブル:
+  pending_clarifications  (Phase B: 明確化待ち状態管理)
+  correction_history      (記録修正の監査ログ)
+  user_memory_items       (Layer 3: パーソナルメモリ)
+
+SSOT v2.0 データフロー:
+  ユーザーメッセージ → Phase A (AI解釈: UnifiedIntent JSON)
+                     → Phase B (不足フィールド質問: pending_clarifications)
+                     → Phase C (永続化: daily_logs / meal_entries / body_metrics)
+                     → Background (メモリ抽出: user_memory_items)
+
 カスケード停止の流れ:
   superadmin → admin停止 → accounts.status=suspended
                          → user_service_statuses.bot_enabled=0 (全従属ユーザー)
@@ -231,11 +251,14 @@ accounts → line_channels → line_users → user_accounts
 2. LINE で `@054eyzbj` を友だち追加（または https://lin.ee/n4PoXrR ）
 3. **担当者から受け取った招待コード（例: ABC-1234）をLINEで送信**
 4. 初回問診（9問）に回答 → 約2分で完了
-5. `72.5kg` のように体重を送信 → 自動記録
+5. `72.5kg` のように体重を送信 → AI解釈 → 自動記録（Phase A→C直行）
 6. 食事の写真を送信 → AI がカロリー・PFC を自動分析 → food_master DB照合でPFC補正 → 「確定」で保存
-7. `相談` → AI 栄養相談モードに切替
-8. `記録モード` → 記録モードに戻る
-9. LIFF URL: https://liff.line.me/2009409790-DekZRh4t → ダッシュボード表示
+7. `朝食 トースト・コーヒー` → AI解釈 → 即時保存（日付・区分・内容が揃っている場合）
+8. 不足情報があれば BOT が質問（「いつの記録ですか？」等）→ 回答で補完・保存
+9. `鮭じゃなくて卵焼き` → AI が修正意図を検出 → 対象レコードを自動修正
+10. `相談` → AI 栄養相談モードに切替（パーソナルメモリ込み）
+11. `記録モード` → 記録モードに戻る
+12. LIFF URL: https://liff.line.me/2009409790-DekZRh4t → ダッシュボード表示
 
 ## LINE Developers での追加設定（手動）
 1. **LIFFエンドポイントURL設定**: `https://diet-bot.pages.dev/liff`
@@ -246,7 +269,7 @@ accounts → line_channels → line_users → user_accounts
 - **ステータス**: ✅ 本番稼働中
 - **技術スタック**: Hono + TypeScript + Cloudflare D1/R2/Queue + OpenAI GPT-4o
 - **GitHub**: https://github.com/matiuskuma2/syokujikanri
-- **最終デプロイ**: 2026-03-12（v1.4.0: T7-T9 UI実装完了）
+- **最終デプロイ**: 2026-03-13（v2.0.0: SSOT v2.0 会話解釈パイプライン統合）
 - **デプロイURL**: https://diet-bot.pages.dev
 
 ## ローカル開発
