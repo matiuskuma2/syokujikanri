@@ -147,6 +147,35 @@ export async function markIntakeResultApplied(
     .run()
 }
 
+/** proposed_action_json と extracted_json を更新（テキスト修正用） */
+export async function updateIntakeResultProposedAction(
+  db: D1Database,
+  id: string,
+  proposedActionJson: Record<string, unknown>,
+  extractedJson?: Record<string, unknown> | null
+): Promise<void> {
+  const now = nowIso()
+  if (extractedJson) {
+    await db
+      .prepare(`
+        UPDATE image_intake_results
+        SET proposed_action_json = ?1, extracted_json = ?2, updated_at = ?3
+        WHERE id = ?4
+      `)
+      .bind(JSON.stringify(proposedActionJson), JSON.stringify(extractedJson), now, id)
+      .run()
+  } else {
+    await db
+      .prepare(`
+        UPDATE image_intake_results
+        SET proposed_action_json = ?1, updated_at = ?2
+        WHERE id = ?3
+      `)
+      .bind(JSON.stringify(proposedActionJson), now, id)
+      .run()
+  }
+}
+
 /** ユーザーが取消した場合 */
 export async function markIntakeResultDiscarded(
   db: D1Database,

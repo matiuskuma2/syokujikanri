@@ -331,16 +331,9 @@ async function handleTextMessageEvent(
       await handleImageDiscard(event.replyToken, intakeResultId, lineUserId, preEffectiveAccountId, env)
       return
     } else {
-      // P7: S3中は全ての他入力をブロック（招待コード・モード切替・体重等含む）
-      await replyWithQuickReplies(
-        event.replyToken,
-        '🔄 いま画像の確認中です。\n「確定」または「取消」で応答してください。',
-        [
-          { label: '✅ 確定', text: '確定' },
-          { label: '❌ 取消', text: '取消' },
-        ],
-        env.LINE_CHANNEL_ACCESS_TOKEN
-      )
+      // テキスト修正として処理: ユーザーの修正を AI で再解析し、提案を更新する
+      const { handleImageCorrection } = await import('./image-confirm-handler')
+      await handleImageCorrection(event.replyToken, textTrim, intakeResultId, lineUserId, preEffectiveAccountId, env)
       return
     }
   }
@@ -450,7 +443,7 @@ async function handleTextMessageEvent(
     try { await deleteModeSession(env.DB, effectiveAccountId, lineUserId) } catch (e) { /* ignore */ }
     await replyText(
       event.replyToken,
-      '📝 記録したい内容を送ってください（食事写真・テキスト・体重数値・体重計の写真、どれでもOK）\n\n💡 写真のヒント:\n・真上から撮ると認識精度UP\n・お皿全体が入るように\n・1品ずつでも、まとめてでもOK',
+      '📝 記録したい内容を送ってください。食事写真・食事テキスト・体重の数字・体重計の写真、どれでもOKです。\n\n💡 写真のヒント:\n・真上から撮ると認識精度UP\n・お皿全体が入るように\n・1品ずつでも、まとめてでもOK',
       env.LINE_CHANNEL_ACCESS_TOKEN
     )
     return
@@ -484,14 +477,14 @@ async function handleTextMessageEvent(
         currentStep: 'idle',
       })
     } catch (e) { console.error('[LINE] upsertModeSession(consult) error:', e) }
-    await replyText(event.replyToken, '💬 相談モードです。\n食事・体重・外食・間食・続け方など何でも送ってください 😊', env.LINE_CHANNEL_ACCESS_TOKEN)
+    await replyText(event.replyToken, '💬 相談モードです。食事・体重・外食・間食・続け方など、何でも送ってください 😊', env.LINE_CHANNEL_ACCESS_TOKEN)
     return
   }
 
   if (SWITCH_TO_RECORD.some(kw => textTrim.includes(kw))) {
     try { await updateThreadMode(env.DB, thread.id, 'record') } catch (e) { console.error('[LINE] updateThreadMode(record) error:', e) }
     try { await deleteModeSession(env.DB, effectiveAccountId, lineUserId) } catch (e) { console.error('[LINE] deleteModeSession error:', e) }
-    await replyText(event.replyToken, '📝 記録モードです。\n記録したい内容を送ってください（食事写真・テキスト・体重数値・体重計の写真、どれでもOK）', env.LINE_CHANNEL_ACCESS_TOKEN)
+    await replyText(event.replyToken, '📝 記録モードです。\n記録したい内容を送ってください。食事写真・食事テキスト・体重の数字・体重計の写真、どれでもOKです。', env.LINE_CHANNEL_ACCESS_TOKEN)
     return
   }
 
