@@ -10,7 +10,7 @@
 
 import type { Bindings } from '../../types/bindings'
 import type { UnifiedIntent, MealTypeValue } from '../../types/intent'
-import { mealTypeToJa } from '../../types/intent'
+import { mealTypeToJa, WEIGHT_MIN, WEIGHT_MAX } from '../../types/intent'
 import { ensureDailyLog } from '../../repositories/daily-logs-repo'
 import {
   createMealEntry,
@@ -131,10 +131,11 @@ async function persistWeightRecord(
   env: Bindings
 ): Promise<PersistResult> {
   const weightKg = intent.weight_kg
-  if (!weightKg || weightKg < 20 || weightKg > 300) {
+  // R2: 体重バリデーション (docs/15_実装前確定ルールSSOT.md)
+  if (!weightKg || weightKg < WEIGHT_MIN || weightKg > WEIGHT_MAX) {
     return {
       success: false,
-      replyMessage: '体重の値が正しくないようです。20〜300kgの範囲で入力してください。',
+      replyMessage: `体重の値が正しくないようです。${WEIGHT_MIN}〜${WEIGHT_MAX}kgの範囲で入力してください。`,
     }
   }
 

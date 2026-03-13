@@ -366,16 +366,27 @@ async function handleTextMessageEvent(
     userAccountId: userAccount.id,
   })
 
-  await createConversationMessage(env.DB, {
-    threadId: thread.id,
-    senderType: 'user',
-    lineMessageId: event.message.id,
-    messageType: 'text',
-    rawText: textTrim,
-    normalizedText: textTrim,
-    modeAtSend: thread.current_mode,
-    sentAt: new Date(event.timestamp).toISOString().replace('T', ' ').substring(0, 19),
-  })
+  // R5: Webhook Idempotency — 同一 line_message_id の重複処理を防止
+  try {
+    await createConversationMessage(env.DB, {
+      threadId: thread.id,
+      senderType: 'user',
+      lineMessageId: event.message.id,
+      messageType: 'text',
+      rawText: textTrim,
+      normalizedText: textTrim,
+      modeAtSend: thread.current_mode,
+      sentAt: new Date(event.timestamp).toISOString().replace('T', ' ').substring(0, 19),
+    })
+  } catch (msgErr: unknown) {
+    // UNIQUE 制約違反 = 既に処理済みのメッセージ → スキップ
+    if (msgErr instanceof Error && msgErr.message?.includes('UNIQUE')) {
+      console.log(`[LINE] R5 idempotency: duplicate message ${event.message.id}, skipping`)
+      return
+    }
+    // その他のエラーは処理続行（メッセージ保存失敗でもBOT応答は行う）
+    console.warn('[LINE] createConversationMessage error (continuing):', msgErr)
+  }
 
   // ------------------------------------------------------------------
   // ④ 問診途中（S1: mode=intake）— モード切替コマンドより前に評価
@@ -456,8 +467,13 @@ async function handleTextMessageEvent(
     return
   }
 
+  // R6-2: モード切替コマンドで pending_clarification を cancelled に
   // 明示的モード切替
   if (SWITCH_TO_CONSULT.some(kw => textTrim.includes(kw))) {
+    try {
+      const { cancelActiveClarifications } = await import('../../repositories/pending-clarifications-repo')
+      await cancelActiveClarifications(env.DB, userAccount.id)
+    } catch (e) { console.warn('[LINE] cancelActiveClarifications on consult switch:', e) }
     try { await updateThreadMode(env.DB, thread.id, 'consult') } catch (e) { console.error('[LINE] updateThreadMode(consult) error:', e) }
     try {
       await upsertModeSession(env.DB, {
@@ -472,6 +488,11 @@ async function handleTextMessageEvent(
   }
 
   if (SWITCH_TO_RECORD.some(kw => textTrim.includes(kw))) {
+    // R6-2: モード切替コマンドで pending_clarification を cancelled に
+    try {
+      const { cancelActiveClarifications } = await import('../../repositories/pending-clarifications-repo')
+      await cancelActiveClarifications(env.DB, userAccount.id)
+    } catch (e) { console.warn('[LINE] cancelActiveClarifications on record switch:', e) }
     try { await updateThreadMode(env.DB, thread.id, 'record') } catch (e) { console.error('[LINE] updateThreadMode(record) error:', e) }
     try { await deleteModeSession(env.DB, effectiveAccountId, lineUserId) } catch (e) { console.error('[LINE] deleteModeSession error:', e) }
     await replyText(event.replyToken, '📝 記録モードです。\n記録したい内容を送ってください。食事写真・食事テキスト・体重の数字・体重計の写真、どれでもOKです。', env.LINE_CHANNEL_ACCESS_TOKEN)
@@ -825,9 +846,11 @@ async function handleConsultText(
       const intent = await interpretMessage(text, userCtx, env)
 
       // 相談モードでも体重・食事記録を副次意図として検出 → 保存
+      // R1: 相談モードでの副次記録保存閾値 (docs/15_実装前確定ルールSSOT.md)
+      const { CONSULT_SECONDARY_SAVE_THRESHOLD } = await import('../../types/intent')
       if (intent.intent_secondary &&
           (intent.intent_secondary === 'record_meal' || intent.intent_secondary === 'record_weight') &&
-          intent.confidence >= 0.8) {
+          intent.confidence >= CONSULT_SECONDARY_SAVE_THRESHOLD) {
         // 副次意図を主意図に昇格させて保存
         const recordIntent = { ...intent, intent_primary: intent.intent_secondary }
         if (canSaveImmediately(recordIntent)) {
@@ -894,7 +917,7 @@ async function handleConsultText(
     try {
       const { findActiveMemories } = await import('../../repositories/user-memory-repo')
       const memories = await findActiveMemories(env.DB, userAccountId)
-      const relevant = memories.filter(m => m.confidence_score >= 0.6)
+      const relevant = memories.filter(m => m.confidence_score >= 0.6) // MEMORY_CONFIDENCE_MIN
       if (relevant.length > 0) {
         memoryContext = '\n\n【ユーザーの既知情報】\n' +
           relevant.map(m => `- [${m.category}] ${m.memory_value}`).join('\n')
@@ -1011,11 +1034,19 @@ async function handleImageMessageEvent(
 
   // ------------------------------------------------------------------
   // 2. ユーザー・スレッドの確保（エラーでも続行を試みる）
+  //    R6-3: 画像受信時に pending_clarification を cancelled に
   // ------------------------------------------------------------------
   let userAccount: Awaited<ReturnType<typeof ensureUserAccount>>
   let thread: Awaited<ReturnType<typeof ensureOpenThread>>
   try {
     userAccount = await ensureUserAccount(env.DB, lineUserId, effectiveAccountId)
+
+    // R6-3: 画像は新しい記録行為 → 明確化待ちをキャンセル
+    try {
+      const { cancelActiveClarifications } = await import('../../repositories/pending-clarifications-repo')
+      await cancelActiveClarifications(env.DB, userAccount.id)
+    } catch (e) { console.warn('[LINE] cancelActiveClarifications on image:', e) }
+
     thread = await ensureOpenThread(env.DB, {
       lineChannelId,
       lineUserId,

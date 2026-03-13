@@ -251,6 +251,32 @@ export type UserMemoryItem = {
 }
 
 // ===================================================================
+// 定数（docs/15_実装前確定ルールSSOT.md 準拠）
+// ===================================================================
+
+/** R1: 相談モードでの副次記録保存に必要な最低 confidence */
+export const CONSULT_SECONDARY_SAVE_THRESHOLD = 0.8
+
+/** R2: 体重の有効範囲 */
+export const WEIGHT_MIN = 20
+export const WEIGHT_MAX = 300
+
+/** R6-4: 明確化の有効期限（時間） */
+export const CLARIFICATION_EXPIRY_HOURS = 24
+
+/** R6-5 / R12-5: 1ユーザーあたりの asking 上限 */
+export const MAX_PENDING_PER_USER = 1
+
+/** R8: 日付のルックバック上限（日） */
+export const DATE_LOOKBACK_DAYS = 30
+
+/** Layer3: メモリの最低 confidence（コンテキスト注入の閾値） */
+export const MEMORY_CONFIDENCE_MIN = 0.6
+
+/** メモリ抽出スキップの最低文字数 */
+export const MEMORY_EXTRACTION_MIN_LENGTH = 5
+
+// ===================================================================
 // バリデーションヘルパー
 // ===================================================================
 
@@ -349,9 +375,9 @@ export function validateAndNormalizeIntent(raw: Record<string, unknown>): Unifie
 export function canSaveImmediately(intent: UnifiedIntent): boolean {
   if (intent.needs_clarification.length > 0) return false
 
-  // 体重: 値があればOK
+  // 体重: 値があればOK (R2)
   if (intent.intent_primary === 'record_weight' && intent.weight_kg !== null) {
-    return intent.weight_kg >= 20 && intent.weight_kg <= 300
+    return intent.weight_kg >= WEIGHT_MIN && intent.weight_kg <= WEIGHT_MAX
   }
 
   // 食事: 日付 + 区分 + 内容 の3要素すべて確定

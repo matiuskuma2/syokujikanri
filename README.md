@@ -3,7 +3,7 @@
 ## プロジェクト概要
 - **名前**: diet-bot（食事指導BOT）
 - **目的**: LINE経由でダイエット（食事・体重・運動）を記録・サポートするAI BOT
-- **フェーズ**: Phase 2.0 — SSOT v2.0 会話解釈パイプライン統合完了 **(v2.0.0)**
+- **フェーズ**: Phase 2.1 — 実装前確定ルール12項目明文化 + コード反映 **(v2.1.0)**
 
 ## 本番URL
 | 用途 | URL |
@@ -269,7 +269,7 @@ SSOT v2.0 データフロー:
 - **ステータス**: ✅ 本番稼働中
 - **技術スタック**: Hono + TypeScript + Cloudflare D1/R2/Queue + OpenAI GPT-4o
 - **GitHub**: https://github.com/matiuskuma2/syokujikanri
-- **最終デプロイ**: 2026-03-13（v2.0.0: SSOT v2.0 会話解釈パイプライン統合）
+- **最終デプロイ**: 2026-03-13（v2.1.0: 実装前確定ルール12項目 + R5 idempotency + R6-2,3 pending cancel）
 - **デプロイURL**: https://diet-bot.pages.dev
 
 ## ローカル開発
@@ -330,6 +330,11 @@ curl http://localhost:3000/api/health
 | [`docs/05_LINE会話フローSSOT.md`](docs/05_LINE会話フローSSOT.md) | 旧版SSOT（v1.0）。`docs/07` に置き換え済み |
 | [`docs/06_実装タスク一覧.md`](docs/06_実装タスク一覧.md) | 優先順位付き実装タスク（Phase1.3-2.0）、依存関係マップ、推奨実装順序 |
 | [`docs/07_diet-bot_LINE_運用フロー_画面要件_SSOT.md`](docs/07_diet-bot_LINE_運用フロー_画面要件_SSOT.md) | **SSOT（正本 v2.0）**: 5状態(S0-S4)遷移図、メッセージ優先順位(①-⑧)、完全入力分岐テーブル(T01-T19, I01-I03, E01-E04)、AI vs 決定論的境界、画像S3ブロック設計、相談プロンプト構成、管理者スコープ |
+| [`docs/11_会話解釈SSOT.md`](docs/11_会話解釈SSOT.md) | Phase A 会話解釈エンジン設計: UnifiedIntent スキーマ、プロンプト構成、日付/食事区分解決ルール |
+| [`docs/12_記録確認フローSSOT.md`](docs/12_記録確認フローSSOT.md) | Phase B 明確化 + Phase C 保存: pending_clarifications 設計、record-persister 設計、correction_history 連携 |
+| [`docs/13_パーソナルメモリSSOT.md`](docs/13_パーソナルメモリSSOT.md) | Layer3 パーソナルメモリ: user_memory_items 設計、抽出プロンプト、UPSERT ルール |
+| [`docs/14_技術設計チェックリストSSOT.md`](docs/14_技術設計チェックリストSSOT.md) | 実装前設計チェック21項目: pending運用、相談記録順序、複数記録、削除、メモリ管理、AI フォールバック |
+| [`docs/15_実装前確定ルールSSOT.md`](docs/15_実装前確定ルールSSOT.md) | **SSOT（正本）**: **実装前確定12ルール** — 保存ルール(R1-R4)、競合ルール(R5-R7)、訂正ルール(R8-R10)、障害時ルール(R11-R12)。相談と記録の責務境界、confidence閾値、idempotency、pending管理、修正対象特定を明文化 |
 
 ---
 
@@ -371,6 +376,13 @@ curl http://localhost:3000/api/health
 6. ✅ CONSULT_KEYWORDS をモード自動切替に組み込み
 7. ✅ pending_image_confirm中の入力ブロック強化（S3 全入力ブロック）
 8. ✅ 招待コード再送時の問診を「途中から」に統一
+
+### Phase 2.1 — 実装前確定ルール明文化（✅ 完了 v2.1.0）
+- ✅ docs/15_実装前確定ルールSSOT.md: 12項目を4カテゴリ(保存/競合/訂正/障害)で明文化
+- ✅ R1: 相談と記録の責務境界確定（confidence >= 0.8 + canSaveImmediately のみ自動保存）
+- ✅ R5: Webhook Idempotency（line_message_id UNIQUE制約 + migration 0016）
+- ✅ R6-2,3: モード切替・画像受信時の pending_clarification 自動キャンセル
+- ✅ 全定数をintent.tsに集約（CONSULT_SECONDARY_SAVE_THRESHOLD, WEIGHT_MIN/MAX, DATE_LOOKBACK_DAYS 等）
 
 ### Phase 2.0 — 機能拡張（P2: 今月）
 9. ✅ 画像解析結果 × food_master マッチング統合

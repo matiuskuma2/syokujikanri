@@ -15,6 +15,7 @@ import type {
   MealTypeValue,
   PendingClarification,
 } from '../../types/intent'
+import { WEIGHT_MIN, WEIGHT_MAX } from '../../types/intent'
 import { replyTextWithQuickReplies, replyText } from './reply'
 import { upsertModeSession } from '../../repositories/mode-sessions-repo'
 import {
@@ -352,7 +353,7 @@ function parseWeightAnswer(answer: string): ParseResult {
   const match = answer.match(/(\d{2,3}(?:\.\d{1,2})?)/)
   if (match) {
     const weight = parseFloat(match[1])
-    if (weight >= 20 && weight <= 300) {
+    if (weight >= WEIGHT_MIN && weight <= WEIGHT_MAX) {
       return { success: true, value: weight }
     }
   }

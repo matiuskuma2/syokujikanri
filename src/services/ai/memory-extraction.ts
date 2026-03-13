@@ -11,6 +11,7 @@
 import type { Bindings } from '../../types/bindings'
 import { createOpenAIClient } from './openai-client'
 import { upsertMemoryItem, findActiveMemories } from '../../repositories/user-memory-repo'
+import { MEMORY_EXTRACTION_MIN_LENGTH } from '../../types/intent'
 
 // ===================================================================
 // メモリ抽出プロンプト
@@ -75,8 +76,8 @@ export async function extractMemoryFromMessage(
   messageId: string | null,
   env: Bindings
 ): Promise<void> {
-  // 短文（5文字未満）や「はい」「確定」等はスキップ
-  if (messageText.length < 5) return
+  // R1 関連: 短文はスキップ (MEMORY_EXTRACTION_MIN_LENGTH)
+  if (messageText.length < MEMORY_EXTRACTION_MIN_LENGTH) return
   const skipPatterns = /^(はい|いいえ|確定|取消|ok|yes|no|スキップ|次へ|戻る)$/i
   if (skipPatterns.test(messageText.trim())) return
 

@@ -14,7 +14,7 @@ import type {
   UserContext,
   MealTypeValue,
 } from '../../types/intent'
-import { validateAndNormalizeIntent } from '../../types/intent'
+import { validateAndNormalizeIntent, DATE_LOOKBACK_DAYS, MEMORY_CONFIDENCE_MIN } from '../../types/intent'
 import { createOpenAIClient } from './openai-client'
 import { todayJst } from '../../utils/id'
 
@@ -176,7 +176,7 @@ export async function interpretMessage(
     if (intent.target_date.resolved) {
       const resolvedDate = new Date(intent.target_date.resolved + 'T00:00:00+09:00')
       const todayDate = new Date(ctx.today_jst + 'T23:59:59+09:00')
-      const thirtyDaysAgo = new Date(todayDate.getTime() - 30 * 24 * 60 * 60 * 1000)
+      const thirtyDaysAgo = new Date(todayDate.getTime() - DATE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000)
 
       if (resolvedDate > todayDate) {
         // 未来日付 → 要確認
@@ -359,7 +359,7 @@ export async function buildUserContextForInterpretation(
     const memRows = await db
       .prepare(`
         SELECT category, memory_value FROM user_memory_items
-        WHERE user_account_id = ?1 AND is_active = 1 AND confidence_score >= 0.6
+        WHERE user_account_id = ?1 AND is_active = 1 AND confidence_score >= ${MEMORY_CONFIDENCE_MIN}
         ORDER BY updated_at DESC LIMIT 20
       `)
       .bind(userAccountId)
