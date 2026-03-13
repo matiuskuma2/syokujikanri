@@ -1,6 +1,6 @@
 # LINE 会話フロー SSOT（Single Source of Truth）
 
-> **最終更新**: 2026-03-13  
+> **最終更新**: 2026-03-13 v1.4  
 > **対象**: diet-bot v1.2.0  
 > **ソースファイル**: `src/services/line/process-line-event.ts`, `src/services/line/intake-flow.ts`, `src/services/line/image-confirm-handler.ts`, `src/jobs/image-analysis.ts`  
 > **本ドキュメントが会話設計の正本**。コード変更時は必ずここを先に更新する。
@@ -583,3 +583,4 @@ UPDATE bot_mode_sessions SET current_step = ?, updated_at = ? WHERE client_accou
 | 2026-03-13 | v1.1 | 画像テキスト修正機能(handleImageCorrection)追加。P7原則をブロック→AI再解析に変更。Rich Menu 3ボタン設定完了。BOT文言統一 |
 | 2026-03-13 | v1.2 | G6-G9追加: 食事日付固定・食事区分キーワード限定・過去記録修正不可・相談中自動記録なし。改善優先順位を更新 |
 | 2026-03-13 | v1.3 | v2.0設計ドキュメント参照を追加。P3原則にAI使用箇所追加（会話解釈・メモリ抽出）。LANE3運用レーンにv2.0アーキテクチャ記述追加。AI分類マトリクスに#19,#20追加。改善優先順位にドキュメントリンク追加。新ドキュメント: `11_会話解釈SSOT.md`, `12_記録確認フローSSOT.md`, `13_パーソナルメモリSSOT.md` |
+| 2026-03-13 | v1.4 | v2.0実装基盤完了: 11_会話解釈SSOT v1.1（日付/食事区分ルール精緻化、保存確認ルール、修正ターゲット特定ルール）。12_記録確認フロー v1.1（保存判定フロー、修正ターゲット検索、相談モード確信度分岐）。14_技術設計チェックリスト新設。マイグレーション0013-0015追加。src/types/intent.ts, src/services/ai/interpretation.ts, src/repositories/{pending-clarifications,correction-history,user-memory}-repo.ts 新設 |

@@ -684,8 +684,26 @@ CREATE INDEX idx_memory_items_category
 | `0007_reports.sql` | `0007_images_reports.sql` | image_analysis_jobs, image_intake_results, progress_photos, weekly_reports, audit_logs, knowledge_document_pages, knowledge_chunks, knowledge_chunk_embeddings, retrieval_logs |
 
 > **Note**: マイグレーション追加時は次の連番で命名する。
-> 現在の最新: `0012_meal_food_match.sql`
-> 次の番号: `0013_` から
+> 現在の最新: `0015_user_memory_items.sql`
+> 次の番号: `0016_` から
+
+| 設計上の名前 | 実際のファイル名 | 内容 |
+|---|---|---|
+| `0001_accounts.sql` | `0001_init_accounts.sql` | accounts, account_memberships, subscriptions |
+| `0002_line.sql` | `0002_line_users.sql` | line_channels, line_users, user_accounts, user_service_statuses |
+| `0003_bot.sql` | `0003_conversations.sql` | conversation_threads, conversation_messages, message_attachments |
+| `0004_conversations.sql` | `0004_bots_knowledge.sql` | bots, bot_versions, bot_mode_sessions, knowledge_bases, knowledge_documents, bot_knowledge_links |
+| `0005_knowledge.sql` | `0005_profiles_intake.sql` | user_profiles, question_definitions, intake_forms, intake_answers |
+| `0006_user_data.sql` | `0006_daily_logs.sql` | daily_logs, meal_entries, body_metrics, activity_logs, sleep_logs, hydration_logs, bowel_logs |
+| `0007_reports.sql` | `0007_images_reports.sql` | image_analysis_jobs, image_intake_results, progress_photos, weekly_reports, audit_logs, knowledge_document_pages, knowledge_chunks, knowledge_chunk_embeddings, retrieval_logs |
+| — | `0008_admin_auth.sql` | admin認証関連の拡張 |
+| — | `0009_image_confirm_flow.sql` | 画像確認フロー関連の拡張 |
+| — | `0010_invite_codes.sql` | 招待コードテーブル |
+| — | `0011_food_master.sql` | 食品マスターテーブル |
+| — | `0012_meal_food_match.sql` | meal_entries に food_match_json カラム追加 |
+| — | `0013_pending_clarifications.sql` | **v2.0** 明確化待ちテーブル |
+| — | `0014_correction_history.sql` | **v2.0** 修正履歴テーブル |
+| — | `0015_user_memory_items.sql` | **v2.0** パーソナルメモリテーブル |
 
 ### ローカル開発
 ```bash
