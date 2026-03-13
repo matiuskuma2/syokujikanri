@@ -117,7 +117,7 @@ handleTextMessageEvent(text)
   │   ├── session.step = 'pending_image_confirm'
   │   │     ├── 「確定」→ handleImageConfirm → RETURN
   │   │     ├── 「取消」→ handleImageDiscard → RETURN
-  │   │     └── other → 「確定 or 取消で応答してください」→ RETURN
+  │   │     └── other → handleImageCorrection (AI再解析) → RETURN
   │   │
   │   ├── mode = 'intake'
   │   │     → handleIntakeStep() → RETURN (if handled)
@@ -270,9 +270,10 @@ handleTextMessageEvent(text)
 | 12 | **食事写真 栄養推定** | **AI** | ✅ | jobs/image-analysis.ts | OpenAI Vision `MEAL_ANALYSIS_PROMPT` |
 | 13 | **栄養ラベル読取** | **AI** | ✅ | jobs/image-analysis.ts | OpenAI Vision `NUTRITION_LABEL_PROMPT` |
 | 14 | **体重計数値読取** | **AI** | ✅ | jobs/image-analysis.ts | OpenAI Vision `SCALE_PROMPT` |
-| 15 | **AI相談応答** | **AI** | ✅ | process-line-event.ts L560-660 | OpenAI Chat + RAG + ナレッジ |
-| 16 | **週次レポート要約** | **AI** | ✅ | jobs/weekly-report.ts (予定) | OpenAI Chat |
-| 17 | **リマインダー文面** | **AI** | ✅ | jobs/daily-reminder.ts (予定) | OpenAI Chat (パーソナライズ) |
+| 15 | **画像解析テキスト修正** | **AI** | ✅ | image-confirm-handler.ts | OpenAI Chat `CORRECTION_PROMPT` + food_master再照合 |
+| 16 | **AI相談応答** | **AI** | ✅ | process-line-event.ts L560-660 | OpenAI Chat + RAG + ナレッジ |
+| 17 | **週次レポート要約** | **AI** | ✅ | jobs/weekly-report.ts (予定) | OpenAI Chat |
+| 18 | **リマインダー文面** | **AI** | ✅ | jobs/daily-reminder.ts (予定) | OpenAI Chat (パーソナライズ) |
 
 ### 3.2 境界ルール
 
@@ -299,6 +300,7 @@ handleTextMessageEvent(text)
 │  食事写真解析（PFC推定）  temp=0.2, json_object   │
 │  栄養ラベル読取           temp=0.2, json_object   │
 │  体重計数値読取           temp=0.2, json_object   │
+│  テキスト修正再解析       temp=0.3, json_object   │
 │  AI相談（RAG+履歴）      temp=0.7, text          │
 │  週次レポート要約         temp=0.7, text          │
 │                                                   │
@@ -325,7 +327,7 @@ handleTextMessageEvent(text)
 | T6 | 「記録モード」「記録にして」「記録する」「戻る」 | 部分一致 | access ✅ | deleteModeSession | conversation_threads, bot_mode_sessions | 「記録モードに切替」 |
 | T7 | 「確定」「はい」「yes」「ok」「記録」「保存」 | 部分一致 | step=pending_image_confirm | handleImageConfirm | daily_logs, meal_entries/body_metrics/progress_photos, image_intake_results | 「保存しました」 |
 | T8 | 「取消」「キャンセル」「cancel」「いいえ」「no」「やめる」「削除」 | 部分一致 | step=pending_image_confirm | handleImageDiscard | image_intake_results (applied_flag=2) | 「取り消しました」 |
-| T9 | (上記以外) | — | step=pending_image_confirm | 再確認 | なし | 「確定 or 取消で応答してください」 |
+| T9 | (上記以外のテキスト) | — | step=pending_image_confirm | handleImageCorrection | image_intake_results (proposed_action_json更新) | AI再解析→修正後の内容を提示+確定/取消 |
 | T10 | (問診中の回答テキスト) | — | mode=intake | handleIntakeStep | user_profiles, intake_answers, bot_mode_sessions, (body_metrics for Q5) | 次の質問 |
 | T11 | `XX.Xkg` (体重パターン) | regex `WEIGHT_PATTERN` | mode=record | handleRecordText | daily_logs, body_metrics, conversation_messages | 「体重○○kg記録しました」 |
 | T12 | 食事テキスト (朝食/昼食等 or 8文字以上) | classifyMealType + 文字数 | mode=record | handleRecordText | daily_logs, meal_entries, conversation_messages | 「食事を記録しました」 |
@@ -363,7 +365,7 @@ handleTextMessageEvent(text)
 | `conversation_messages` | 全テキスト/画像受信時+bot返信時 | — | — | handleTextMessageEvent, handleImageMessageEvent, handleConsultText |
 | `message_attachments` | 画像受信時 | — | — | handleImageMessageEvent |
 | `image_analysis_jobs` | 画像受信時 | 解析開始/完了/失敗時 | — | handleImageMessageEvent, processImageAnalysis |
-| `image_intake_results` | 解析完了時(applied_flag=0) | 確定(1)/取消(2)/期限切れ(3) | — | processImageAnalysis, handleImageConfirm/Discard, Cron |
+| `image_intake_results` | 解析完了時(applied_flag=0) | 確定(1)/取消(2)/期限切れ(3)/テキスト修正(proposed_action更新) | — | processImageAnalysis, handleImageConfirm/Discard/Correction, Cron |
 | `bot_mode_sessions` | 問診開始時/モード切替時 | ステップ進行時 | モード終了時/問診完了時 | 多数 |
 | `user_profiles` | 問診Q1回答時(INSERT OR IGNORE) | 問診各Q回答時 | — | intake-flow.ts saveProfileField |
 | `intake_answers` | 問診各Q回答時 | 同一Q再回答時(ON CONFLICT UPDATE) | — | intake-flow.ts saveIntakeAnswer |
