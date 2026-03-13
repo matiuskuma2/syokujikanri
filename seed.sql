@@ -117,6 +117,23 @@ VALUES (
 );
 
 -- ===================================================================
+-- 4b. Intake Forms（問診フォーム定義）
+-- intake_answers.intake_form_id FK のために必要
+-- ===================================================================
+
+INSERT OR IGNORE INTO intake_forms (id, account_id, name, description, is_active, order_index, created_at, updated_at)
+VALUES (
+  'default_intake',
+  'acc_client_00000000000000000000000000000001',
+  'デフォルト初回問診',
+  'LINE BOT 初回ヒアリング（9問）',
+  1,
+  0,
+  datetime('now'),
+  datetime('now')
+);
+
+-- ===================================================================
 -- 5. BOT 設定
 -- ===================================================================
 

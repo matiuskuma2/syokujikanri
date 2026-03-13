@@ -65,6 +65,48 @@ app.get('/health', (c) => c.json({ status: 'ok', service: 'diet-bot', version: '
 app.get('/api/health', (c) => c.json({ status: 'ok' }))
 
 // ===================================================================
+// E2E テスト用 DB クエリ API（開発環境のみ）
+// ===================================================================
+
+app.post('/api/test/query', async (c) => {
+  const env = c.env
+  if (env.APP_ENV !== 'development') {
+    return c.json({ error: 'Not available in production' }, 403)
+  }
+  try {
+    const { sql, params } = await c.req.json<{ sql: string; params?: unknown[] }>()
+    if (!sql) return c.json({ error: 'sql is required' }, 400)
+    const stmt = params && params.length > 0
+      ? env.DB.prepare(sql).bind(...params)
+      : env.DB.prepare(sql)
+    const result = await stmt.all()
+    return c.json({ results: result.results ?? [], meta: result.meta })
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+app.post('/api/test/exec', async (c) => {
+  const env = c.env
+  if (env.APP_ENV !== 'development') {
+    return c.json({ error: 'Not available in production' }, 403)
+  }
+  try {
+    const { sql, params } = await c.req.json<{ sql: string; params?: unknown[] }>()
+    if (!sql) return c.json({ error: 'sql is required' }, 400)
+    const stmt = params && params.length > 0
+      ? env.DB.prepare(sql).bind(...params)
+      : env.DB.prepare(sql)
+    const result = await stmt.run()
+    return c.json({ success: true, meta: result.meta })
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// ===================================================================
 // LINE Webhook（認証不要・署名検証は webhook.ts 内で実施）
 // ===================================================================
 
