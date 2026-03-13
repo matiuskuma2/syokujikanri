@@ -10,7 +10,7 @@
 
 import type { Bindings } from '../../types/bindings'
 import type { UnifiedIntent, MealTypeValue } from '../../types/intent'
-import { mealTypeToJa, WEIGHT_MIN, WEIGHT_MAX } from '../../types/intent'
+import { mealTypeToJa, WEIGHT_MIN, WEIGHT_MAX, MEAL_TEXT_MAX_LENGTH } from '../../types/intent'
 import { ensureDailyLog } from '../../repositories/daily-logs-repo'
 import {
   createMealEntry,
@@ -29,6 +29,8 @@ export type PersistResult = {
   success: boolean
   replyMessage: string
   error?: string
+  /** R13: 監査ログ用の保存アクション */
+  persist_action?: 'created' | 'updated' | 'appended' | 'rejected'
 }
 
 /**
@@ -96,20 +98,47 @@ async function persistMealRecord(
   const existing = await findMealEntryByDailyLogAndType(env.DB, dailyLog.id, mealType)
 
   if (existing) {
-    // 追記
-    const newText = [existing.meal_text, mealText].filter(Boolean).join(' / ')
+    // R4-2 + R9: 追記 — correction_history に correction_type='append' で記録
+    const oldText = existing.meal_text ?? ''
+    const newText = [oldText, mealText].filter(Boolean).join(' / ')
+
+    // R4: meal_text 上限チェック
+    if (newText.length > MEAL_TEXT_MAX_LENGTH) {
+      console.log(`[RecordPersister] rejected: table=meal_entries, date=${logDate}, type=${mealType}, reason=meal_text_too_long (${newText.length}chars)`)
+      return {
+        success: false,
+        replyMessage: '記録が長すぎます。修正で内容を整理してください。',
+      }
+    }
+
     await updateMealEntryFromEstimate(env.DB, existing.id, {
       mealText: newText,
       confirmationStatus: 'confirmed',
     })
+
+    console.log(`[RecordPersister] updated(appended): table=meal_entries, id=${existing.id}, date=${logDate}, type=${mealType}`)
+
+    // R9: 追記でも correction_history を残す
+    try {
+      await createCorrectionHistory(env.DB, {
+        userAccountId,
+        targetTable: 'meal_entries',
+        targetRecordId: existing.id,
+        correctionType: 'append',
+        oldValueJson: JSON.stringify({ meal_text: oldText }),
+        newValueJson: JSON.stringify({ meal_text: newText }),
+        reason: 'R4: 同日同区分への追記',
+      })
+    } catch (e) { console.warn('[RecordPersister] append correction_history error:', e) }
   } else {
-    // 新規作成
+    // R4-1: 新規作成
     await createMealEntry(env.DB, {
       dailyLogId: dailyLog.id,
       mealType,
       mealText,
       confirmationStatus: 'confirmed',
     })
+    console.log(`[RecordPersister] created: table=meal_entries, date=${logDate}, type=${mealType}`)
   }
 
   // 3. 返信メッセージ組立
@@ -117,7 +146,7 @@ async function persistMealRecord(
   const mealTypeJa = mealTypeToJa(mealType)
   const replyMessage = `📝 ${dateDisplay}の${mealTypeJa}を記録しました！\n\n🍽 ${mealText}\n\n※修正が必要な場合はテキストで教えてください\n  例: 「鮭じゃなくて卵焼き」「夕食じゃなくて朝食」`
 
-  return { success: true, replyMessage }
+  return { success: true, replyMessage, persist_action: existing ? 'appended' : 'created' }
 }
 
 // ===================================================================
@@ -154,6 +183,8 @@ async function persistWeightRecord(
     weightKg,
   })
 
+  console.log(`[RecordPersister] created: table=body_metrics, date=${logDate}, weight=${weightKg}`)
+
   // 3. 前回比を計算（可能なら）
   let comparisonText = ''
   try {
@@ -177,7 +208,7 @@ async function persistWeightRecord(
   const dateDisplay = formatDateForReply(logDate)
   const replyMessage = `📝 ${dateDisplay}の体重を記録しました！\n\n⚖️ ${weightKg}kg${comparisonText}`
 
-  return { success: true, replyMessage }
+  return { success: true, replyMessage, persist_action: 'created' }
 }
 
 // ===================================================================
@@ -239,6 +270,7 @@ async function persistCorrection(
       return {
         success: true,
         replyMessage: `✏️ 記録を修正しました！\n\n📅 ${formatDateForReply(targetDate)}\n変更前: ${mealTypeToJa(targetMealType)}\n変更後: ${mealTypeToJa(ct.new_value.meal_type)}`,
+        persist_action: 'updated',
       }
     }
 
@@ -270,6 +302,7 @@ async function persistCorrection(
       return {
         success: true,
         replyMessage: `✏️ 記録を修正しました！\n\n📅 ${formatDateForReply(targetDate)}の${mealTypeToJa(mealType)}\n変更前: ${entry.meal_text || '（なし）'}\n変更後: ${newText}`,
+        persist_action: 'updated',
       }
     }
 
@@ -307,6 +340,7 @@ async function persistCorrection(
       return {
         success: true,
         replyMessage: `✏️ 体重を修正しました！\n\n📅 ${formatDateForReply(targetDate)}\n変更前: ${bm.weight_kg}kg\n変更後: ${ct.new_value.weight_kg}kg`,
+        persist_action: 'updated',
       }
     }
 
@@ -366,6 +400,7 @@ async function persistDeletion(
     return {
       success: true,
       replyMessage: `🗑 ${formatDateForReply(targetDate)}の${mealTypeToJa(targetMealType)}の記録を削除しました。`,
+      persist_action: 'updated',  // 削除もhistory的にはupdated
     }
   }
 

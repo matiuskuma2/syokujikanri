@@ -3,7 +3,7 @@
 ## プロジェクト概要
 - **名前**: diet-bot（食事指導BOT）
 - **目的**: LINE経由でダイエット（食事・体重・運動）を記録・サポートするAI BOT
-- **フェーズ**: Phase 2.1 — 実装前確定ルール12項目明文化 + コード反映 **(v2.1.0)**
+- **フェーズ**: Phase 2.2 — SSOT v2.0 コード完全反映（深夜ルール・監査ログ・フォールバック追跡） **(v2.2.0)**
 
 ## 本番URL
 | 用途 | URL |
@@ -269,7 +269,7 @@ SSOT v2.0 データフロー:
 - **ステータス**: ✅ 本番稼働中
 - **技術スタック**: Hono + TypeScript + Cloudflare D1/R2/Queue + OpenAI GPT-4o
 - **GitHub**: https://github.com/matiuskuma2/syokujikanri
-- **最終デプロイ**: 2026-03-13（v2.1.0: 実装前確定ルール12項目 + R5 idempotency + R6-2,3 pending cancel）
+- **最終デプロイ**: 2026-03-13（v2.2.0: SSOT R1-R14 コード完全反映 — 深夜ルール・監査ログ・フォールバック追跡・追記correction_type）
 - **デプロイURL**: https://diet-bot.pages.dev
 
 ## ローカル開発
@@ -334,7 +334,7 @@ curl http://localhost:3000/api/health
 | [`docs/12_記録確認フローSSOT.md`](docs/12_記録確認フローSSOT.md) | Phase B 明確化 + Phase C 保存: pending_clarifications 設計、record-persister 設計、correction_history 連携 |
 | [`docs/13_パーソナルメモリSSOT.md`](docs/13_パーソナルメモリSSOT.md) | Layer3 パーソナルメモリ: user_memory_items 設計、抽出プロンプト、UPSERT ルール |
 | [`docs/14_技術設計チェックリストSSOT.md`](docs/14_技術設計チェックリストSSOT.md) | 実装前設計チェック21項目: pending運用、相談記録順序、複数記録、削除、メモリ管理、AI フォールバック |
-| [`docs/15_実装前確定ルールSSOT.md`](docs/15_実装前確定ルールSSOT.md) | **SSOT（正本）**: **実装前確定12ルール** — 保存ルール(R1-R4)、競合ルール(R5-R7)、訂正ルール(R8-R10)、障害時ルール(R11-R12)。相談と記録の責務境界、confidence閾値、idempotency、pending管理、修正対象特定を明文化 |
+| [`docs/15_実装前確定ルールSSOT.md`](docs/15_実装前確定ルールSSOT.md) | **SSOT（正本）**: **実装前確定14ルール(R1-R14)** — 保存境界(R1-R4)、日付解釈(R5-R6)、食事区分(R7)、修正(R8-R10)、pending管理(R11-R12)、監査ログ(R13)、フォールバック(R14)。深夜ルール(0:00-4:59→前日)、構造化監査ログ4種、correction_type='append'を含む完全版 |
 
 ---
 
@@ -376,6 +376,18 @@ curl http://localhost:3000/api/health
 6. ✅ CONSULT_KEYWORDS をモード自動切替に組み込み
 7. ✅ pending_image_confirm中の入力ブロック強化（S3 全入力ブロック）
 8. ✅ 招待コード再送時の問診を「途中から」に統一
+
+### Phase 2.2 — SSOT v2.0 コード完全反映（✅ 完了 v2.2.0）
+- ✅ docs/15_実装前確定ルールSSOT.md: R1-R14の14ルールを10節構成で完全整備
+- ✅ R6: 深夜ルール実装（JST 00:00-04:59 → 前日扱い、MIDNIGHT_BOUNDARY_HOUR=5）
+- ✅ R7: 食事区分5帯域の定数化（MEAL_TIME_BREAKFAST_START等）
+- ✅ R9: correction_type='append' 新設（同日同区分追記時にもcorrection_historyを記録）
+- ✅ R13: 構造化監査ログ4種（phase_a_result, phase_c_result, clarification, consult_secondary_record）
+- ✅ R14: フォールバック追跡（fallback_used: 'gpt' | 'regex' | 'unclear'）
+- ✅ R3: 確認付き保存の確認文を日付+食事区分両方推定の場合にも対応
+- ✅ resolveBaseDateFromTimestamp() ヘルパー関数追加（intent.ts）
+- ✅ createFallbackIntent() をexportに変更（process-line-eventからの呼び出し対応）
+- ✅ PersistResult に persist_action フィールド追加（監査ログの精度向上）
 
 ### Phase 2.1 — 実装前確定ルール明文化（✅ 完了 v2.1.0）
 - ✅ docs/15_実装前確定ルールSSOT.md: 12項目を4カテゴリ(保存/競合/訂正/障害)で明文化

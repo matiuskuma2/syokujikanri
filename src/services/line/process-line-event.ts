@@ -524,7 +524,7 @@ async function handleTextMessageEvent(
   if (currentMode === 'consult') {
     await handleConsultText(event.replyToken, textTrim, thread.id, userAccount.id, ctx)
   } else {
-    await handleRecordText(event.replyToken, textTrim, userAccount.id, effectiveAccountId, lineUserId, thread.id, ctx)
+    await handleRecordText(event.replyToken, textTrim, userAccount.id, effectiveAccountId, lineUserId, thread.id, ctx, event.message.id)
   }
 }
 
@@ -540,7 +540,8 @@ async function handleRecordText(
   clientAccountId: string,
   lineUserId: string,
   threadId: string,
-  ctx: ProcessContext
+  ctx: ProcessContext,
+  lineMessageId?: string
 ): Promise<void> {
   const { env } = ctx
 
@@ -622,9 +623,37 @@ async function handleRecordText(
     env.DB, threadId, userAccountId, 'record', Date.now()
   )
 
-  const intent = await interpretMessage(text, userCtx, env)
+  let intent: Awaited<ReturnType<typeof interpretMessage>>
+  let fallbackUsed: 'gpt' | 'regex' | 'unclear' = 'gpt'
+  try {
+    intent = await interpretMessage(text, userCtx, env)
+    // R14: フォールバック検出
+    if (intent.reasoning?.includes('フォールバック')) {
+      fallbackUsed = intent.intent_primary === 'unclear' ? 'unclear' : 'regex'
+    }
+  } catch (interpretErr) {
+    console.error('[RecordText] Phase A interpret error:', interpretErr)
+    fallbackUsed = 'regex'
+    const { createFallbackIntent } = await import('../ai/interpretation')
+    intent = createFallbackIntent(text, userCtx)
+    if (intent.intent_primary === 'unclear') fallbackUsed = 'unclear'
+  }
 
-  console.log(`[RecordText] Phase A: primary=${intent.intent_primary}, conf=${intent.confidence}, clarify=[${intent.needs_clarification.join(',')}]`)
+  // R13: Phase A 監査ログ
+  console.log(JSON.stringify({
+    event: 'phase_a_result',
+    line_message_id: lineMessageId ?? null,
+    user_account_id: userAccountId,
+    intent_primary: intent.intent_primary,
+    intent_secondary: intent.intent_secondary,
+    confidence: intent.confidence,
+    needs_clarification: intent.needs_clarification,
+    target_date_source: intent.target_date.source,
+    meal_type_source: intent.meal_type?.source ?? null,
+    fallback_used: fallbackUsed,
+  }))
+
+  console.log(`[RecordText] Phase A: primary=${intent.intent_primary}, conf=${intent.confidence}, clarify=[${intent.needs_clarification.join(',')}], fallback=${fallbackUsed}`)
 
   // ------------------------------------------------------------------
   // 意図別ルーティング
@@ -672,6 +701,17 @@ async function handleRecordText(
     const { persistRecord } = await import('./record-persister')
     const result = await persistRecord(intent, userAccountId, clientAccountId, env)
 
+    // R13: Phase C 監査ログ
+    console.log(JSON.stringify({
+      event: 'phase_c_result',
+      line_message_id: lineMessageId ?? null,
+      user_account_id: userAccountId,
+      persist_action: result.persist_action ?? (result.success ? 'created' : 'rejected'),
+      target_table: intent.intent_primary === 'record_weight' ? 'body_metrics' : 'meal_entries',
+      target_record_id: null,
+      error: result.error ?? null,
+    }))
+
     await saveBotMessage(env.DB, threadId, result.replyMessage)
     await replyTextWithQuickReplies(
       replyToken,
@@ -686,26 +726,35 @@ async function handleRecordText(
     // バックグラウンド: メモリ抽出
     fireMemoryExtraction(text, userAccountId, null, env, ctx.waitUntil)
 
-    // 副次意図: 相談レスポンスも生成
-    if (intent.reply_policy.generate_consult_reply && intent.intent_secondary === 'consult') {
-      // 保存完了を先に送り、その後 push で相談返答
-      // replyToken は使用済みなので push を使う
-      // (次の webhook ラウンドで相談を処理するか、push で返す)
-    }
+    // 副次意図: 相談レスポンスも生成 (Phase 2 で実装予定)
+      // intent.reply_policy.generate_consult_reply が true の場合、
+      // push で相談返答を送信する機能を追加予定
     return
   }
 
-  // 確認付き保存（timestamp 由来の日付/食事区分）
   if (canSaveWithConfirmation(intent)) {
     // timestamp 由来でも保存はする。ただし確認メッセージを添える
     const { persistRecord } = await import('./record-persister')
     const result = await persistRecord(intent, userAccountId, clientAccountId, env)
 
-    const confirmNote = intent.target_date.source === 'timestamp'
-      ? '\n\n⏰ 日付は送信時刻から推定しました。違う場合は「昨日」などと教えてください。'
-      : (intent.meal_type?.source === 'timestamp'
-        ? '\n\n⏰ 食事区分は送信時刻から推定しました。違う場合は「朝食」などと教えてください。'
-        : '')
+    // R13: Phase C 監査ログ（確認付き保存）
+    console.log(JSON.stringify({
+      event: 'phase_c_result',
+      line_message_id: lineMessageId ?? null,
+      user_account_id: userAccountId,
+      persist_action: result.persist_action ?? (result.success ? 'created' : 'rejected'),
+      target_table: 'meal_entries',
+      target_record_id: null,
+      error: result.error ?? null,
+    }))
+
+    const confirmNote = intent.target_date.source === 'timestamp' && intent.meal_type?.source === 'timestamp'
+      ? '\n\n⏰ 日付と食事区分は送信時刻から推定しました。違う場合はお知らせください。'
+      : intent.target_date.source === 'timestamp'
+        ? '\n\n⏰ 日付は送信時刻から推定しました。違う場合は「昨日」などと教えてください。'
+        : (intent.meal_type?.source === 'timestamp'
+          ? '\n\n⏰ 食事区分は送信時刻から推定しました。違う場合は「朝食」などと教えてください。'
+          : '')
 
     await saveBotMessage(env.DB, threadId, result.replyMessage + confirmNote)
     await replyTextWithQuickReplies(
@@ -845,22 +894,71 @@ async function handleConsultText(
       )
       const intent = await interpretMessage(text, userCtx, env)
 
+      // R1-6: 相談モードで intent_primary が record_* の場合、記録モードに自動切替
+      if (intent.intent_primary === 'record_meal' || intent.intent_primary === 'record_weight') {
+        console.log(`[Consult] auto-switch to record: primary=${intent.intent_primary}, conf=${intent.confidence}`)
+        try { await updateThreadMode(env.DB, threadId, 'record') } catch { /* ignore */ }
+        if (canSaveImmediately(intent)) {
+          const { persistRecord } = await import('./record-persister')
+          const result = await persistRecord(intent, userAccountId, ctx.clientAccountId, env)
+          if (result.success) {
+            secondaryRecordSaved = true
+            // R1-6 は「記録も保存しました」ではなく通常の記録保存返信
+            // ただし相談応答も並行して生成するため secondaryRecordSaved で追記
+            console.log(`[Consult] R1-6 primary record saved: ${intent.intent_primary}`)
+          }
+        }
+        // canSaveImmediately == false の場合は相談応答にフォールスルー
+      }
+
+      // R1-3, R1-4, R1-5: 副次意図の記録検出
       // 相談モードでも体重・食事記録を副次意図として検出 → 保存
-      // R1: 相談モードでの副次記録保存閾値 (docs/15_実装前確定ルールSSOT.md)
       const { CONSULT_SECONDARY_SAVE_THRESHOLD } = await import('../../types/intent')
-      if (intent.intent_secondary &&
+      const secondaryEligible = !secondaryRecordSaved && intent.intent_secondary &&
           (intent.intent_secondary === 'record_meal' || intent.intent_secondary === 'record_weight') &&
-          intent.confidence >= CONSULT_SECONDARY_SAVE_THRESHOLD) {
+          intent.confidence >= CONSULT_SECONDARY_SAVE_THRESHOLD
+
+      if (secondaryEligible) {
         // 副次意図を主意図に昇格させて保存
-        const recordIntent = { ...intent, intent_primary: intent.intent_secondary }
+        const recordIntent = { ...intent, intent_primary: intent.intent_secondary! }
         if (canSaveImmediately(recordIntent)) {
           const { persistRecord } = await import('./record-persister')
           const result = await persistRecord(recordIntent, userAccountId, ctx.clientAccountId, env)
           if (result.success) {
             secondaryRecordSaved = true
-            console.log(`[Consult] secondary record saved: ${intent.intent_secondary}`)
           }
+
+          // R13: 相談中副次記録 監査ログ
+          console.log(JSON.stringify({
+            event: 'consult_secondary_record',
+            user_account_id: userAccountId,
+            intent_secondary: intent.intent_secondary,
+            confidence: intent.confidence,
+            saved: result.success,
+            reason: result.success ? 'threshold_met' : 'error',
+          }))
+        } else {
+          // R13: canSaveImmediately 不成立
+          console.log(JSON.stringify({
+            event: 'consult_secondary_record',
+            user_account_id: userAccountId,
+            intent_secondary: intent.intent_secondary,
+            confidence: intent.confidence,
+            saved: false,
+            reason: 'cannot_save_immediately',
+          }))
         }
+      } else if (intent.intent_secondary &&
+          (intent.intent_secondary === 'record_meal' || intent.intent_secondary === 'record_weight')) {
+        // R13: 閾値未満
+        console.log(JSON.stringify({
+          event: 'consult_secondary_record',
+          user_account_id: userAccountId,
+          intent_secondary: intent.intent_secondary,
+          confidence: intent.confidence,
+          saved: false,
+          reason: 'below_threshold',
+        }))
       }
     } catch (err) {
       console.warn('[Consult] secondary intent detection error:', err)

@@ -9,6 +9,13 @@
  */
 
 // ===================================================================
+// スキーマバージョン (F1-5: Prompt Contract Drift 追跡用)
+// ===================================================================
+
+/** UnifiedIntent スキーマバージョン — AI出力の互換性追跡用 */
+export const INTENT_SCHEMA_VERSION = '1.0.0'
+
+// ===================================================================
 // メインスキーマ
 // ===================================================================
 
@@ -150,6 +157,7 @@ export type CorrectionType =
   | 'nutrition_change'    // 栄養値の変更
   | 'delete'              // 削除
   | 'weight_change'       // 体重値の変更
+  | 'append'              // R9: 同日同区分への追記
 
 /** 返信ポリシー */
 export type ReplyPolicy = {
@@ -261,20 +269,39 @@ export const CONSULT_SECONDARY_SAVE_THRESHOLD = 0.8
 export const WEIGHT_MIN = 20
 export const WEIGHT_MAX = 300
 
-/** R6-4: 明確化の有効期限（時間） */
+/** R14-6: 明確化の有効期限（時間） */
 export const CLARIFICATION_EXPIRY_HOURS = 24
 
-/** R6-5 / R12-5: 1ユーザーあたりの asking 上限 */
+/** R13-1: 1ユーザーあたりの asking 上限 */
 export const MAX_PENDING_PER_USER = 1
 
-/** R8: 日付のルックバック上限（日） */
+/** R5-12: 日付のルックバック上限（日） */
 export const DATE_LOOKBACK_DAYS = 30
 
-/** Layer3: メモリの最低 confidence（コンテキスト注入の閾値） */
+/** F2-1: メモリの最低 confidence（コンテキスト注入の閾値） */
 export const MEMORY_CONFIDENCE_MIN = 0.6
 
 /** メモリ抽出スキップの最低文字数 */
 export const MEMORY_EXTRACTION_MIN_LENGTH = 5
+
+/** R9: 修正対象特定の直前コンテキスト有効期限（分） */
+export const CORRECTION_CONTEXT_EXPIRY_MINUTES = 30
+
+/** R17: cancelled/expired pending の保持期間（日） */
+export const PENDING_RETENTION_DAYS = 30
+
+/** R4: meal_text の最大文字数 */
+export const MEAL_TEXT_MAX_LENGTH = 2000
+
+/** R6: 深夜帯の境界時刻（JST）。0:00〜(MIDNIGHT_BOUNDARY_HOUR-1):59 は前日扱い */
+export const MIDNIGHT_BOUNDARY_HOUR = 5
+
+/** R7: 食事区分の時間帯境界（分単位） */
+export const MEAL_TIME_BREAKFAST_START = 300   // 05:00
+export const MEAL_TIME_LUNCH_START = 630       // 10:30
+export const MEAL_TIME_SNACK_START = 900       // 15:00
+export const MEAL_TIME_DINNER_START = 1050     // 17:30
+export const MEAL_TIME_NIGHT_START = 1380      // 23:00
 
 // ===================================================================
 // バリデーションヘルパー
@@ -403,6 +430,29 @@ export function canSaveWithConfirmation(intent: UnifiedIntent): boolean {
     (intent.meal_type !== null && intent.meal_type.source === 'timestamp')
 
   return contentOk && hasTimestamp
+}
+
+// ===================================================================
+// R6: 深夜帯ヘルパー
+// ===================================================================
+
+/**
+ * R6: メッセージ送信時刻(JST)から timestamp 推定の基準日を返す。
+ * 00:00〜04:59 → 前日、05:00〜23:59 → 当日
+ */
+export function resolveBaseDateFromTimestamp(timestampJst: string, todayJst: string): string {
+  try {
+    const hour = parseInt(timestampJst.substring(11, 13), 10)
+    if (hour < MIDNIGHT_BOUNDARY_HOUR) {
+      // 前日を返す
+      const d = new Date(todayJst + 'T00:00:00+09:00')
+      d.setDate(d.getDate() - 1)
+      return d.toISOString().substring(0, 10)
+    }
+    return todayJst
+  } catch {
+    return todayJst
+  }
 }
 
 /** 食事区分の日本語ラベル */

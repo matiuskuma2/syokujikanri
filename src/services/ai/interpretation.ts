@@ -13,8 +13,20 @@ import type {
   UnifiedIntent,
   UserContext,
   MealTypeValue,
+  MealTypeResolution,
 } from '../../types/intent'
-import { validateAndNormalizeIntent, DATE_LOOKBACK_DAYS, MEMORY_CONFIDENCE_MIN } from '../../types/intent'
+import {
+  validateAndNormalizeIntent,
+  DATE_LOOKBACK_DAYS,
+  MEMORY_CONFIDENCE_MIN,
+  MIDNIGHT_BOUNDARY_HOUR,
+  MEAL_TIME_BREAKFAST_START,
+  MEAL_TIME_LUNCH_START,
+  MEAL_TIME_SNACK_START,
+  MEAL_TIME_DINNER_START,
+  MEAL_TIME_NIGHT_START,
+  resolveBaseDateFromTimestamp,
+} from '../../types/intent'
 import { createOpenAIClient } from './openai-client'
 import { todayJst } from '../../utils/id'
 
@@ -67,7 +79,8 @@ ${memoryContext}
 - 「月曜日の」「先週の水曜」→ 直近の該当曜日
 - 「朝」「昼」「夜」（単独）→ 今日（inferred）。ただし午前に「夜」→昨日の夜
 - 日付が一切不明 → source="unknown"
-- JST 0:00〜4:59 のメッセージで「夜中」等 → 当日として扱う
+- **R6: 深夜・早朝ルール**: JST 0:00〜4:59 のメッセージで日付が不明な場合、timestamp推定の基準日は「前日」とする（深夜の食事報告は「昨日の夜食」が自然）
+- JST 5:00〜23:59 のメッセージ→ timestamp推定の基準日は「当日」
 - **日付をデフォルトで今日にしない**。表現がない場合は timestamp を使用
 
 ## 食事区分解決ルール（優先順位順）
@@ -199,6 +212,15 @@ export async function interpretMessage(
       }
     }
 
+    // R6: 深夜ルール — timestamp 推定時に基準日を補正
+    if (intent.target_date.source === 'timestamp' && intent.target_date.resolved) {
+      const baseDate = resolveBaseDateFromTimestamp(ctx.message_timestamp_jst, ctx.today_jst)
+      if (intent.target_date.resolved !== baseDate) {
+        console.log(`[Interpretation] R6: adjusting timestamp date from ${intent.target_date.resolved} to ${baseDate}`)
+        intent.target_date.resolved = baseDate
+      }
+    }
+
     console.log(`[Interpretation] intent=${intent.intent_primary}, confidence=${intent.confidence}, clarify=[${intent.needs_clarification.join(',')}]`)
     return intent
   } catch (err) {
@@ -213,9 +235,14 @@ export async function interpretMessage(
 
 const WEIGHT_PATTERN = /(\d{2,3}(?:\.\d{1,2})?)\s*(?:kg|ｋｇ|キロ|Kg|KG)/i
 
-/** AI 失敗時のフォールバック — 従来の regex パターンマッチ */
-function createFallbackIntent(messageText: string, ctx: UserContext): UnifiedIntent {
+/** AI 失敗時のフォールバック — 従来の regex パターンマッチ
+ * R14: fallback_used = 'regex' として監査ログに記録される
+ */
+export function createFallbackIntent(messageText: string, ctx: UserContext): UnifiedIntent {
   const text = messageText.trim()
+
+  // R6: 深夜ルール適用
+  const fallbackBaseDate = resolveBaseDateFromTimestamp(ctx.message_timestamp_jst, ctx.today_jst)
 
   // 体重パターン
   const weightMatch = text.match(WEIGHT_PATTERN)
@@ -225,7 +252,7 @@ function createFallbackIntent(messageText: string, ctx: UserContext): UnifiedInt
       intent_primary: 'record_weight',
       intent_secondary: null,
       target_date: {
-        resolved: ctx.today_jst,
+        resolved: fallbackBaseDate,
         original_expression: null,
         source: 'timestamp',
         needs_confirmation: false,
@@ -250,7 +277,7 @@ function createFallbackIntent(messageText: string, ctx: UserContext): UnifiedInt
       intent_primary: 'record_meal',
       intent_secondary: null,
       target_date: {
-        resolved: ctx.today_jst,
+        resolved: fallbackBaseDate,
         original_expression: null,
         source: 'timestamp',
         needs_confirmation: true,
@@ -305,12 +332,13 @@ function getMealTypeFromTimestamp(timestampJst: string): MealTypeResolution {
     const minute = parseInt(timestampJst.substring(14, 16), 10)
     const totalMinutes = hour * 60 + minute
 
+    // R7: 食事区分の時間帯推定ルール (docs/15 §4)
     let value: MealTypeValue
-    if (totalMinutes >= 300 && totalMinutes < 630) value = 'breakfast'      // 05:00-10:29
-    else if (totalMinutes >= 630 && totalMinutes < 900) value = 'lunch'     // 10:30-14:59
-    else if (totalMinutes >= 900 && totalMinutes < 1050) value = 'snack'    // 15:00-17:29
-    else if (totalMinutes >= 1050 && totalMinutes < 1380) value = 'dinner'  // 17:30-22:59
-    else value = 'other'                                                     // 23:00-04:59
+    if (totalMinutes >= MEAL_TIME_BREAKFAST_START && totalMinutes < MEAL_TIME_LUNCH_START) value = 'breakfast'
+    else if (totalMinutes >= MEAL_TIME_LUNCH_START && totalMinutes < MEAL_TIME_SNACK_START) value = 'lunch'
+    else if (totalMinutes >= MEAL_TIME_SNACK_START && totalMinutes < MEAL_TIME_DINNER_START) value = 'snack'
+    else if (totalMinutes >= MEAL_TIME_DINNER_START && totalMinutes < MEAL_TIME_NIGHT_START) value = 'dinner'
+    else value = 'other'  // 23:00-04:59
 
     return {
       value,
