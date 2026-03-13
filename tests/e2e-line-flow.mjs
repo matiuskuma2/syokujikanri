@@ -162,41 +162,68 @@ function assert(condition, message) {
 async function seedDatabase() {
   console.log('📦 Seeding E2E test data...')
 
-  // ---------------------------------------------------------------
-  // 1. E2E テストデータの完全クリーンアップ
-  //    FK 制約に対応した削除順（子テーブル→親テーブル）
-  // ---------------------------------------------------------------
+  // ------------------------------------------------------------------
+  // Step 0: 基盤データ (accounts, line_channels, intake_forms 等) が存在するか確認
+  //         存在しない場合は seed.sql を wrangler 経由で投入する。
+  //         これが無いと line_users INSERT で FK 制約違反になる。
+  // ------------------------------------------------------------------
+  const acctCheck = await dbQueryFirst(`SELECT id FROM accounts WHERE id = '${CLIENT_ACCOUNT_ID}'`)
+  if (!acctCheck) {
+    console.log('  📋 Base seed data not found — running seed.sql ...')
+    try {
+      execSync('cd /home/user/webapp && npx wrangler d1 execute diet-bot-production --local --file=./seed.sql 2>/dev/null', {
+        encoding: 'utf8',
+        timeout: 60000,
+      })
+      console.log('  ✅ Base seed (seed.sql) applied')
+    } catch (e) {
+      console.error('  ❌ seed.sql failed:', e.message?.substring(0, 200))
+      // 最小限の基盤データを HTTP 経由で投入
+      console.log('  ⚠️ Inserting minimal base data via HTTP...')
+      await dbExec(`INSERT OR IGNORE INTO accounts (id, type, name, status, timezone, locale, created_at, updated_at) VALUES ('${CLIENT_ACCOUNT_ID}', 'clinic', 'E2E Test Clinic', 'active', 'Asia/Tokyo', 'ja', datetime('now'), datetime('now'))`)
+      await dbExec(`INSERT OR IGNORE INTO account_memberships (id, account_id, user_id, email, role, status, created_at) VALUES ('mem_admin_00000000000000000000000000000001', '${CLIENT_ACCOUNT_ID}', 'usr_admin_001', 'admin@e2e.local', 'admin', 'active', datetime('now'))`)
+      await dbExec(`INSERT OR IGNORE INTO subscriptions (id, account_id, plan, status, max_users, current_period_start, current_period_end, created_at, updated_at) VALUES ('sub_e2e_001', '${CLIENT_ACCOUNT_ID}', 'pro', 'active', 100, datetime('now'), datetime('now', '+365 days'), datetime('now'), datetime('now'))`)
+      await dbExec(`INSERT OR IGNORE INTO line_channels (id, account_id, channel_id, channel_secret, access_token, webhook_path, is_active, created_at, updated_at) VALUES ('ch_default_replace_me', '${CLIENT_ACCOUNT_ID}', 'ch_default_replace_me', 'dummy', 'dummy', '/api/webhooks/line', 1, datetime('now'), datetime('now'))`)
+      await dbExec(`INSERT OR IGNORE INTO intake_forms (id, account_id, name, description, is_active, order_index, created_at, updated_at) VALUES ('default_intake', '${CLIENT_ACCOUNT_ID}', 'Default Intake', 'E2E test form', 1, 0, datetime('now'), datetime('now'))`)
+      console.log('  ✅ Minimal base data applied')
+    }
+  } else {
+    console.log('  ✅ Base seed data already present')
+  }
+
+  // ------------------------------------------------------------------
+  // Step 0b: line_channels レコード確認
+  //   .dev.vars の LINE_CHANNEL_ID=ch_default_replace_me が line_channels の
+  //   channel_id 列にも存在する必要がある (webhook.ts が WHERE channel_id=? で検索)。
+  //   seed.sql は channel_id='1656660870' で作成するため、不一致の場合は修正。
+  // ------------------------------------------------------------------
+  const chRow = await dbQueryFirst(`SELECT id, channel_id FROM line_channels WHERE id = 'ch_default_replace_me'`)
+  if (chRow && chRow.channel_id !== 'ch_default_replace_me') {
+    console.log(`  🔧 Updating line_channels.channel_id: ${chRow.channel_id} → ch_default_replace_me`)
+    await dbExec(`UPDATE line_channels SET channel_id = 'ch_default_replace_me' WHERE id = 'ch_default_replace_me'`)
+  }
+
+  // ------------------------------------------------------------------
+  // Step 1: E2E テストデータのクリーンアップ
+  // ------------------------------------------------------------------
   const cleanupQueries = [
-    // intake_answers（user_accounts FK）
     "DELETE FROM intake_answers WHERE user_account_id IN (SELECT id FROM user_accounts WHERE line_user_id LIKE 'U_e2e_%')",
-    // user_profiles
     "DELETE FROM user_profiles WHERE user_account_id IN (SELECT id FROM user_accounts WHERE line_user_id LIKE 'U_e2e_%')",
-    // body_metrics → daily_logs
     "DELETE FROM body_metrics WHERE daily_log_id IN (SELECT id FROM daily_logs WHERE user_account_id IN (SELECT id FROM user_accounts WHERE line_user_id LIKE 'U_e2e_%'))",
-    // meal_entries → daily_logs
     "DELETE FROM meal_entries WHERE daily_log_id IN (SELECT id FROM daily_logs WHERE user_account_id IN (SELECT id FROM user_accounts WHERE line_user_id LIKE 'U_e2e_%'))",
-    // daily_logs
     "DELETE FROM daily_logs WHERE user_account_id IN (SELECT id FROM user_accounts WHERE line_user_id LIKE 'U_e2e_%')",
-    // conversation_messages → threads
     "DELETE FROM conversation_messages WHERE thread_id IN (SELECT id FROM conversation_threads WHERE user_account_id IN (SELECT id FROM user_accounts WHERE line_user_id LIKE 'U_e2e_%'))",
-    // conversation_threads
     "DELETE FROM conversation_threads WHERE user_account_id IN (SELECT id FROM user_accounts WHERE line_user_id LIKE 'U_e2e_%')",
-    // image_intake_results
     "DELETE FROM image_intake_results WHERE line_user_id LIKE 'U_e2e_%'",
-    // bot_mode_sessions
+    "DELETE FROM message_attachments WHERE id LIKE 'ma_e2e_%'",
+    "DELETE FROM conversation_messages WHERE id LIKE 'cm_e2e_%'",
     "DELETE FROM bot_mode_sessions WHERE line_user_id LIKE 'U_e2e_%'",
-    // user_service_statuses
     "DELETE FROM user_service_statuses WHERE line_user_id LIKE 'U_e2e_%'",
-    // progress_photos
     "DELETE FROM progress_photos WHERE user_account_id IN (SELECT id FROM user_accounts WHERE line_user_id LIKE 'U_e2e_%')",
-    // user_accounts
     "DELETE FROM user_accounts WHERE line_user_id LIKE 'U_e2e_%'",
-    // invite_code_usages（line_user_id ベースとコードベースの両方）
     "DELETE FROM invite_code_usages WHERE line_user_id LIKE 'U_e2e_%'",
-    "DELETE FROM invite_code_usages WHERE invite_code_id IN (SELECT id FROM invite_codes WHERE code LIKE 'TST-%')",
-    // line_users
     "DELETE FROM line_users WHERE line_user_id LIKE 'U_e2e_%'",
-    // invite_codes
+    "DELETE FROM invite_code_usages WHERE invite_code_id IN (SELECT id FROM invite_codes WHERE code LIKE 'TST-%')",
     "DELETE FROM invite_codes WHERE code LIKE 'TST-%'",
   ]
 
@@ -205,18 +232,9 @@ async function seedDatabase() {
   }
   console.log('  🧹 Cleanup done')
 
-  // ---------------------------------------------------------------
-  // 2. intake_forms の 'default_intake' レコードが必要（FK 制約）
-  // ---------------------------------------------------------------
-  await dbExec(
-    `INSERT OR IGNORE INTO intake_forms (id, account_id, name, description, is_active, order_index, created_at, updated_at) VALUES ('default_intake', ?1, 'デフォルト初回問診', 'LINE BOT 初回ヒアリング（9問）', 1, 0, datetime('now'), datetime('now'))`,
-    [CLIENT_ACCOUNT_ID]
-  )
-  console.log('  ✅ intake_forms default record ensured')
-
-  // ---------------------------------------------------------------
-  // 3. 招待コード挿入（HTTP 経由のみ — wrangler spawn を避ける）
-  // ---------------------------------------------------------------
+  // ------------------------------------------------------------------
+  // Step 2: E2E 招待コード投入 (HTTP 経由で高速)
+  // ------------------------------------------------------------------
   const codes = [
     ['ic_e2e_001', 'TST-0001', 'E2E TC1'],
     ['ic_e2e_002', 'TST-0002', 'E2E TC2'],
@@ -233,33 +251,7 @@ async function seedDatabase() {
       [id, code, CLIENT_ACCOUNT_ID, 'mem_admin_00000000000000000000000000000001', label]
     )
   }
-  console.log('  ✅ Invite codes seeded')
-
-  // 検証
-  const icCount = await dbQuery("SELECT count(*) as cnt FROM invite_codes WHERE code LIKE 'TST-%'")
-  console.log(`  📊 Invite codes in DB: ${icCount[0]?.cnt ?? 0}`)
-
-  const ifCheck = await dbQueryFirst("SELECT id FROM intake_forms WHERE id = 'default_intake'")
-  console.log(`  📊 intake_forms default_intake: ${ifCheck ? 'EXISTS' : 'MISSING!'}`)
-  console.log()
-}
-
-// ===================================================================
-// ヘルパー: 問診を完走させる（TC5-TC9 で共通利用）
-// ===================================================================
-
-async function completeIntake(userId, code, { nickname = '太郎', gender = '男性', ageRange = '30s', height = '170', currentWeight = '70', targetWeight = '60', goal = 'ダイエットしたい', activity = 'moderate' } = {}) {
-  await sendWebhookEvent([makeFollowEvent(userId)])
-  await sleep(500)
-  await sendWebhookEvent([makeTextEvent(userId, code)])
-  await sleep(800)
-
-  const answers = [nickname, gender, ageRange, height, currentWeight, targetWeight, goal, '次へ', activity]
-  for (const text of answers) {
-    await sendWebhookEvent([makeTextEvent(userId, text)])
-    await sleep(500)
-  }
-  await sleep(300)
+  console.log('  ✅ E2E invite codes applied\n')
 }
 
 // ===================================================================
@@ -277,7 +269,7 @@ async function tc1_newUserInviteCode() {
   console.log('  Step 1: follow event')
   let res = await sendWebhookEvent([makeFollowEvent(userId)])
   assert(res.status === 200, 'follow event returns 200')
-  await sleep(800)
+  await sleep(1000)
 
   const lineUser = await dbQueryFirst(`SELECT * FROM line_users WHERE line_user_id = '${userId}'`)
   assert(lineUser !== null, 'line_users record created')
@@ -323,9 +315,8 @@ async function tc1_newUserInviteCode() {
 
     const s = await dbQueryFirst(`SELECT * FROM bot_mode_sessions WHERE line_user_id = '${userId}'`)
     if (expectedStep === 'idle') {
-      // 問診完了後はセッションが record になるか削除されている
-      const mode = s?.current_mode
-      assert(mode === 'record' || mode === undefined || s === null, `after Q9: mode = record or session cleared (actual: ${mode})`)
+      // 問診完了後は mode=record or session cleared
+      assert(s === null || s?.current_mode === 'record', `after Q9: mode = record or session cleared`)
     } else {
       assert(s?.current_step === expectedStep, `step advanced to ${expectedStep} (actual: ${s?.current_step})`)
     }
@@ -348,7 +339,7 @@ async function tc1_newUserInviteCode() {
     const answers = await dbQuery(`SELECT * FROM intake_answers WHERE user_account_id = '${ua.id}'`)
     assert(answers.length >= 9, `intake_answers count >= 9 (actual: ${answers.length})`)
   } else {
-    assert(false, 'user_accounts record should exist')
+    assert(false, 'user_accounts record exists')
   }
 
   const ic = await dbQueryFirst(`SELECT * FROM invite_codes WHERE code = 'TST-0001'`)
@@ -363,7 +354,7 @@ async function tc2_intakeResumeAfterDropout() {
   const userId = 'U_e2e_user_002'
 
   await sendWebhookEvent([makeFollowEvent(userId)])
-  await sleep(500)
+  await sleep(600)
   await sendWebhookEvent([makeTextEvent(userId, 'TST-0002')])
   await sleep(800)
 
@@ -405,7 +396,6 @@ async function tc3_completedUserResendCode() {
   console.log('TC3: 問診完了後同じコード再送→使い方ガイド')
   console.log('='.repeat(60))
 
-  // TC1 で問診完了した U_e2e_user_001 を再利用
   const userId = 'U_e2e_user_001'
 
   const beforeUsages = await dbQuery(`SELECT * FROM invite_code_usages WHERE line_user_id = '${userId}'`)
@@ -413,7 +403,7 @@ async function tc3_completedUserResendCode() {
   console.log('  Resend code TST-0001')
   const res = await sendWebhookEvent([makeTextEvent(userId, 'TST-0001')])
   assert(res.status === 200, 'resend returns 200')
-  await sleep(500)
+  await sleep(600)
 
   const afterUsages = await dbQuery(`SELECT * FROM invite_code_usages WHERE line_user_id = '${userId}'`)
   assert(afterUsages.length === beforeUsages.length, 'invite_code_usages count unchanged')
@@ -430,18 +420,36 @@ async function tc4_differentUserUsedCode() {
   const userId = 'U_e2e_user_004'
 
   await sendWebhookEvent([makeFollowEvent(userId)])
-  await sleep(500)
+  await sleep(600)
 
   console.log('  Send exhausted code TST-0001')
   const res = await sendWebhookEvent([makeTextEvent(userId, 'TST-0001')])
   assert(res.status === 200, 'exhausted code event returns 200')
-  await sleep(500)
+  await sleep(600)
 
   const usage = await dbQueryFirst(`SELECT * FROM invite_code_usages WHERE line_user_id = '${userId}'`)
   assert(usage === null, 'no invite_code_usages for new user')
 
   const uss = await dbQueryFirst(`SELECT * FROM user_service_statuses WHERE line_user_id = '${userId}'`)
   assert(uss === null || uss?.intake_completed === 0, 'intake_completed = 0 or no record')
+}
+
+/** TC5-TC9 共通: ユーザーをセットアップ（follow + invite_code + 問診完走） */
+async function setupCompletedUser(userId, inviteCode) {
+  await sendWebhookEvent([makeFollowEvent(userId)])
+  await sleep(600)
+  await sendWebhookEvent([makeTextEvent(userId, inviteCode)])
+  await sleep(800)
+  // Q1-Q9 をまとめて回答
+  const answers = ['太郎', '男性', '30s', '170', '70', '60', 'ダイエットしたい', '次へ', 'moderate']
+  for (const text of answers) {
+    await sendWebhookEvent([makeTextEvent(userId, text)])
+    await sleep(500)
+  }
+  await sleep(300)
+
+  const uss = await dbQueryFirst(`SELECT * FROM user_service_statuses WHERE line_user_id = '${userId}'`)
+  return uss?.intake_completed === 1
 }
 
 async function tc5_weightEntry() {
@@ -451,12 +459,8 @@ async function tc5_weightEntry() {
 
   const userId = 'U_e2e_user_005'
 
-  // setup: 問診完走
-  console.log('  Setup: completing intake...')
-  await completeIntake(userId, 'TST-0005')
-
-  const uss = await dbQueryFirst(`SELECT * FROM user_service_statuses WHERE line_user_id = '${userId}'`)
-  assert(uss?.intake_completed === 1, 'TC5 setup: intake_completed = 1')
+  const setupOk = await setupCompletedUser(userId, 'TST-0005')
+  assert(setupOk, 'TC5 setup: intake_completed = 1')
 
   // 体重記録
   console.log('  Send weight: 65.5kg')
@@ -473,7 +477,7 @@ async function tc5_weightEntry() {
     const dl = await dbQueryFirst(`SELECT * FROM daily_logs WHERE user_account_id = '${ua.id}'`)
     assert(dl !== null, 'daily_logs record exists')
   } else {
-    assert(false, 'user_accounts record should exist')
+    assert(false, 'user_accounts record exists for TC5')
   }
 }
 
@@ -484,43 +488,16 @@ async function tc6_imageConfirm() {
 
   const userId = 'U_e2e_user_006'
 
-  // setup: 問診完走
-  console.log('  Setup: completing intake...')
-  await completeIntake(userId, 'TST-0006', { nickname: '花子', gender: '女性', ageRange: '20s', height: '160', currentWeight: '55', targetWeight: '48' })
-
-  const uss = await dbQueryFirst(`SELECT * FROM user_service_statuses WHERE line_user_id = '${userId}'`)
-  assert(uss?.intake_completed === 1, 'TC6 setup: intake_completed = 1')
+  const setupOk = await setupCompletedUser(userId, 'TST-0006')
+  assert(setupOk, 'TC6 setup: intake_completed = 1')
 
   // Simulate pending image confirm via DB
-  // FK チェーン: image_intake_results → message_attachments → conversation_messages → conversation_threads
   console.log('  Simulating pending_image_confirm state via DB')
   const ua = await dbQueryFirst(`SELECT id FROM user_accounts WHERE line_user_id = '${userId}'`)
 
   if (ua) {
     const intakeResultId = 'iir_e2e_tc6_001'
-    const msgId = 'cm_e2e_tc6_001'
-    const maId = 'ma_e2e_tc6_001'
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19)
-
-    // 1. conversation_thread を取得（completeIntake で作成済み）
-    const thread = await dbQueryFirst(`SELECT id FROM conversation_threads WHERE user_account_id = '${ua.id}' LIMIT 1`)
-
-    // 2. conversation_messages にダミー画像メッセージを作成
-    if (thread) {
-      await dbExec(
-        `INSERT OR IGNORE INTO conversation_messages (id, thread_id, sender_type, line_message_id, message_type, raw_text, mode_at_send, sent_at, created_at)
-         VALUES (?1, ?2, 'user', 'lm_e2e_tc6', 'image', NULL, 'record', ?3, ?3)`,
-        [msgId, thread.id, now]
-      )
-
-      // 3. message_attachments にダミー添付ファイルを作成
-      await dbExec(
-        `INSERT OR IGNORE INTO message_attachments (id, message_id, storage_provider, storage_key, content_type, created_at)
-         VALUES (?1, ?2, 'r2', 'e2e/tc6/test.jpg', 'image/jpeg', ?3)`,
-        [maId, msgId, now]
-      )
-    }
-
     const proposedAction = JSON.stringify({
       action: 'create_or_update_meal_entry',
       meal_type: 'lunch',
@@ -533,26 +510,32 @@ async function tc6_imageConfirm() {
       client_account_id: CLIENT_ACCOUNT_ID,
     })
 
-    // 4. image_intake_results に pending レコード作成
+    // FK chain: image_intake_results → message_attachments → conversation_messages → conversation_threads
+    // conversation_thread は setupCompletedUser で既に作成済み。そのIDを取得
+    const thread6 = await dbQueryFirst(`SELECT id FROM conversation_threads WHERE user_account_id = '${ua.id}' LIMIT 1`)
+    if (thread6) {
+      await dbExec(
+        `INSERT OR IGNORE INTO conversation_messages (id, thread_id, sender_type, message_type, raw_text, sent_at, created_at) VALUES ('cm_e2e_tc6', ?1, 'user', 'image', '[TC6 test image]', ?2, ?2)`,
+        [thread6.id, now]
+      )
+      await dbExec(
+        `INSERT OR IGNORE INTO message_attachments (id, message_id, storage_provider, storage_key, content_type, created_at) VALUES ('ma_e2e_tc6', 'cm_e2e_tc6', 'r2', 'e2e/tc6_test.jpg', 'image/jpeg', ?1)`,
+        [now]
+      )
+    }
+
     await dbExec(
       `INSERT OR IGNORE INTO image_intake_results (id, message_attachment_id, user_account_id, line_user_id, image_category, confidence_score, extracted_json, proposed_action_json, applied_flag, expires_at, created_at)
-       VALUES (?1, ?2, ?3, ?4, 'meal_photo', 0.95, '{}', ?5, 0, datetime('now', '+24 hours'), ?6)`,
-      [intakeResultId, maId, ua.id, userId, proposedAction, now]
+       VALUES (?1, 'ma_e2e_tc6', ?2, ?3, 'meal_photo', 0.95, '{}', ?4, 0, datetime('now', '+24 hours'), ?5)`,
+      [intakeResultId, ua.id, userId, proposedAction, now]
     )
 
-    // 5. bot_mode_sessions を pending_image_confirm に設定
     const sessionData = JSON.stringify({ intakeResultId, category: 'meal_photo' })
     await dbExec(
       `INSERT OR REPLACE INTO bot_mode_sessions (id, client_account_id, line_user_id, current_mode, current_step, session_data, turn_count, expires_at, created_at, updated_at)
        VALUES ('bms_e2e_tc6', ?1, ?2, 'record', 'pending_image_confirm', ?3, 0, datetime('now', '+24 hours'), ?4, ?5)`,
       [CLIENT_ACCOUNT_ID, userId, sessionData, now, now]
     )
-
-    // 検証: image_intake_results が正しく挿入されたか
-    const iirBefore = await dbQueryFirst(`SELECT id, applied_flag FROM image_intake_results WHERE id = '${intakeResultId}'`)
-    if (!iirBefore) {
-      console.log('    ⚠️ image_intake_results INSERT failed (FK constraint?)')
-    }
 
     console.log('  Send: 確定')
     const res = await sendWebhookEvent([makeTextEvent(userId, '確定')])
@@ -566,17 +549,15 @@ async function tc6_imageConfirm() {
     if (dailyLog) {
       const me = await dbQueryFirst(`SELECT * FROM meal_entries WHERE daily_log_id = '${dailyLog.id}' AND confirmation_status = 'confirmed'`)
       assert(me !== null, 'meal_entries confirmed record exists')
-      if (me) {
-        assert(me.calories_kcal === 550, `meal_entries.calories_kcal = 550 (actual: ${me.calories_kcal})`)
-      }
+      assert(me?.calories_kcal === 550, `meal_entries.calories_kcal = 550 (actual: ${me?.calories_kcal})`)
     } else {
-      assert(false, 'daily_logs record should exist for meal confirmation')
+      assert(false, 'daily_logs record exists for TC6')
     }
 
-    const pendingSession = await dbQueryFirst(`SELECT * FROM bot_mode_sessions WHERE line_user_id = '${userId}' AND current_step = 'pending_image_confirm'`)
-    assert(pendingSession === null, 'pending_image_confirm session cleared')
+    const sessionAfter = await dbQueryFirst(`SELECT * FROM bot_mode_sessions WHERE line_user_id = '${userId}' AND current_step = 'pending_image_confirm'`)
+    assert(sessionAfter === null, 'pending_image_confirm session cleared')
   } else {
-    assert(false, 'user_accounts record should exist')
+    assert(false, 'user_accounts record exists for TC6')
   }
 }
 
@@ -587,39 +568,14 @@ async function tc7_imageCancel() {
 
   const userId = 'U_e2e_user_007'
 
-  // setup: 問診完走
-  console.log('  Setup: completing intake...')
-  await completeIntake(userId, 'TST-0007', { nickname: '次郎', ageRange: '40s', height: '175', currentWeight: '80', targetWeight: '70', activity: 'sedentary' })
+  const setupOk = await setupCompletedUser(userId, 'TST-0007')
+  assert(setupOk, 'TC7 setup: intake_completed = 1')
 
-  // Simulate pending image confirm via DB
-  // FK チェーン: image_intake_results → message_attachments → conversation_messages → conversation_threads
   console.log('  Simulating pending_image_confirm state')
   const ua = await dbQueryFirst(`SELECT id FROM user_accounts WHERE line_user_id = '${userId}'`)
   if (ua) {
     const intakeResultId = 'iir_e2e_tc7_001'
-    const msgId = 'cm_e2e_tc7_001'
-    const maId = 'ma_e2e_tc7_001'
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19)
-
-    // 1. conversation_thread を取得
-    const thread = await dbQueryFirst(`SELECT id FROM conversation_threads WHERE user_account_id = '${ua.id}' LIMIT 1`)
-
-    // 2. conversation_messages にダミー画像メッセージを作成
-    if (thread) {
-      await dbExec(
-        `INSERT OR IGNORE INTO conversation_messages (id, thread_id, sender_type, line_message_id, message_type, raw_text, mode_at_send, sent_at, created_at)
-         VALUES (?1, ?2, 'user', 'lm_e2e_tc7', 'image', NULL, 'record', ?3, ?3)`,
-        [msgId, thread.id, now]
-      )
-
-      // 3. message_attachments にダミー添付ファイルを作成
-      await dbExec(
-        `INSERT OR IGNORE INTO message_attachments (id, message_id, storage_provider, storage_key, content_type, created_at)
-         VALUES (?1, ?2, 'r2', 'e2e/tc7/test.jpg', 'image/jpeg', ?3)`,
-        [maId, msgId, now]
-      )
-    }
-
     const proposedAction = JSON.stringify({
       action: 'create_or_update_meal_entry',
       meal_type: 'dinner',
@@ -632,14 +588,25 @@ async function tc7_imageCancel() {
       client_account_id: CLIENT_ACCOUNT_ID,
     })
 
-    // 4. image_intake_results に pending レコード作成
+    // FK chain: image_intake_results → message_attachments → conversation_messages → conversation_threads
+    const thread7 = await dbQueryFirst(`SELECT id FROM conversation_threads WHERE user_account_id = '${ua.id}' LIMIT 1`)
+    if (thread7) {
+      await dbExec(
+        `INSERT OR IGNORE INTO conversation_messages (id, thread_id, sender_type, message_type, raw_text, sent_at, created_at) VALUES ('cm_e2e_tc7', ?1, 'user', 'image', '[TC7 test image]', ?2, ?2)`,
+        [thread7.id, now]
+      )
+      await dbExec(
+        `INSERT OR IGNORE INTO message_attachments (id, message_id, storage_provider, storage_key, content_type, created_at) VALUES ('ma_e2e_tc7', 'cm_e2e_tc7', 'r2', 'e2e/tc7_test.jpg', 'image/jpeg', ?1)`,
+        [now]
+      )
+    }
+
     await dbExec(
       `INSERT OR IGNORE INTO image_intake_results (id, message_attachment_id, user_account_id, line_user_id, image_category, confidence_score, extracted_json, proposed_action_json, applied_flag, expires_at, created_at)
-       VALUES (?1, ?2, ?3, ?4, 'meal_photo', 0.90, '{}', ?5, 0, datetime('now', '+24 hours'), ?6)`,
-      [intakeResultId, maId, ua.id, userId, proposedAction, now]
+       VALUES (?1, 'ma_e2e_tc7', ?2, ?3, 'meal_photo', 0.90, '{}', ?4, 0, datetime('now', '+24 hours'), ?5)`,
+      [intakeResultId, ua.id, userId, proposedAction, now]
     )
 
-    // 5. bot_mode_sessions を pending_image_confirm に設定
     const sessionData = JSON.stringify({ intakeResultId, category: 'meal_photo' })
     await dbExec(
       `INSERT OR REPLACE INTO bot_mode_sessions (id, client_account_id, line_user_id, current_mode, current_step, session_data, turn_count, expires_at, created_at, updated_at)
@@ -663,10 +630,10 @@ async function tc7_imageCancel() {
       assert(true, 'no daily_log means no meal entry (correct)')
     }
 
-    const pendingSession = await dbQueryFirst(`SELECT * FROM bot_mode_sessions WHERE line_user_id = '${userId}' AND current_step = 'pending_image_confirm'`)
-    assert(pendingSession === null, 'pending session cleared after cancel')
+    const sessionAfter = await dbQueryFirst(`SELECT * FROM bot_mode_sessions WHERE line_user_id = '${userId}' AND current_step = 'pending_image_confirm'`)
+    assert(sessionAfter === null, 'pending session cleared after cancel')
   } else {
-    assert(false, 'user_accounts record should exist')
+    assert(false, 'user_accounts record exists for TC7')
   }
 }
 
@@ -677,15 +644,14 @@ async function tc8_consultMode() {
 
   const userId = 'U_e2e_user_008'
 
-  // setup: 問診完走
-  console.log('  Setup: completing intake...')
-  await completeIntake(userId, 'TST-0008', { nickname: '三郎', height: '175', currentWeight: '80', targetWeight: '70' })
+  const setupOk = await setupCompletedUser(userId, 'TST-0008')
+  assert(setupOk, 'TC8 setup: intake_completed = 1')
 
   // 相談モードに切替
   console.log('  Send: 相談モード')
   let res = await sendWebhookEvent([makeTextEvent(userId, '相談モード')])
   assert(res.status === 200, 'consult mode switch returns 200')
-  await sleep(600)
+  await sleep(800)
 
   const ua = await dbQueryFirst(`SELECT id FROM user_accounts WHERE line_user_id = '${userId}'`)
   if (ua) {
@@ -723,12 +689,8 @@ async function tc9_richMenuButtons() {
 
   const userId = 'U_e2e_user_009'
 
-  // setup: 問診完走
-  console.log('  Setup: completing intake...')
-  await completeIntake(userId, 'TST-0009', { nickname: '四郎', currentWeight: '70', targetWeight: '60' })
-
-  const uss0 = await dbQueryFirst(`SELECT * FROM user_service_statuses WHERE line_user_id = '${userId}'`)
-  assert(uss0?.intake_completed === 1, 'TC9 setup: intake_completed = 1')
+  const setupOk = await setupCompletedUser(userId, 'TST-0009')
+  assert(setupOk, 'TC9 setup: intake_completed = 1')
 
   // Button 1: 記録モード
   console.log('  Button 1: 記録モード')
@@ -752,7 +714,7 @@ async function tc9_richMenuButtons() {
   console.log('  Button 4: 相談モード')
   res = await sendWebhookEvent([makeTextEvent(userId, '相談モード')])
   assert(res.status === 200, 'btn4 相談モード returns 200')
-  await sleep(500)
+  await sleep(600)
 
   const ua = await dbQueryFirst(`SELECT id FROM user_accounts WHERE line_user_id = '${userId}'`)
   if (ua) {
@@ -772,7 +734,7 @@ async function tc9_richMenuButtons() {
   console.log('  Button 6: 問診やり直し')
   res = await sendWebhookEvent([makeTextEvent(userId, '問診やり直し')])
   assert(res.status === 200, 'btn6 問診やり直し returns 200')
-  await sleep(600)
+  await sleep(800)
 
   const ussAfter = await dbQueryFirst(`SELECT * FROM user_service_statuses WHERE line_user_id = '${userId}'`)
   assert(ussAfter?.intake_completed === 0, 'after 問診やり直し: intake_completed = 0')

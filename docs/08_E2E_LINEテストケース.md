@@ -8,13 +8,11 @@ DB 状態遷移・LINE 応答メッセージ・モードセッション遷移を
 
 ## テスト方針
 
-- **署名検証をバイパス**: テスト用リクエストでは `X-Line-Signature` を正しいHMAC-SHA256署名で生成
+- **署名検証**: テスト用リクエストでは `X-Line-Signature` を正しいHMAC-SHA256署名で生成
 - **LINE API モック不要**: LINE reply/push API はダミートークンのため 4xx が返るが、
   webhook 処理自体は完走するため DB 状態を検証の主軸とする
-- **テストデータの独立性**: 各テストケースで固有の `lineUserId` を使用し、相互干渉を防ぐ
-- **DB クエリは HTTP 経由**: `/api/test/query` & `/api/test/exec` エンドポイントで高速化（wrangler spawn 不要）
-
----
+- **テストデータの独立性**: 各テストケースで固有の `lineUserId` (`U_e2e_*`) を使用し、相互干渉を防ぐ
+- **DB アクセス高速化**: `/api/test/query` (HTTP) 経由でクエリを実行し、wrangler プロセス起動を回避
 
 ## 前提条件
 
@@ -22,34 +20,27 @@ DB 状態遷移・LINE 応答メッセージ・モードセッション遷移を
 |------|-----|
 | ローカルサーバー | `http://localhost:3000` |
 | Webhook URL | `POST /api/webhooks/line` |
+| テスト用DB API | `POST /api/test/query`, `POST /api/test/exec` |
 | LINE_CHANNEL_SECRET | `.dev.vars` の値 (`dummy_secret_for_local_dev`) |
-| LINE_CHANNEL_ID | `ch_default_replace_me` (line_channels テーブルの内部 ID) |
+| LINE_CHANNEL_ID | `.dev.vars` の値 (`ch_default_replace_me`) |
 | CLIENT_ACCOUNT_ID | `acc_client_00000000000000000000000000000001` |
-| テスト用招待コード | テスト前に DB に INSERT（`TST-0001` 〜 `TST-0009`） |
-| intake_forms | `default_intake` レコードが必要（FK 制約） |
-| APP_ENV | `development`（/api/test/* エンドポイントの有効化に必要） |
+| テスト用招待コード | `TST-0001` 〜 `TST-0009`（E2E seed で自動投入） |
+| 基盤データ | `seed.sql` から自動投入（accounts, line_channels, intake_forms 等） |
 
-### 必須 seed レコード
+### 環境セットアップ
 
-テスト実行前に以下のレコードが DB に存在する必要がある:
+テストスクリプトが自動的に以下を行う:
 
-| テーブル | ID | 説明 |
-|---------|-----|------|
-| `accounts` | `acc_client_00000000000000000000000000000001` | テストクリニック |
-| `account_memberships` | `mem_admin_00000000000000000000000000000001` | クライアント管理者 |
-| `line_channels` | `ch_default_replace_me` | LINE チャンネル設定 |
-| `intake_forms` | `default_intake` | 初回問診フォーム定義 |
-| `subscriptions` | `sub_client_...` | Pro プラン（任意） |
-
-これらは `seed.sql` で投入される。E2E テスト固有のデータ（招待コード等）は `tests/e2e-seed.sql` で投入される。
-
----
+1. **基盤データ確認**: `accounts` テーブルにクライアントアカウントが無ければ `seed.sql` を投入
+2. **line_channels 整合性修正**: `channel_id` を `.dev.vars` の `LINE_CHANNEL_ID` と一致させる
+3. **E2E データクリーンアップ**: `U_e2e_*` パターンの全テストデータを削除
+4. **招待コード投入**: `TST-0001`〜`TST-0009` を HTTP 経由で INSERT
 
 ## テストユーザー
 
 | ユーザーID | 用途 |
 |-----------|------|
-| `U_e2e_user_001` | TC1: 新規ユーザー（問診完走）、TC3: 完了後コード再送 |
+| `U_e2e_user_001` | TC1: 新規ユーザー（問診完走）/ TC3: コード再送テスト |
 | `U_e2e_user_002` | TC2: 問診途中離脱→再開 |
 | `U_e2e_user_004` | TC4: 別ユーザー使用済みコード |
 | `U_e2e_user_005` | TC5: 体重記録 |
@@ -58,22 +49,20 @@ DB 状態遷移・LINE 応答メッセージ・モードセッション遷移を
 | `U_e2e_user_008` | TC8: 相談モード |
 | `U_e2e_user_009` | TC9: Rich Menu 全ボタン |
 
----
-
-## 招待コード（三文字プレフィックス `TST-`）
+## 招待コード
 
 | コード | ID | max_uses | 用途 |
 |--------|-----|----------|------|
-| `TST-0001` | `ic_e2e_001` | 1 | TC1 新規登録用 / TC3 再送テスト / TC4 使用上限テスト |
+| `TST-0001` | `ic_e2e_001` | 1 | TC1 新規登録用（TC4 で使用上限テスト） |
 | `TST-0002` | `ic_e2e_002` | 1 | TC2 途中離脱→再開 |
-| `TST-0003` | `ic_e2e_003` | 1 | TC3 (予備) |
+| `TST-0003` | `ic_e2e_003` | 1 | TC3 （未使用、予備） |
 | `TST-0005` | `ic_e2e_005` | 1 | TC5 体重記録用 |
 | `TST-0006` | `ic_e2e_006` | 1 | TC6 食事写真（確定）用 |
 | `TST-0007` | `ic_e2e_007` | 1 | TC7 食事写真（取消）用 |
 | `TST-0008` | `ic_e2e_008` | 1 | TC8 相談モード用 |
 | `TST-0009` | `ic_e2e_009` | 1 | TC9 Rich Menu用 |
 
-**正規表現パターン**: `/^([A-Z]{3}-\d{4})$/i`
+> **注意**: コードは3文字プレフィックス `TST-` + 4桁数字。`INVITE_CODE_PATTERN = /^([A-Z]{3}-\d{4})$/i` にマッチ。
 
 ---
 
@@ -86,41 +75,34 @@ DB 状態遷移・LINE 応答メッセージ・モードセッション遷移を
 **ステップ**:
 1. follow イベント送信 → 招待コード入力を促すメッセージ
 2. テキスト `TST-0001` 送信 → 登録完了 + Q1 送信
-3. Q1: `テスト太郎` → Q2（性別）へ
-4. Q2: `男性` → Q3（年代）へ
-5. Q3: `30s` → Q4（身長）へ
-6. Q4: `170` → Q5（現在体重）へ
-7. Q5: `75` → Q6（目標体重）へ
-8. Q6: `65` → Q7（目標・理由）へ
-9. Q7: `夏までに痩せたい` → Q8（気になること）へ
-10. Q8: `お腹まわり` → タグ追加（同じ Q8 に留まる）
-11. Q8: `次へ` → Q9（活動レベル）へ
-12. Q9: `moderate` → 完了メッセージ
+3. Q1: `テスト太郎` → Q2 へ (intake_gender)
+4. Q2: `男性` → Q3 へ (intake_age_range)
+5. Q3: `30s` → Q4 へ (intake_height)
+6. Q4: `170` → Q5 へ (intake_current_weight)
+7. Q5: `75` → Q6 へ (intake_target_weight)
+8. Q6: `65` → Q7 へ (intake_goal)
+9. Q7: `夏までに痩せたい` → Q8 へ (intake_concerns)
+10. Q8: `お腹まわり` → タグ追加（同じ Q8 intake_concerns に留まる）
+11. Q8: `次へ` → Q9 へ (intake_activity)
+12. Q9: `moderate` → 完了メッセージ (mode = record)
 
-**期待される DB 更新**:
+**検証ポイント** (32項目):
 
-| テーブル | カラム | 値 |
-|---------|--------|-----|
-| `line_users` | `line_user_id` | `U_e2e_user_001` |
-| `invite_code_usages` | `line_user_id` | `U_e2e_user_001` (1件) |
-| `invite_codes` (TST-0001) | `use_count` | `1` |
-| `user_service_statuses` | `bot_enabled` | `1` |
-| `user_service_statuses` | `intake_completed` | `1` |
-| `bot_mode_sessions` | `current_mode` | `record` (問診完了後) |
-| `user_profiles` | `nickname` | `テスト太郎` |
-| `user_profiles` | `gender` | `male` |
-| `user_profiles` | `height_cm` | `170` |
-| `user_profiles` | `current_weight_kg` | `75` |
-| `user_profiles` | `target_weight_kg` | `65` |
-| `user_profiles` | `activity_level` | `moderate` |
-| `intake_answers` | count | `≥ 9` |
-| `body_metrics` | `weight_kg` | `75` (初期体重) |
+| テーブル | 検証内容 |
+|---------|---------|
+| `line_users` | レコード作成（line_user_id = U_e2e_user_001） |
+| `invite_code_usages` | レコード 1件作成 |
+| `user_service_statuses` | `bot_enabled = 1`, 最終的に `intake_completed = 1` |
+| `bot_mode_sessions` | 各ステップで `current_step` が正しく遷移 |
+| `user_profiles` | nickname=テスト太郎, gender=male, height_cm=170, current_weight_kg=75, target_weight_kg=65, activity_level=moderate |
+| `intake_answers` | 9件の回答 |
+| `invite_codes` | `use_count = 1` |
 
-**LINE 応答メッセージ** (DB 検証のみ、LINE API はダミー):
-- follow → 「🎉 友だち追加ありがとうございます！」
-- TST-0001 → 「✅ 招待コード「TST-0001」で登録が完了しました！」+ Q1 質問
-- Q1〜Q8 → 各ステップの質問テキスト
-- Q9 → 「🎉 ヒアリングが完了しました！...」
+**LINE 応答メッセージ**:
+- follow: 「🎉 友だち追加ありがとうございます！」
+- 招待コード: 「✅ 招待コード「TST-0001」で登録が完了しました！」+ Q1
+- 各Q: 次の質問テキスト + Quick Reply
+- Q9回答後: 「登録が完了しました！...テスト太郎さん...10kg 減量...」
 
 ---
 
@@ -132,23 +114,23 @@ DB 状態遷移・LINE 応答メッセージ・モードセッション遷移を
 1. follow + コード `TST-0002` → Q1
 2. Q1: `テスト花子` → Q2
 3. Q2: `女性` → Q3
-4. Q3: `20s` → Q4
+4. Q3: `20s` → Q4 (intake_height)
 5. （離脱: 何も送らない）
-6. テキスト `TST-0002`（同じコードを再送）→ Q4（身長）の質問が直接返る
-7. Q4〜Q9 を完走
+6. テキスト `TST-0002`（同じコードを再送）→ Q4 の質問がそのまま返る
+7. Q4: `160` → Q5 へ
+8. Q5〜Q9: `55`, `50`, `健康になりたい`, `次へ`, `light` で完走
 
-**期待される DB 更新**:
+**検証ポイント** (3項目):
 
 | テーブル | 検証内容 |
 |---------|---------|
-| `bot_mode_sessions` | Q3回答後: `current_step = intake_height` |
-| `bot_mode_sessions` | コード再送後: `current_step = intake_height` (変化なし) |
-| `intake_answers` | 途中: nickname, gender, age_range の 3件 → 最終的に 9件 |
+| `bot_mode_sessions` | 離脱前: `current_step = intake_height` |
+| `bot_mode_sessions` | コード再送後: `current_step = intake_height`（変化なし） |
 | `user_service_statuses` | 最終: `intake_completed = 1` |
 
 **LINE 応答メッセージ**:
-- コード再送 → Q4の質問テキスト「身長を教えてください（cm）」が直接返る
-- 最終 → 完了メッセージ
+- コード再送: P6 により Q4 の質問テキスト「身長を教えてください（cm）」が直接返る
+- 「続けますか？」のプロンプトは表示されない（SSOT §6.1 準拠）
 
 ---
 
@@ -156,19 +138,21 @@ DB 状態遷移・LINE 応答メッセージ・モードセッション遷移を
 
 **目的**: Pattern B（問診完了済み＋コード再送）で利用案内が返ること
 
-**前提**: TC1 で `TST-0001` を使い問診完了した `U_e2e_user_001` がいる状態
-
 **ステップ**:
-1. `U_e2e_user_001` から再度 `TST-0001` を送信
-2. → 「ℹ️ 既に登録済みです。そのままご利用いただけます！」のメッセージ
+1. TC1 で `TST-0001` を使い問診完了した `U_e2e_user_001` がいる状態
+2. `U_e2e_user_001` から再度 `TST-0001` を送信
+3. → 利用案内メッセージが返る
 
-**期待される DB 更新**:
+**検証ポイント** (3項目):
 
 | テーブル | 検証内容 |
 |---------|---------|
+| HTTP | 200 OK |
 | `invite_code_usages` | レコード数は変化なし（新規 usage は作成されない） |
 | `user_service_statuses` | `intake_completed = 1` のまま |
-| `invite_codes` (TST-0001) | `use_count = 1` のまま |
+
+**LINE 応答メッセージ**:
+- 「ℹ️ 既に登録済みです。そのままご利用いただけます！...」
 
 ---
 
@@ -178,15 +162,19 @@ DB 状態遷移・LINE 応答メッセージ・モードセッション遷移を
 
 **ステップ**:
 1. `U_e2e_user_004` が follow → 招待コード入力を促される
-2. `TST-0001`（TC1 で使用済み、max_uses=1）を送信
-3. → 「⚠️ この招待コードは使用上限に達しています」メッセージ
+2. `TST-0001`（TC1 で使用済み、max_uses=1, use_count=1）を送信
+3. → 「この招待コードは使用上限に達しています」メッセージ
 
-**期待される DB 更新**:
+**検証ポイント** (3項目):
 
 | テーブル | 検証内容 |
 |---------|---------|
+| HTTP | 200 OK |
 | `invite_code_usages` | `U_e2e_user_004` のレコードなし |
-| `user_service_statuses` | `intake_completed = 0` or レコードなし |
+| `user_service_statuses` | `intake_completed = 0` または レコードなし |
+
+**LINE 応答メッセージ**:
+- 「⚠️ この招待コードは使用上限に達しています。担当者にお問い合わせください。」
 
 ---
 
@@ -194,21 +182,27 @@ DB 状態遷移・LINE 応答メッセージ・モードセッション遷移を
 
 **目的**: 体重パターン検出と DB 書き込みの正確性
 
-**前提**: `U_e2e_user_005` が `TST-0005` で問診完了済み
+**前提**: `setupCompletedUser()` で follow + `TST-0005` + 問診9問完走済み
 
 **ステップ**:
-1. 問診完了後の `U_e2e_user_005` からテキスト `65.5kg` を送信
+1. テキスト `65.5kg` を送信
 2. → 「体重 65.5kg を記録しました ✅」メッセージ
 
-**期待される DB 更新**:
+**検証ポイント** (4項目):
 
-| テーブル | カラム | 値 |
-|---------|--------|-----|
-| `daily_logs` | `user_account_id` | 今日の日付でレコードが存在 |
-| `body_metrics` | `weight_kg` | `65.5` |
-| `body_metrics` | `daily_log_id` | 今日の daily_logs に紐づく |
+| テーブル | 検証内容 |
+|---------|---------|
+| セットアップ | `intake_completed = 1` |
+| HTTP | 200 OK |
+| `body_metrics` | `weight_kg = 65.5`（JOIN daily_logs で user_account_id 紐付き） |
+| `daily_logs` | 今日の日付でレコードが存在 |
 
-**WEIGHT_PATTERN**: `/(\d{2,3}(?:\.\d{1,2})?)\s*(?:kg|ｋｇ|キロ|Kg|KG)/i`
+**LINE 応答メッセージ**:
+- 「体重 65.5kg を記録しました ✅ 他に記録することはありますか？」+ Quick Reply
+
+**LIFF/管理画面での反映**:
+- ユーザーダッシュボード: 体重チャートに 65.5kg が反映
+- 管理画面: ユーザー詳細で最新体重が 65.5kg
 
 ---
 
@@ -216,33 +210,46 @@ DB 状態遷移・LINE 応答メッセージ・モードセッション遷移を
 
 **目的**: 画像受信→解析→pending→確定フローの完走
 
-**前提**: `U_e2e_user_006` が `TST-0006` で問診完了済み
+**前提**: `setupCompletedUser()` で問診完走済み
 
 **ステップ**:
-1. DB に直接 pending 状態を作成:
-   - `conversation_messages` にダミー画像メッセージ
-   - `message_attachments` にダミー添付ファイル（FK 制約対応）
-   - `image_intake_results` に pending レコード (`applied_flag = 0`)
-   - `bot_mode_sessions` を `pending_image_confirm` に設定
+1. DB に直接テストデータを作成:
+   - `conversation_messages` (image タイプ)
+   - `message_attachments` (FK チェーン)
+   - `image_intake_results` (applied_flag=0, proposed_action: lunch 550kcal)
+   - `bot_mode_sessions` (current_step=pending_image_confirm)
 2. テキスト `確定` 送信
 3. → 「✅ 食事記録を保存しました！」メッセージ
 
-**期待される DB 更新**:
+**検証ポイント** (5項目):
 
-| テーブル | カラム | 値 |
-|---------|--------|-----|
-| `image_intake_results` | `applied_flag` | `1` (confirmed) |
-| `daily_logs` | | 今日分が作成 |
-| `meal_entries` | `confirmation_status` | `confirmed` |
-| `meal_entries` | `calories_kcal` | `550` |
-| `meal_entries` | `protein_g` | `35` |
-| `meal_entries` | `fat_g` | `12` |
-| `meal_entries` | `carbs_g` | `65` |
-| `bot_mode_sessions` | `current_step` | `pending_image_confirm` が削除 |
+| テーブル | 検証内容 |
+|---------|---------|
+| HTTP | 200 OK |
+| `image_intake_results` | `applied_flag = 1` (confirmed) |
+| `meal_entries` | 新規レコード作成（`confirmation_status = 'confirmed'`） |
+| `meal_entries` | `calories_kcal = 550` |
+| `bot_mode_sessions` | `pending_image_confirm` セッションがクリア済み |
 
-**注意**: ローカル環境では OpenAI API がダミーのため、画像解析自体は失敗する。
-そのため DB に直接 `image_intake_results` と pending セッションを挿入し、確定フローのみテストする。
-FK チェーン (`image_intake_results → message_attachments → conversation_messages → conversation_threads`) を正しく構築すること。
+**DB テストデータ構造**:
+```json
+{
+  "action": "create_or_update_meal_entry",
+  "meal_type": "lunch",
+  "meal_text": "テスト昼食（サラダチキン、白米、味噌汁）",
+  "calories_kcal": 550,
+  "protein_g": 35,
+  "fat_g": 12,
+  "carbs_g": 65
+}
+```
+
+**注意**: ローカル環境では OpenAI API がダミーのため、画像解析は実行できない。
+TC6 は DB に直接 `image_intake_results` を作成し、確定フローのみをテストする。
+
+**LIFF/管理画面での反映**:
+- ユーザーダッシュボード: 食事一覧に昼食 550kcal が表示
+- 管理画面: ユーザー詳細の本日の食事に反映
 
 ---
 
@@ -250,22 +257,21 @@ FK チェーン (`image_intake_results → message_attachments → conversation_
 
 **目的**: 画像取消フローの正確性
 
-**前提**: `U_e2e_user_007` が `TST-0007` で問診完了済み
+**前提**: `setupCompletedUser()` で問診完走済み
 
 **ステップ**:
-1. TC6 と同様に pending 状態を DB に作成
+1. TC6 と同様に pending 状態をDB直接作成（`U_e2e_user_007`, dinner 700kcal）
 2. テキスト `取消` 送信
-3. → 「🗑 この記録を取り消しました」メッセージ
+3. → 「🗑 この記録を取り消しました。」メッセージ
 
-**期待される DB 更新**:
+**検証ポイント** (4項目):
 
-| テーブル | カラム | 値 |
-|---------|--------|-----|
-| `image_intake_results` | `applied_flag` | `2` (discarded) |
-| `meal_entries` | | 新規 confirmed レコードなし |
-| `bot_mode_sessions` | | pending セッションがクリア |
-
-**IMAGE_CANCEL_KEYWORDS**: `['取消', 'キャンセル', 'cancel', 'いいえ', 'no', 'やめる', '削除']`
+| テーブル | 検証内容 |
+|---------|---------|
+| HTTP | 200 OK |
+| `image_intake_results` | `applied_flag = 2` (discarded) |
+| `meal_entries` | `confirmed` なレコードは作成されていない |
+| `bot_mode_sessions` | セッションクリア |
 
 ---
 
@@ -273,23 +279,31 @@ FK チェーン (`image_intake_results → message_attachments → conversation_
 
 **目的**: consult モード切替・AI 応答・record モード復帰の一連フロー
 
-**前提**: `U_e2e_user_008` が `TST-0008` で問診完了済み
+**前提**: `setupCompletedUser()` で問診完走済み
 
 **ステップ**:
-1. テキスト `相談モード` 送信 → 「💬 相談モードに切り替えました」
+1. テキスト `相談モード` 送信 → 「💬 相談モードに切り替えました。」
 2. テキスト `ダイエット中に間食していいですか？` 送信
-3. → AI 応答（OpenAI ダミーのため失敗する可能性あり。エラーメッセージでも可）
-4. テキスト `記録モード` 送信 → 「📝 記録モードに切り替えました」
+3. → AI 応答（OpenAI ダミーのためエラー応答の可能性あり。DB 遷移を主に検証）
+4. テキスト `記録モード` 送信 → 「📝 記録モードに切り替えました。」
 
-**期待される DB 更新**:
+**検証ポイント** (7項目):
 
-| テーブル | カラム | 検証内容 |
-|---------|--------|---------|
-| `conversation_threads` | `current_mode` | `consult` → `record` と遷移 |
-| `conversation_messages` | `sender_type = 'user'` | 間食に関するメッセージが保存 |
+| テーブル | 検証内容 |
+|---------|---------|
+| セットアップ | `intake_completed = 1` |
+| HTTP | 各イベント 200 OK |
+| `conversation_threads` | `current_mode = 'consult'`（切替後） |
+| `conversation_messages` | ユーザー発言「間食」を含むメッセージが保存 |
+| `conversation_threads` | `current_mode = 'record'`（戻り後） |
 
-**SWITCH_TO_CONSULT**: `['相談モード', '相談にして', '相談する']`
-**SWITCH_TO_RECORD**: `['記録モード', '記録にして', '記録する', '戻る']`
+**LINE 応答メッセージ**:
+- 「💬 相談モードに切り替えました。お気軽にご相談ください！」
+- AI 応答テキスト（またはエラーメッセージ）
+- 「📝 記録モードに切り替えました。体重・食事・運動などを記録しましょう！」
+
+**LIFF/管理画面での反映**:
+- 管理画面: 会話ログに consult モードの質問・回答が表示
 
 ---
 
@@ -297,39 +311,38 @@ FK チェーン (`image_intake_results → message_attachments → conversation_
 
 **目的**: 各 Rich Menu ボタンのテキストトリガーが正しく処理されること
 
-**前提**: `U_e2e_user_009` が `TST-0009` で問診完了済み
+**前提**: `setupCompletedUser()` で問診完走済み
 
 **ステップ**:
-1. `記録モード` → 「📝 記録モードに切り替えました」
-2. `写真を送る` → 「📷 食事の写真を送ってください！」
-3. `体重記録` → 「⚖️ 体重を入力してください！」
-4. `相談モード` → 「💬 相談モードに切り替えました」
-5. `ダッシュボード` → URI action（webhook テスト対象外）
+1. `記録モード` → 200 OK
+2. `写真を送る` → 200 OK（「📷 食事の写真を送ってください！」）
+3. `体重記録` → 200 OK（「⚖️ 体重を入力してください！」）
+4. `相談モード` → 200 OK（「💬 相談モードに切り替えました」）
+5. `ダッシュボード` → URI action のためスキップ（webhook テスト対象外）
 6. `記録モード` → record に戻す
-7. `問診やり直し` → 問診 Q1 が送信される
+7. `問診やり直し` → intake_completed=0 にリセット、Q1 送信
 
-**期待される DB 更新**:
+**検証ポイント** (10項目):
 
-| テーブル | カラム | 検証内容 |
-|---------|--------|---------|
-| `conversation_threads` | `current_mode` | `相談モード` 後: `consult` |
-| `user_service_statuses` | `intake_completed` | `問診やり直し` 後: `0` にリセット |
-| `bot_mode_sessions` | `current_mode` | `問診やり直し` 後: `intake` |
-| `bot_mode_sessions` | `current_step` | `問診やり直し` 後: `intake_nickname` (Q1) |
+| テーブル | 検証内容 |
+|---------|---------|
+| セットアップ | `intake_completed = 1` |
+| HTTP | 各ボタン 200 OK |
+| `conversation_threads` | btn4 後: `current_mode = 'consult'` |
+| `user_service_statuses` | 問診やり直し後: `intake_completed = 0` |
+| `bot_mode_sessions` | 問診やり直し後: `current_mode = 'intake'` |
+| `bot_mode_sessions` | 問診やり直し後: `current_step = 'intake_nickname'` |
 
----
+**Rich Menu ボタンマッピング**:
 
-## LIFF / admin / superadmin UI 反映
-
-| 画面 | TC | 期待される反映 |
-|------|-----|--------------|
-| LIFF ダッシュボード | TC1 | ユーザープロファイル（ニックネーム、目標等）が表示 |
-| LIFF ダッシュボード | TC5 | 体重グラフに 65.5kg がプロット |
-| LIFF ダッシュボード | TC6 | 食事一覧に昼食（550kcal）が表示 |
-| Admin ユーザー管理 | TC1 | 新規ユーザー（テスト太郎）がリストに表示 |
-| Admin 招待コード | TC1 | TST-0001 の use_count が 1 に |
-| Admin ユーザー管理 | TC8 | 会話履歴に相談メッセージが表示 |
-| Superadmin | TC1-9 | 全アカウント横断でユーザー数が増加 |
+| ボタン | 送信テキスト | アクション |
+|--------|-------------|-----------|
+| 1 | `記録モード` | record モードに切替 |
+| 2 | `写真を送る` | 画像送信案内を返信 |
+| 3 | `体重記録` | 体重入力案内を返信 |
+| 4 | `相談モード` | consult モードに切替 |
+| 5 | (URI) | LIFF ダッシュボードを開く |
+| 6 | `問診やり直し` | intake_completed リセット + Q1 送信 |
 
 ---
 
@@ -337,45 +350,47 @@ FK チェーン (`image_intake_results → message_attachments → conversation_
 
 | テストケース | テーブル | 検証内容 |
 |-------------|---------|---------|
+| TC1 | `line_users` | 新規レコード作成 |
 | TC1 | `invite_code_usages` | 1件作成 |
-| TC1 | `user_profiles` | 全フィールド保存（nickname, gender, height_cm, etc.） |
-| TC1 | `intake_answers` | 9件 |
-| TC1 | `user_service_statuses` | `intake_completed = 1` |
-| TC1 | `body_metrics` | 初期体重 75kg 記録 |
 | TC1 | `invite_codes` | `use_count = 1` |
-| TC2 | `bot_mode_sessions` | intake → 途中ステップ保持 → 完了 |
-| TC2 | `intake_answers` | 途中まで保存→最終的に 9件 |
+| TC1 | `user_service_statuses` | `bot_enabled=1`, `intake_completed=1` |
+| TC1 | `user_accounts` | 新規レコード（line_user_id → client_account_id 紐付け） |
+| TC1 | `user_profiles` | 全9フィールド保存 |
+| TC1 | `intake_answers` | 9件（nickname〜activity_level） |
+| TC1 | `bot_mode_sessions` | 各ステップで遷移、最後にクリア |
+| TC2 | `bot_mode_sessions` | intake → 途中ステップ保持 → 再開 |
+| TC2 | `intake_answers` | 途中まで保存→最終的に9件 |
+| TC2 | `user_service_statuses` | 最終: `intake_completed=1` |
 | TC3 | `invite_code_usages` | 変化なし |
-| TC4 | `invite_code_usages` | 新規レコードなし |
+| TC4 | `invite_code_usages` | 新規なし |
+| TC4 | `invite_codes` | `use_count` 変化なし |
 | TC5 | `daily_logs` | 今日分作成 |
-| TC5 | `body_metrics` | `weight_kg = 65.5` |
-| TC6 | `image_intake_results` | `applied_flag = 1` |
-| TC6 | `meal_entries` | confirmed, calories_kcal=550 |
-| TC7 | `image_intake_results` | `applied_flag = 2` |
-| TC7 | `meal_entries` | confirmed レコードなし |
-| TC8 | `conversation_threads` | mode: consult → record |
-| TC8 | `conversation_messages` | user + bot メッセージ |
-| TC9 | `user_service_statuses` | `intake_completed → 0` |
-| TC9 | `bot_mode_sessions` | intake モード、intake_nickname ステップ |
+| TC5 | `body_metrics` | `weight_kg=65.5` |
+| TC6 | `image_intake_results` | `applied_flag=1` |
+| TC6 | `meal_entries` | confirmed レコード（550kcal） |
+| TC7 | `image_intake_results` | `applied_flag=2` |
+| TC7 | `meal_entries` | confirmed なし |
+| TC8 | `conversation_threads` | `current_mode`: consult → record 遷移 |
+| TC8 | `conversation_messages` | user 発言保存 |
+| TC9 | `user_service_statuses` | `intake_completed=0`（問診やり直し後） |
+| TC9 | `bot_mode_sessions` | `current_mode=intake`, `current_step=intake_nickname` |
 
 ---
 
-## 修正履歴
+## LIFF / 管理画面 / SuperAdmin での反映
 
-### 2026-03-13 修正
+| テストケース | 画面 | 反映内容 |
+|-------------|------|---------|
+| TC1 | 管理画面: ユーザー一覧 | テスト太郎が新規ユーザーとして表示 |
+| TC1 | 管理画面: ユーザー詳細 | プロフィール情報（性別、身長、体重、目標等） |
+| TC1 | LIFF: ダッシュボード | プロフィール欄にニックネーム表示 |
+| TC5 | LIFF: 体重チャート | 65.5kg がプロット |
+| TC5 | 管理画面: ユーザー詳細 | 最新体重 65.5kg |
+| TC6 | LIFF: 食事一覧 | 昼食 550kcal が表示 |
+| TC6 | 管理画面: ユーザー詳細 | 本日の食事に反映 |
+| TC8 | 管理画面: 会話ログ | consult モードの Q&A が表示 |
 
-1. **招待コードプレフィックスを TST- に統一** (`TEST-XXXX` → `TST-XXXX`)
-   - 正規表現 `[A-Z]{3}-\d{4}` に合致する3文字プレフィックスに変更
-2. **intake_forms テーブルに `default_intake` レコードを追加**
-   - `intake_answers.intake_form_id = 'default_intake'` の FK 制約を解消
-   - `seed.sql` と `tests/e2e-seed.sql` の両方に追加
-3. **TC6/TC7 の FK チェーン構築を修正**
-   - `image_intake_results.message_attachment_id` → `message_attachments.id` → `conversation_messages.id` の完全な FK チェーンを構築
-   - テスト用のダミー `conversation_messages` と `message_attachments` レコードを先に作成
-4. **seedDatabase を HTTP 経由に完全移行**
-   - wrangler プロセス spawn を廃止し、`/api/test/exec` 経由で全データを投入
-   - タイムアウトリスクの排除
-5. **テスト結果**: 全77テスト PASS（97.6秒）
+> **注意**: LIFF/管理画面の検証はブラウザ手動テスト。E2E スクリプトでは DB 状態のみ検証。
 
 ---
 
@@ -385,34 +400,44 @@ FK チェーン (`image_intake_results → message_attachments → conversation_
 # 1. サーバー起動（PM2）
 cd /home/user/webapp && npm run build && pm2 restart all
 
-# 2. 基盤データ投入（初回のみ）
-cd /home/user/webapp && npx wrangler d1 execute diet-bot-production --local --file=./seed.sql
-
-# 3. テスト実行（seed + cleanup は自動）
+# 2. テスト実行（seed は自動で行われる）
 cd /home/user/webapp && node tests/e2e-line-flow.mjs
 
-# 4. テスト実行（PM2ログをクリアしてから）
-cd /home/user/webapp && pm2 flush && node tests/e2e-line-flow.mjs
+# ※ 基盤データ (seed.sql) + E2E 招待コードはテストスクリプト内で自動投入される
+# ※ DB リセットが必要な場合:
+cd /home/user/webapp && rm -rf .wrangler/state/v3/d1
+cd /home/user/webapp && npx wrangler d1 migrations apply diet-bot-production --local
 ```
 
-### ファイル構成
+## テスト結果（最新実行: 2026-03-13）
 
-| ファイル | 説明 |
-|---------|------|
-| `tests/e2e-line-flow.mjs` | E2E テスト実行スクリプト |
-| `tests/e2e-seed.sql` | E2E テスト用 seed データ |
-| `seed.sql` | 基盤 seed データ（accounts, line_channels, intake_forms 等） |
-| `docs/08_E2E_LINEテストケース.md` | 本ドキュメント |
+```
+  合計: 79
+  ✅ PASS: 79
+  ❌ FAIL: 0
+  ⏱  所要時間: 100.7s
 
----
+🎉 全テスト PASS！本番デプロイ可能
+```
 
 ## 判定基準
 
-| 状態 | 判定 | アクション |
-|------|------|---------|
-| **全 TC PASS** | ✅ 本番デプロイ可 | `npm run deploy:prod` |
-| **TC1-4 いずれか FAIL** | ❌ 接続・問診フロー | process-line-event.ts / intake-flow.ts を修正 |
-| **TC5 FAIL** | ❌ 体重記録フロー | body-metrics-repo.ts / handleRecordText を修正 |
-| **TC6-7 FAIL** | ❌ 画像確定/取消フロー | image-confirm-handler.ts を修正 |
-| **TC8 FAIL (AI 関連)** | ⚠️ 条件付き OK | OpenAI 接続エラーは本番で別途確認。DB 遷移が正しければ OK |
-| **TC9 FAIL** | ❌ Rich Menu | テキストトリガーのハンドリング漏れ → process-line-event.ts を修正 |
+| カテゴリ | 判定 |
+|---------|------|
+| **全 TC PASS** | ✅ 本番デプロイ可 |
+| **TC1-4 のいずれか FAIL** | 🔴 接続・問診フローにバグあり → 修正必須 |
+| **TC5 FAIL** | 🔴 体重記録フローにバグあり → 修正必須 |
+| **TC6-7 のいずれか FAIL** | 🔴 画像確認/取消フローにバグあり → 修正必須 |
+| **TC8 FAIL (AI 応答のみ)** | 🟡 OpenAI 接続エラーは本番で別途確認。DB 遷移が正しければ OK |
+| **TC9 FAIL** | 🔴 Rich Menu テキストトリガーのハンドリング漏れ → process-line-event.ts を修正 |
+
+## 修正履歴
+
+| 日付 | 修正内容 |
+|------|---------|
+| 2026-03-13 | 招待コードを `TEST-XXXX` → `TST-XXXX`（3文字プレフィックス）に変更 |
+| 2026-03-13 | E2E seed で `seed.sql`（基盤データ）を自動投入するよう改善 |
+| 2026-03-13 | `line_channels.channel_id` を `.dev.vars` の `LINE_CHANNEL_ID` と自動同期 |
+| 2026-03-13 | TC6/TC7 の FK チェーン対応（conversation_messages → message_attachments → image_intake_results） |
+| 2026-03-13 | TC5-TC9 共通セットアップ関数 `setupCompletedUser()` を導入 |
+| 2026-03-13 | 全79テスト PASS 達成 |
