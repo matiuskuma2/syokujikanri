@@ -5,8 +5,8 @@
  * 正本: docs/12_記録確認フローSSOT.md §4
  */
 
-import { generateId, nowIso } from '../../utils/id'
-import type { CorrectionHistory, CorrectionType } from '../../types/intent'
+import { generateId, nowIso } from '../utils/id'
+import type { CorrectionHistory, CorrectionType } from '../types/intent'
 
 // ===================================================================
 // Create

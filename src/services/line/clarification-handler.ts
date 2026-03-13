@@ -20,9 +20,9 @@ import { upsertModeSession } from '../../repositories/mode-sessions-repo'
 import {
   createPendingClarification,
   findActiveClarification,
+  findClarificationById,
   updateClarificationAnswer,
-  updateClarificationStatus,
-  cancelAllActiveClarifications,
+  cancelActiveClarifications,
 } from '../../repositories/pending-clarifications-repo'
 import { todayJst } from '../../utils/id'
 
@@ -181,7 +181,7 @@ export async function handleClarificationAnswer(
   try {
     intent = JSON.parse(pending.intent_json)
   } catch {
-    await updateClarificationStatus(env.DB, pending.id, 'cancelled')
+    await cancelActiveClarifications(env.DB, userAccountId)
     return { complete: false, updatedIntent: null, pendingId: pending.id }
   }
 
@@ -209,7 +209,7 @@ export async function handleClarificationAnswer(
     await updateClarificationAnswer(env.DB, pending.id, {
       answersJson: JSON.stringify(answers),
       currentField: null,
-      status: 'answered',
+      intentJson: JSON.stringify(intent),
     })
 
     return {
@@ -229,7 +229,7 @@ export async function handleClarificationAnswer(
     await updateClarificationAnswer(env.DB, pending.id, {
       answersJson: JSON.stringify(answers),
       currentField: nextField,
-      status: 'asking',
+      intentJson: JSON.stringify(intent),
     })
 
     return {
@@ -243,14 +243,20 @@ export async function handleClarificationAnswer(
 /**
  * 次の質問を送信する（handleClarificationAnswer の後に呼ぶ）
  */
+/**
+ * 次の質問を送信する（handleClarificationAnswer の後に呼ぶ）
+ */
 export async function sendNextClarificationQuestion(
   replyToken: string,
   intent: UnifiedIntent,
   pendingId: string,
   env: Bindings
 ): Promise<void> {
-  const pending = await findActiveClarification(env.DB, intent.target_date.resolved ? '' : '')
-  const currentField = intent.needs_clarification[0]
+  // pending_clarifications から現在のフィールドを取得
+  const pending = await findClarificationById(env.DB, pendingId)
+  if (!pending) return
+
+  const currentField = pending.current_field as ClarificationField
   if (!currentField) return
 
   const question = buildClarificationQuestion(currentField, intent)
