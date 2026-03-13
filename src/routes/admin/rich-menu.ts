@@ -32,50 +32,43 @@ type RichMenuArea = {
 }
 
 /**
- * デフォルト Rich Menu テンプレート
- * 2列 × 3行 = 6エリア
- * 画像サイズ: 2500 × 1686
- * 各セル: 1250 × 562
+ * デフォルト Rich Menu テンプレート（3ボタン版）
+ * 1行 × 3列 = 3エリア
+ * 画像サイズ: 2500 × 843
+ * 各セル: 833 × 843（左・中央）, 834 × 843（右端で端数調整）
+ *
+ * ボタン配置:
+ *   [記録する] [相談する] [ダッシュボード]
  */
 function buildDefaultRichMenuObject(liffUrl: string) {
-  const cellW = 1250
-  const cellH = 562
+  const totalW = 2500
+  const totalH = 843
+  const cellW = Math.floor(totalW / 3) // 833
+  const lastCellW = totalW - cellW * 2 // 834 (端数調整)
 
   const areas: RichMenuArea[] = [
-    // Row 1
+    // 左: 記録する
     {
-      bounds: { x: 0, y: 0, width: cellW, height: cellH },
-      action: { type: 'message', label: '記録する', text: '記録モード' },
+      bounds: { x: 0, y: 0, width: cellW, height: totalH },
+      action: { type: 'message', label: '記録する', text: '記録する' },
     },
+    // 中央: 相談する
     {
-      bounds: { x: cellW, y: 0, width: cellW, height: cellH },
-      action: { type: 'message', label: '写真を送る', text: '写真を送る' },
+      bounds: { x: cellW, y: 0, width: cellW, height: totalH },
+      action: { type: 'message', label: '相談する', text: '相談する' },
     },
-    // Row 2
+    // 右: ダッシュボード（LIFF URI アクション）
     {
-      bounds: { x: 0, y: cellH, width: cellW, height: cellH },
-      action: { type: 'message', label: '体重記録', text: '体重記録' },
-    },
-    {
-      bounds: { x: cellW, y: cellH, width: cellW, height: cellH },
-      action: { type: 'message', label: '相談する', text: '相談モード' },
-    },
-    // Row 3
-    {
-      bounds: { x: 0, y: cellH * 2, width: cellW, height: cellH },
+      bounds: { x: cellW * 2, y: 0, width: lastCellW, height: totalH },
       action: { type: 'uri', label: 'ダッシュボード', uri: liffUrl },
-    },
-    {
-      bounds: { x: cellW, y: cellH * 2, width: cellW, height: cellH },
-      action: { type: 'message', label: '問診やり直し', text: '問診やり直し' },
     },
   ]
 
   return {
-    size: { width: 2500, height: 1686 },
+    size: { width: 2500, height: 843 },
     selected: true,
-    name: '食事指導BOT メインメニュー',
-    chatBarText: 'メニューを開く',
+    name: '食事指導BOT メニュー',
+    chatBarText: 'メニュー',
     areas,
   }
 }
