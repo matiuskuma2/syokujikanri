@@ -226,19 +226,48 @@ async function persistCorrection(
     return { success: false, replyMessage: '修正対象が特定できませんでした。' }
   }
 
-  const targetDate = ct.target_date ?? todayJst()
-  const targetMealType = ct.target_meal_type
+  // ------------------------------------------------------------------
+  // 修正対象の特定 — 優先順位:
+  //   1. 明示的な日付 + 区分 (correction_target から)
+  //   2. 直近の記録 (日付不明の場合、過去7日以内の最新記録)
+  //   3. 同日の最新同区分 (日付はあるが区分不明の場合)
+  // ------------------------------------------------------------------
+  let targetDate = ct.target_date
+  let targetMealType = ct.target_meal_type
+  let dailyLog: { id: string } | null = null
 
-  // 対象レコードを検索
-  const dailyLog = await env.DB.prepare(`
-    SELECT id FROM daily_logs
-    WHERE user_account_id = ?1 AND log_date = ?2
-    LIMIT 1
-  `).bind(userAccountId, targetDate).first<{ id: string }>()
+  if (targetDate) {
+    // 明示的な日付がある場合
+    dailyLog = await env.DB.prepare(`
+      SELECT id FROM daily_logs
+      WHERE user_account_id = ?1 AND log_date = ?2
+      LIMIT 1
+    `).bind(userAccountId, targetDate).first<{ id: string }>()
+  }
 
   if (!dailyLog) {
-    return { success: false, replyMessage: `${formatDateForReply(targetDate)}の記録が見つかりませんでした。` }
+    // 日付指定がない or 指定日に記録がない → 直近7日の最新記録を探す
+    const recentLog = await env.DB.prepare(`
+      SELECT dl.id, dl.log_date FROM daily_logs dl
+      JOIN meal_entries me ON me.daily_log_id = dl.id
+      WHERE dl.user_account_id = ?1
+        AND dl.log_date >= date(?2, '-7 days')
+      ORDER BY dl.log_date DESC, me.updated_at DESC
+      LIMIT 1
+    `).bind(userAccountId, todayJst()).first<{ id: string; log_date: string }>()
+
+    if (recentLog) {
+      dailyLog = { id: recentLog.id }
+      targetDate = recentLog.log_date
+      console.log(`[RecordPersister] correction fallback: using recent log date=${targetDate}`)
+    } else {
+      const displayDate = ct.target_date ? formatDateForReply(ct.target_date) : '直近'
+      return { success: false, replyMessage: `${displayDate}の記録が見つかりませんでした。` }
+    }
   }
+
+  // targetDate が null のままの場合のフォールバック
+  if (!targetDate) targetDate = todayJst()
 
   // 修正タイプに応じて処理
   switch (ct.correction_type) {
@@ -275,10 +304,32 @@ async function persistCorrection(
     }
 
     case 'content_change': {
-      const mealType = targetMealType ?? 'other'
-      const entry = await findMealEntryByDailyLogAndType(env.DB, dailyLog.id, mealType)
+      // 区分が不明な場合、同日の最新の meal_entry をフォールバック検索
+      let entry: Awaited<ReturnType<typeof findMealEntryByDailyLogAndType>> | null = null
+      let resolvedMealType: MealTypeValue = targetMealType ?? 'other'
+
+      if (targetMealType) {
+        entry = await findMealEntryByDailyLogAndType(env.DB, dailyLog.id, targetMealType)
+      }
+
       if (!entry) {
-        return { success: false, replyMessage: `${formatDateForReply(targetDate)}の${mealTypeToJa(mealType)}の記録が見つかりませんでした。` }
+        // フォールバック: 同日の最新 meal_entry を取得
+        const latestEntry = await env.DB.prepare(`
+          SELECT id, meal_type, meal_text, daily_log_id FROM meal_entries
+          WHERE daily_log_id = ?1
+          ORDER BY updated_at DESC
+          LIMIT 1
+        `).bind(dailyLog.id).first<{ id: string; meal_type: string; meal_text: string | null; daily_log_id: string }>()
+
+        if (latestEntry) {
+          entry = latestEntry as Awaited<ReturnType<typeof findMealEntryByDailyLogAndType>>
+          resolvedMealType = latestEntry.meal_type as MealTypeValue
+          console.log(`[RecordPersister] content_change fallback: using latest entry type=${resolvedMealType}`)
+        }
+      }
+
+      if (!entry) {
+        return { success: false, replyMessage: `${formatDateForReply(targetDate)}の${mealTypeToJa(resolvedMealType)}の記録が見つかりませんでした。` }
       }
 
       const oldValue = { meal_text: entry.meal_text }
@@ -301,7 +352,7 @@ async function persistCorrection(
 
       return {
         success: true,
-        replyMessage: `✏️ 記録を修正しました！\n\n📅 ${formatDateForReply(targetDate)}の${mealTypeToJa(mealType)}\n変更前: ${entry.meal_text || '（なし）'}\n変更後: ${newText}`,
+        replyMessage: `✏️ 記録を修正しました！\n\n📅 ${formatDateForReply(targetDate)}の${mealTypeToJa(resolvedMealType)}\n変更前: ${entry.meal_text || '（なし）'}\n変更後: ${newText}`,
         persist_action: 'updated',
       }
     }

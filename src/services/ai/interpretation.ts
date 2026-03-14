@@ -110,6 +110,10 @@ ${memoryContext}
 - 食事区分が不明な場合は meal_type.value を null にしてください
 - 「お菓子」「スナック」「ポテチ」「チョコ」等は snack（間食）です
 - 相談モードでも「昨日58kgだった」等は intent_secondary=record_weight として検出
+- 相談モードでも「今日のランチはパスタだった」等は intent_secondary=record_meal として検出
+- intent_secondary は「相談しながら偶然言及した具体的な記録情報」の場合のみ設定
+- 「痩せたい」「ダイエットしたい」等の抽象的な願望は secondary にしない
+- secondary がある場合は confidence は primary に対する値で 0.8 以上を維持すること
 - 1メッセージに複数の記録がある場合は、最も重要なものを intent_primary、次を intent_secondary に
 - confidence は 0.0-1.0（0.8未満は要確認の目安）
 - reply_policy.notify_save: 記録系で明確化不要ならtrue
