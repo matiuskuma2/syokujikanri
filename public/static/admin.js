@@ -542,16 +542,108 @@ function renderModalOverview() {
   const weightHistory = u.weightHistory || [];
   const isReadOnly = currentAdmin?.role === 'staff';
 
+  // 連携・整合性ステータス
+  const integrity = u.integrity || {};
+  const pending = u.pendingStatus;
+  const pendingClar = u.pendingClarification;
+  const hasIssues = integrity.issues && integrity.issues.length > 0;
+
   document.getElementById('modal-content').innerHTML = `
-    <div class="grid grid-cols-2 gap-4 mb-6 text-sm">
-      <div class="bg-gray-50 p-3 rounded-lg">
-        <p class="text-gray-500 text-xs mb-1">LINE User ID</p>
-        <p class="font-mono text-xs truncate">${esc(lineUserId)}</p>
+    <!-- 連携ステータス -->
+    <div class="mb-6">
+      <h3 class="font-semibold text-gray-700 mb-3"><i class="fas fa-link text-blue-500 mr-1"></i>連携ステータス</h3>
+      <div class="grid grid-cols-2 gap-3 text-sm">
+        <div class="bg-gray-50 p-3 rounded-lg">
+          <p class="text-gray-500 text-xs mb-1">LINE User ID</p>
+          <p class="font-mono text-xs truncate" title="${esc(lineUserId)}">${esc(lineUserId)}</p>
+        </div>
+        <div class="bg-gray-50 p-3 rounded-lg">
+          <p class="text-gray-500 text-xs mb-1">User Account ID</p>
+          <p class="font-mono text-xs truncate" title="${esc(u.userAccountId)}">${esc(u.userAccountId)}</p>
+        </div>
+        <div class="bg-gray-50 p-3 rounded-lg">
+          <p class="text-gray-500 text-xs mb-1">LINE 表示名</p>
+          <p class="font-medium">${esc(u.display_name || '-')}</p>
+        </div>
+        <div class="bg-gray-50 p-3 rounded-lg">
+          <p class="text-gray-500 text-xs mb-1">参加日</p>
+          <p class="font-medium">${fmtDate(u.joinedAt)}</p>
+        </div>
+        <div class="bg-gray-50 p-3 rounded-lg">
+          <p class="text-gray-500 text-xs mb-1">フォロー状態</p>
+          <p class="font-medium">${
+            integrity.followStatus === 'following' ? '<span class="text-green-600"><i class="fas fa-check-circle mr-1"></i>フォロー中</span>'
+            : integrity.followStatus === 'blocked' ? '<span class="text-red-600"><i class="fas fa-ban mr-1"></i>ブロック/解除</span>'
+            : '<span class="text-gray-400">' + esc(integrity.followStatus || '不明') + '</span>'
+          }</p>
+        </div>
+        <div class="bg-gray-50 p-3 rounded-lg">
+          <p class="text-gray-500 text-xs mb-1">問診完了</p>
+          <p class="font-medium">${
+            u.service?.intake_completed === 1
+              ? '<span class="text-green-600"><i class="fas fa-check-circle mr-1"></i>完了</span>'
+              : '<span class="text-amber-600"><i class="fas fa-clock mr-1"></i>未完了</span>'
+          }</p>
+        </div>
       </div>
-      <div class="bg-gray-50 p-3 rounded-lg">
-        <p class="text-gray-500 text-xs mb-1">参加日</p>
-        <p class="font-medium">${fmtDate(u.joinedAt)}</p>
+
+      <!-- Pending ステータス -->
+      ${pending ? `
+      <div class="mt-3 bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm">
+        <div class="flex items-center gap-2 mb-1">
+          <i class="fas fa-hourglass-half text-amber-600"></i>
+          <span class="font-medium text-amber-800">Pending: ${esc(pending.type)}</span>
+        </div>
+        <div class="text-xs text-amber-700">
+          ${pending.id ? '<span>ID: ' + esc(pending.id) + '</span> · ' : ''}
+          <span>更新: ${fmtDateTime(pending.createdAt)}</span>
+        </div>
+      </div>` : ''}
+
+      ${pendingClar ? `
+      <div class="mt-3 bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm">
+        <div class="flex items-center gap-2 mb-1">
+          <i class="fas fa-question-circle text-blue-600"></i>
+          <span class="font-medium text-blue-800">確認待ち: ${esc(pendingClar.currentField)}</span>
+        </div>
+        <div class="text-xs text-blue-700">
+          <span>ID: ${esc(pendingClar.id)}</span> · <span>ステータス: ${esc(pendingClar.status)}</span> · <span>作成: ${fmtDateTime(pendingClar.createdAt)}</span>
+        </div>
+      </div>` : ''}
+
+      <!-- アクティビティ -->
+      <div class="grid grid-cols-2 gap-3 mt-3 text-sm">
+        <div class="bg-gray-50 p-3 rounded-lg">
+          <p class="text-gray-500 text-xs mb-1">最終メッセージ</p>
+          <p class="font-medium text-xs">${fmtDateTime(u.lastMessageAt) || '-'}</p>
+        </div>
+        <div class="bg-gray-50 p-3 rounded-lg">
+          <p class="text-gray-500 text-xs mb-1">最終画像解析</p>
+          <p class="font-medium text-xs">${fmtDateTime(u.lastImageAnalysisAt) || '-'}</p>
+        </div>
       </div>
+
+      <!-- 整合性チェック -->
+      ${hasIssues ? `
+      <div class="mt-3 bg-red-50 border border-red-200 rounded-lg p-3">
+        <div class="flex items-center gap-2 mb-2">
+          <i class="fas fa-exclamation-triangle text-red-600"></i>
+          <span class="font-semibold text-red-800 text-sm">不整合検出 (${integrity.issues.length}件)</span>
+        </div>
+        <ul class="list-disc list-inside text-xs text-red-700 space-y-1">
+          ${integrity.issues.map(issue => '<li>' + esc(issue) + '</li>').join('')}
+        </ul>
+      </div>` : `
+      <div class="mt-3 bg-green-50 border border-green-200 rounded-lg p-3 flex items-center gap-2">
+        <i class="fas fa-check-circle text-green-600"></i>
+        <span class="text-green-800 text-sm font-medium">データ整合性: 問題なし</span>
+        <div class="flex gap-2 ml-auto text-xs text-green-600">
+          ${integrity.lineUserExists ? '<span title="line_users"><i class="fas fa-check"></i> LINE</span>' : ''}
+          ${integrity.userAccountExists ? '<span title="user_accounts"><i class="fas fa-check"></i> Account</span>' : ''}
+          ${integrity.serviceStatusExists ? '<span title="user_service_statuses"><i class="fas fa-check"></i> Service</span>' : ''}
+          ${integrity.profileExists ? '<span title="user_profiles"><i class="fas fa-check"></i> Profile</span>' : ''}
+        </div>
+      </div>`}
     </div>
 
     ${profile ? `

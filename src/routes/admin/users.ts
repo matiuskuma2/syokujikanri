@@ -144,17 +144,23 @@ usersRouter.get('/:lineUserId', async (c) => {
   const weightHistory = await listWeightHistory(c.env.DB, userAccount.id, 30)
 
   // ====== 連携ステータス・不整合チェック ======
-  // pending_image_confirm / clarification の状態
+  // 現在のモードセッション（current_mode / current_step / pending状態）
+  let currentMode: string | null = null
+  let currentStep: string | null = null
   let pendingStatus: { type: string; id: string | null; createdAt: string | null } | null = null
   try {
     const modeSession = await c.env.DB.prepare(
-      `SELECT current_step, session_data, updated_at FROM bot_mode_sessions
+      `SELECT current_mode, current_step, session_data, updated_at, expires_at FROM bot_mode_sessions
        WHERE client_account_id = ?1 AND line_user_id = ?2 LIMIT 1`
     ).bind(effectiveAccountId, lineUserId).first<any>()
-    if (modeSession?.current_step === 'pending_image_confirm') {
-      let sessionData: any = {}
-      try { sessionData = modeSession.session_data ? JSON.parse(modeSession.session_data) : {} } catch { }
-      pendingStatus = { type: 'pending_image_confirm', id: sessionData.intakeResultId ?? null, createdAt: modeSession.updated_at }
+    if (modeSession) {
+      currentMode = modeSession.current_mode ?? null
+      currentStep = modeSession.current_step ?? null
+      if (modeSession.current_step === 'pending_image_confirm') {
+        let sessionData: any = {}
+        try { sessionData = modeSession.session_data ? JSON.parse(modeSession.session_data) : {} } catch { }
+        pendingStatus = { type: 'pending_image_confirm', id: sessionData.intakeResultId ?? null, createdAt: modeSession.updated_at }
+      }
     }
   } catch { /* ignore */ }
 
@@ -192,6 +198,17 @@ usersRouter.get('/:lineUserId', async (c) => {
     lastImageAnalysisAt = img?.created_at ?? null
   } catch { /* ignore */ }
 
+  // 最新修正日時
+  let lastCorrectionAt: string | null = null
+  try {
+    const cor = await c.env.DB.prepare(
+      `SELECT created_at FROM correction_history
+       WHERE user_account_id = ?1
+       ORDER BY created_at DESC LIMIT 1`
+    ).bind(userAccount.id).first<any>()
+    lastCorrectionAt = cor?.created_at ?? null
+  } catch { /* ignore */ }
+
   // 整合性チェック
   const integrity = {
     lineUserExists: !!lineUser,
@@ -205,10 +222,13 @@ usersRouter.get('/:lineUserId', async (c) => {
   if (!svc) integrity.issues.push('user_service_statuses レコードなし')
   if (svc && svc.intake_completed === 1 && !profile) integrity.issues.push('問診完了だが profile なし')
   if (lineUser?.follow_status === 'blocked') integrity.issues.push('ユーザーがブロック/アンフォロー済み')
+  if (pendingStatus) integrity.issues.push('pending_image_confirm あり')
+  if (pendingClarification) integrity.issues.push('pending_clarification あり')
 
   return ok(c, {
     userAccountId: userAccount.id,
     lineUserId,
+    clientAccountId: effectiveAccountId,
     display_name: lineUser?.display_name ?? null,
     picture_url: lineUser?.picture_url ?? null,
     status: userAccount.status,
@@ -229,6 +249,17 @@ usersRouter.get('/:lineUserId', async (c) => {
     intakeAnswers: intakeAnswers ?? [],
     recentLogs,
     weightHistory,
+    // ====== 連携・不整合情報 ======
+    linkage: {
+      currentMode,
+      currentStep,
+      pendingStatus,
+      pendingClarification,
+      lastMessageAt,
+      lastImageAnalysisAt,
+      lastCorrectionAt,
+      integrity,
+    },
   })
 })
 
