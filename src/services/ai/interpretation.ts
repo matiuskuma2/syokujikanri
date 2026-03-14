@@ -244,6 +244,63 @@ export function createFallbackIntent(messageText: string, ctx: UserContext): Uni
   // R6: 深夜ルール適用
   const fallbackBaseDate = resolveBaseDateFromTimestamp(ctx.message_timestamp_jst, ctx.today_jst)
 
+  // ---------------------------------------------------------------
+  // R8: 修正パターン検出（「〜じゃなくて〜」「〜ではなく〜」等）
+  // ---------------------------------------------------------------
+  const correctionMatch = text.match(/(.+?)(?:じゃなくて|ではなく|じゃなく|ではなくて)(.+)/)
+  if (correctionMatch) {
+    const oldPart = correctionMatch[1].trim()
+    const newPart = correctionMatch[2].trim()
+
+    // 食事区分修正の検出
+    const oldMealType = classifyMealTypeFallback(oldPart)
+    const newMealType = classifyMealTypeFallback(newPart)
+    if (oldMealType && newMealType) {
+      return {
+        intent_primary: 'correct_record',
+        intent_secondary: null,
+        target_date: { resolved: fallbackBaseDate, original_expression: null, source: 'timestamp', needs_confirmation: false },
+        meal_type: null,
+        record_type: 'meal',
+        content_summary: `${oldPart} → ${newPart}`,
+        meal_description: null,
+        weight_kg: null,
+        needs_clarification: [],
+        correction_target: {
+          target_date: fallbackBaseDate,
+          target_meal_type: oldMealType,
+          correction_type: 'meal_type_change',
+          new_value: { meal_type: newMealType },
+        },
+        confidence: 0.8,
+        reasoning: 'フォールバック: regex による食事区分修正パターンマッチ',
+        reply_policy: { notify_save: true, generate_consult_reply: false, ask_clarification: false },
+      }
+    }
+
+    // 内容修正の検出（「鮭じゃなくて卵焼き」等）
+    return {
+      intent_primary: 'correct_record',
+      intent_secondary: null,
+      target_date: { resolved: fallbackBaseDate, original_expression: null, source: 'timestamp', needs_confirmation: false },
+      meal_type: null,
+      record_type: 'meal',
+      content_summary: `${oldPart} → ${newPart}`,
+      meal_description: newPart,
+      weight_kg: null,
+      needs_clarification: [],
+      correction_target: {
+        target_date: fallbackBaseDate,
+        target_meal_type: null,
+        correction_type: 'content_change',
+        new_value: { content: newPart },
+      },
+      confidence: 0.7,
+      reasoning: 'フォールバック: regex による内容修正パターンマッチ',
+      reply_policy: { notify_save: true, generate_consult_reply: false, ask_clarification: false },
+    }
+  }
+
   // 体重パターン
   const weightMatch = text.match(WEIGHT_PATTERN)
   if (weightMatch) {
@@ -270,13 +327,20 @@ export function createFallbackIntent(messageText: string, ctx: UserContext): Uni
     }
   }
 
+  // ---------------------------------------------------------------
+  // R5: 日付表現の解決（regex フォールバック）
+  // ---------------------------------------------------------------
+  const dateResult = resolveDateFromTextFallback(text, ctx.today_jst)
+
   // 食事キーワードパターン
   const mealType = classifyMealTypeFallback(text)
-  if (mealType !== null || text.length >= 8) {
+  // 食べ物関連動詞の検出でしきい値を下げる
+  const hasFoodVerb = /食べ|飲ん|飲み|たべ|のん|のみ|つまみ|かじ/.test(text)
+  if (mealType !== null || text.length >= 8 || (hasFoodVerb && text.length >= 3)) {
     return {
       intent_primary: 'record_meal',
       intent_secondary: null,
-      target_date: {
+      target_date: dateResult ?? {
         resolved: fallbackBaseDate,
         original_expression: null,
         source: 'timestamp',
@@ -313,6 +377,40 @@ export function createFallbackIntent(messageText: string, ctx: UserContext): Uni
     reasoning: 'フォールバック: パターンマッチ不成立',
     reply_policy: { notify_save: false, generate_consult_reply: false, ask_clarification: false },
   }
+}
+
+/** R5: テキストから日付表現を解決するフォールバック */
+function resolveDateFromTextFallback(text: string, todayJst: string): import('../../types/intent').TargetDate | null {
+  const todayDate = new Date(todayJst + 'T00:00:00+09:00')
+
+  if (/昨日|きのう/.test(text)) {
+    const d = new Date(todayDate.getTime() - 24 * 60 * 60 * 1000)
+    return { resolved: d.toISOString().substring(0, 10), original_expression: '昨日', source: 'explicit', needs_confirmation: false }
+  }
+  if (/おととい|一昨日/.test(text)) {
+    const d = new Date(todayDate.getTime() - 2 * 24 * 60 * 60 * 1000)
+    return { resolved: d.toISOString().substring(0, 10), original_expression: 'おととい', source: 'explicit', needs_confirmation: false }
+  }
+  if (/今日|きょう|今朝/.test(text)) {
+    return { resolved: todayJst, original_expression: '今日', source: 'explicit', needs_confirmation: false }
+  }
+  if (/さっき|たった今|今/.test(text)) {
+    return { resolved: todayJst, original_expression: 'さっき', source: 'inferred', needs_confirmation: false }
+  }
+
+  // M/D パターン
+  const mdMatch = text.match(/(\d{1,2})[月/](\d{1,2})/)
+  if (mdMatch) {
+    const month = parseInt(mdMatch[1], 10)
+    const day = parseInt(mdMatch[2], 10)
+    const year = todayDate.getFullYear()
+    const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+    const parsed = new Date(dateStr + 'T00:00:00+09:00')
+    const finalDate = parsed > todayDate ? `${year - 1}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}` : dateStr
+    return { resolved: finalDate, original_expression: `${month}/${day}`, source: 'explicit', needs_confirmation: false }
+  }
+
+  return null
 }
 
 /** フォールバック用の食事区分分類（従来 regex） */
