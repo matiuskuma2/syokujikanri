@@ -59,6 +59,10 @@ async function callLineApi(
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     console.error(`[LINE API] ${endpoint} failed: ${res.status} ${text}`)
+    // reply エンドポイントで失敗した場合は throw して push フォールバックを発動させる
+    if (endpoint === '/message/reply') {
+      throw new Error(`LINE reply failed: ${res.status} ${text}`)
+    }
   }
   return { ok: res.ok, status: res.status }
 }
@@ -229,6 +233,7 @@ export async function replyWithQuickReplies(
   if (!res.ok) {
     const err = await res.text().catch(() => '')
     console.error(`[LINE] replyWithQuickReplies failed ${res.status}: ${err}`)
+    throw new Error(`LINE replyWithQuickReplies failed: ${res.status} ${err}`)
   }
 }
 

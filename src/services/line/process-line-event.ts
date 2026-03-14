@@ -19,7 +19,7 @@ import type {
   LineMessageEvent,
 } from '../../types/bindings'
 
-import { getUserProfile, replyText, replyTextWithQuickReplies, replyWithQuickReplies, replyMessages, getMessageContent, pushText } from './reply'
+import { getUserProfile, replyText, replyTextWithQuickReplies, replyWithQuickReplies, replyMessages, getMessageContent, pushText, pushWithQuickReplies } from './reply'
 import { startIntakeFlow, handleIntakeStep, beginIntakeFromStart, resumeIntakeFlow } from './intake-flow'
 import { upsertLineUser, ensureUserAccount, findUserAccount } from '../../repositories/line-users-repo'
 import { upsertUserServiceStatus, checkServiceAccess } from '../../repositories/subscriptions-repo'
@@ -327,7 +327,17 @@ async function handleTextMessageEvent(
             { label: '❌ 取消', text: '取消' },
           ],
           env.LINE_CHANNEL_ACCESS_TOKEN
-        )
+        ).catch(async () => {
+          await pushWithQuickReplies(
+            lineUserId,
+            '🔄 いま前の食事の確認待ちです。\n先に「✅ 確定」「修正テキスト」「❌ 取消」のいずれかで完了してください。',
+            [
+              { label: '✅ 確定', text: '確定' },
+              { label: '❌ 取消', text: '取消' },
+            ],
+            env.LINE_CHANNEL_ACCESS_TOKEN
+          ).catch(e => console.error('[LINE] pending block push fallback failed:', e))
+        })
         return
       }
 
@@ -347,37 +357,66 @@ async function handleTextMessageEvent(
         return
       } else {
         // AI 意図判定: 食品修正 / メタデータ更新（日付・区分） / 両方 / 無関係 を判別
-        const { classifyPendingText, handleImageCorrection, handleImageMetadataUpdate } = await import('./image-confirm-handler')
-        const pendingIntent = await classifyPendingText(textTrim, env)
-        console.log(`[LINE] pending_image_confirm text intent: "${textTrim}" → ${pendingIntent}`)
+        // ★ 修正テキスト・メタデータ更新は OpenAI を2回呼ぶため replyToken が期限切れになる
+        //    → replyToken は最初に「処理中」通知で消費し、以降は pushText を使う
+        try {
+          const { classifyPendingText, handleImageCorrection, handleImageMetadataUpdate } = await import('./image-confirm-handler')
+          const pendingIntent = await classifyPendingText(textTrim, env)
+          console.log(`[LINE] pending_image_confirm text intent: "${textTrim}" → ${pendingIntent}`)
 
-        switch (pendingIntent) {
-          case 'food_correction':
-            await handleImageCorrection(event.replyToken, textTrim, intakeResultId, lineUserId, preEffectiveAccountId, env)
-            return
+          switch (pendingIntent) {
+            case 'food_correction':
+            case 'both':
+              // replyToken で即座に中間応答を送る（期限切れ前に消費）
+              await replyText(event.replyToken, '✏️ 修正内容を反映中です…少々お待ちください。', env.LINE_CHANNEL_ACCESS_TOKEN)
+                .catch(() => {}) // replyToken 失敗しても続行
+              // 実際の修正処理は pushText ベースで実行
+              await handleImageCorrectionWithPush(textTrim, intakeResultId, lineUserId, preEffectiveAccountId, env)
+              return
 
-          case 'metadata_update':
-            await handleImageMetadataUpdate(event.replyToken, textTrim, intakeResultId, lineUserId, preEffectiveAccountId, env)
-            return
+            case 'metadata_update':
+              await replyText(event.replyToken, '📅 日付・区分を変更中です…少々お待ちください。', env.LINE_CHANNEL_ACCESS_TOKEN)
+                .catch(() => {})
+              await handleImageMetadataUpdateWithPush(textTrim, intakeResultId, lineUserId, preEffectiveAccountId, env)
+              return
 
-          case 'both':
-            // 食品修正 + メタデータ更新: 食品修正 AI に全て任せる（meal_type_guess で区分も反映される）
-            await handleImageCorrection(event.replyToken, textTrim, intakeResultId, lineUserId, preEffectiveAccountId, env)
-            return
-
-          case 'unrelated':
-          default:
-            // 無関係テキスト → 確認待ちを案内
-            await replyWithQuickReplies(
-              event.replyToken,
-              '🔄 いま前の食事の確認待ちです。\n\n内容を修正する場合は修正内容をテキストで送ってください。\n例: 「鮭ではなくスクランブルエッグ」\n例: 「昨日の夕食」\n\nまたは「✅ 確定」「❌ 取消」で完了してください。',
-              [
-                { label: '✅ 確定', text: '確定' },
-                { label: '❌ 取消', text: '取消' },
-              ],
-              env.LINE_CHANNEL_ACCESS_TOKEN
-            )
-            return
+            case 'unrelated':
+            default:
+              // 無関係テキスト → 確認待ちを案内
+              await replyWithQuickReplies(
+                event.replyToken,
+                '🔄 いま前の食事の確認待ちです。\n\n内容を修正する場合は修正内容をテキストで送ってください。\n例: 「鮭ではなくスクランブルエッグ」\n例: 「昨日の夕食」\n\nまたは「✅ 確定」「❌ 取消」で完了してください。',
+                [
+                  { label: '✅ 確定', text: '確定' },
+                  { label: '❌ 取消', text: '取消' },
+                ],
+                env.LINE_CHANNEL_ACCESS_TOKEN
+              ).catch(async () => {
+                await pushWithQuickReplies(
+                  lineUserId,
+                  '🔄 いま前の食事の確認待ちです。\n\n内容を修正する場合は修正内容をテキストで送ってください。\n例: 「鮭ではなくスクランブルエッグ」\n例: 「昨日の夕食」\n\nまたは「✅ 確定」「❌ 取消」で完了してください。',
+                  [
+                    { label: '✅ 確定', text: '確定' },
+                    { label: '❌ 取消', text: '取消' },
+                  ],
+                  env.LINE_CHANNEL_ACCESS_TOKEN
+                ).catch(e => console.error('[LINE] pending unrelated push fallback failed:', e))
+              })
+              return
+          }
+        } catch (pendingErr) {
+          console.error('[LINE] pending_image_confirm handler error:', pendingErr)
+          // エラー時は push で応答（replyToken は既に消費されている可能性がある）
+          await pushWithQuickReplies(
+            lineUserId,
+            '⚠️ 処理中にエラーが発生しました。\n「✅ 確定」か「❌ 取消」で操作を完了してください。',
+            [
+              { label: '✅ 確定', text: '確定' },
+              { label: '❌ 取消', text: '取消' },
+            ],
+            env.LINE_CHANNEL_ACCESS_TOKEN
+          ).catch(e => console.error('[LINE] pending error push fallback failed:', e))
+          return
         }
       }
     }
@@ -592,8 +631,8 @@ async function handleTextWithAIFirst(
           }
 
           await saveBotMessage(env.DB, threadId, result.replyMessage)
-          await replyTextWithQuickReplies(
-            replyToken, result.replyMessage,
+          await safeReplyWithQuickReplies(
+            replyToken, lineUserId, result.replyMessage,
             [{ label: '📝 続けて記録', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
             env.LINE_CHANNEL_ACCESS_TOKEN
           )
@@ -610,7 +649,7 @@ async function handleTextWithAIFirst(
             if (currentField === 'target_date') reText = '🤔 日付がわかりませんでした。「今日」「昨日」「3/10」のように教えてください。'
             if (currentField === 'meal_type') reText = '🤔 食事区分がわかりませんでした。「朝食」「昼食」「夕食」「間食」のどれですか？'
             if (currentField === 'weight_value') reText = '🤔 体重がわかりませんでした。「58.5」のように数字で教えてください。'
-            await replyText(replyToken, reText, env.LINE_CHANNEL_ACCESS_TOKEN)
+            await safeReplyText(replyToken, lineUserId, reText, env.LINE_CHANNEL_ACCESS_TOKEN)
             return
           }
         }
@@ -631,7 +670,7 @@ async function handleTextWithAIFirst(
     try { await cancelActiveClarifications(env.DB, userAccountId) } catch { /* ignore */ }
     try { await updateThreadMode(env.DB, threadId, 'record') } catch { /* ignore */ }
     try { await deleteModeSession(env.DB, clientAccountId, lineUserId) } catch { /* ignore */ }
-    await replyText(replyToken, '📝 記録モードです。\n記録したい内容を送ってください。食事写真・食事テキスト・体重の数字・体重計の写真、どれでもOKです。', env.LINE_CHANNEL_ACCESS_TOKEN)
+    await safeReplyText(replyToken, lineUserId, '📝 記録モードです。\n記録したい内容を送ってください。食事写真・食事テキスト・体重の数字・体重計の写真、どれでもOKです。', env.LINE_CHANNEL_ACCESS_TOKEN)
     return
   }
 
@@ -646,7 +685,7 @@ async function handleTextWithAIFirst(
         currentStep: 'idle',
       })
     } catch { /* ignore */ }
-    await replyText(replyToken, '💬 相談モードです。食事・体重・外食・間食・続け方など、何でも送ってください 😊', env.LINE_CHANNEL_ACCESS_TOKEN)
+    await safeReplyText(replyToken, lineUserId, '💬 相談モードです。食事・体重・外食・間食・続け方など、何でも送ってください 😊', env.LINE_CHANNEL_ACCESS_TOKEN)
     return
   }
 
@@ -736,8 +775,8 @@ async function handleTextWithAIFirst(
     }))
 
     await saveBotMessage(env.DB, threadId, result.replyMessage)
-    await replyTextWithQuickReplies(
-      replyToken, result.replyMessage,
+    await safeReplyWithQuickReplies(
+      replyToken, lineUserId, result.replyMessage,
       [{ label: '📝 続けて記録', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
       env.LINE_CHANNEL_ACCESS_TOKEN
     )
@@ -758,8 +797,8 @@ async function handleTextWithAIFirst(
           : ''
 
     await saveBotMessage(env.DB, threadId, result.replyMessage + confirmNote)
-    await replyTextWithQuickReplies(
-      replyToken, result.replyMessage + confirmNote,
+    await safeReplyWithQuickReplies(
+      replyToken, lineUserId, result.replyMessage + confirmNote,
       [{ label: '📝 続けて記録', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
       env.LINE_CHANNEL_ACCESS_TOKEN
     )
@@ -772,8 +811,8 @@ async function handleTextWithAIFirst(
     const { persistRecord } = await import('./record-persister')
     const result = await persistRecord(intent, userAccountId, clientAccountId, env)
     await saveBotMessage(env.DB, threadId, result.replyMessage)
-    await replyTextWithQuickReplies(
-      replyToken, result.replyMessage,
+    await safeReplyWithQuickReplies(
+      replyToken, lineUserId, result.replyMessage,
       [{ label: '📝 続けて記録', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
       env.LINE_CHANNEL_ACCESS_TOKEN
     )
@@ -805,6 +844,49 @@ async function handleTextWithAIFirst(
     [{ label: '📝 記録する', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
     env.LINE_CHANNEL_ACCESS_TOKEN
   )
+}
+
+// ===================================================================
+// ヘルパー: reply + push フォールバック付き安全な応答
+// ===================================================================
+
+/**
+ * replyToken で応答を試み、失敗した場合は pushText にフォールバックする。
+ * OpenAI 呼び出し後で replyToken が期限切れの場合に対応。
+ */
+async function safeReplyWithQuickReplies(
+  replyToken: string,
+  lineUserId: string,
+  text: string,
+  items: Array<{ label: string; text: string }>,
+  accessToken: string
+): Promise<void> {
+  try {
+    await replyTextWithQuickReplies(replyToken, text, items, accessToken)
+  } catch {
+    // replyToken 失敗 → push フォールバック
+    console.warn('[safeReply] reply failed, falling back to push')
+    await pushWithQuickReplies(lineUserId, text, items, accessToken)
+      .catch(e => console.error('[safeReply] push fallback also failed:', e))
+  }
+}
+
+/**
+ * replyToken でテキスト応答を試み、失敗した場合は pushText にフォールバック。
+ */
+async function safeReplyText(
+  replyToken: string,
+  lineUserId: string,
+  text: string,
+  accessToken: string
+): Promise<void> {
+  try {
+    await replyText(replyToken, text, accessToken)
+  } catch {
+    console.warn('[safeReply] text reply failed, falling back to push')
+    await pushText(lineUserId, text, accessToken)
+      .catch(e => console.error('[safeReply] text push fallback also failed:', e))
+  }
 }
 
 // ===================================================================
@@ -1038,7 +1120,20 @@ async function handleConsultText(
         { label: '💬 続けて相談', text: '相談続ける' },
       ],
       env.LINE_CHANNEL_ACCESS_TOKEN
-    )
+    ).catch(async (replyErr) => {
+      console.warn('[Consult] reply failed, falling back to push:', replyErr)
+      if (lineUserId) {
+        await pushWithQuickReplies(
+          lineUserId,
+          replyMsg,
+          [
+            { label: '📝 記録に戻る', text: '記録モード' },
+            { label: '💬 続けて相談', text: '相談続ける' },
+          ],
+          env.LINE_CHANNEL_ACCESS_TOKEN
+        ).catch(e => console.error('[Consult] push fallback also failed:', e))
+      }
+    })
 
     // バックグラウンド: メモリ抽出
     fireMemoryExtraction(text, userAccountId, null, env, ctx.waitUntil)
@@ -1046,16 +1141,15 @@ async function handleConsultText(
   } catch (err) {
     console.error('[LINE] consult AI error:', err)
     const errorMsg = 'AIの応答に失敗しました。しばらくしてから再度お試しください。'
-    await replyText(
-      replyToken,
-      errorMsg,
-      env.LINE_CHANNEL_ACCESS_TOKEN
-    ).catch(async (replyErr) => {
-      console.warn('[Consult] error reply failed, trying push fallback:', replyErr)
-      if (lineUserId) {
-        await pushText(lineUserId, errorMsg, env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => {})
-      }
-    })
+    // replyToken は既に期限切れの可能性が高いため、push を先に試す
+    if (lineUserId) {
+      await pushText(lineUserId, errorMsg, env.LINE_CHANNEL_ACCESS_TOKEN).catch(async () => {
+        // push も失敗した場合のみ reply を試す
+        await replyText(replyToken, errorMsg, env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => {})
+      })
+    } else {
+      await replyText(replyToken, errorMsg, env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => {})
+    }
   }
 }
 
@@ -1417,4 +1511,399 @@ async function handleInviteCode(
   )
 
   console.log(`[LINE] invite code used: ${code} → account ${targetAccountId} by ${lineUserId}`)
+}
+
+// ===================================================================
+// Push-based 画像修正/メタデータ更新ハンドラー
+// ===================================================================
+// replyToken は classifyPendingText の OpenAI 呼び出し後に期限切れになるため、
+// 修正・メタデータ更新は pushText ベースで応答する。
+
+/**
+ * handleImageCorrectionWithPush
+ * replyToken を使わず pushText で応答するバージョン
+ */
+async function handleImageCorrectionWithPush(
+  correctionText: string,
+  intakeResultId: string,
+  lineUserId: string,
+  clientAccountId: string,
+  env: Bindings
+): Promise<void> {
+  const {
+    findIntakeResultById,
+    updateIntakeResultProposedAction,
+  } = await import('../../repositories/image-intake-repo')
+  const { deleteModeSession } = await import('../../repositories/mode-sessions-repo')
+  const { matchFoodItems, calculateTotalNutrition } = await import('../../repositories/food-master-repo')
+
+  const result = await findIntakeResultById(env.DB, intakeResultId)
+
+  if (!result || result.applied_flag !== 0) {
+    await pushText(lineUserId, '確認対象のデータが見つかりませんでした。', env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => {})
+    await deleteModeSession(env.DB, clientAccountId, lineUserId)
+    return
+  }
+
+  try {
+    // 1. 元の解析結果を復元
+    let originalExtracted: Record<string, unknown> = {}
+    try {
+      originalExtracted = result.extracted_json
+        ? (typeof result.extracted_json === 'string'
+          ? JSON.parse(result.extracted_json)
+          : result.extracted_json)
+        : {}
+    } catch { /* ignore */ }
+
+    let originalAction: Record<string, unknown> = {}
+    try {
+      originalAction = result.proposed_action_json
+        ? (typeof result.proposed_action_json === 'string'
+          ? JSON.parse(result.proposed_action_json)
+          : result.proposed_action_json)
+        : {}
+    } catch { /* ignore */ }
+
+    // 2. AI に修正を反映させる
+    const ai = createOpenAIClient(env)
+    const originalSummary = [
+      originalExtracted.meal_description || originalAction.meal_text || '不明',
+      originalExtracted.food_items ? `食品: ${(originalExtracted.food_items as string[]).join(', ')}` : '',
+      originalAction.calories_kcal ? `推定カロリー: ${originalAction.calories_kcal}kcal` : '',
+    ].filter(Boolean).join('\n')
+
+    const correctionPrompt = `あなたは栄養士AIです。
+ユーザーが食事写真のAI解析結果を修正しました。
+
+【元のAI解析結果】
+${originalSummary}
+
+【ユーザーの修正内容】
+${correctionText}
+
+ユーザーの修正を反映した正しい食事情報を出力してください。
+ユーザーが言及していない項目は元の解析結果を維持してください。
+
+必ず以下のJSON形式のみで返答してください:
+{
+  "meal_description": "修正後の料理名・食材の説明（日本語、100文字以内）",
+  "food_items": ["個別食品名1", "個別食品名2"],
+  "estimated_calories_kcal": <整数またはnull>,
+  "estimated_protein_g": <数値またはnull>,
+  "estimated_fat_g": <数値またはnull>,
+  "estimated_carbs_g": <数値またはnull>,
+  "meal_type_guess": "breakfast|lunch|dinner|snack|other",
+  "correction_note": "修正した点の要約"
+}`
+
+    const raw = await ai.createResponse(
+      [
+        { role: 'system', content: correctionPrompt },
+        { role: 'user', content: correctionText },
+      ],
+      { temperature: 0.3, maxTokens: 512 }
+    )
+
+    let parsed: Record<string, unknown> = {}
+    try {
+      const jsonMatch = raw.match(/\{[\s\S]*\}/)
+      parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {}
+    } catch {
+      parsed = {}
+    }
+
+    // 3. 修正後の値を決定
+    const desc = (parsed.meal_description as string) || (originalAction.meal_text as string) || '食事'
+    const foodItems = (parsed.food_items as string[]) || (originalExtracted.food_items as string[]) || []
+    let finalCalories = (parsed.estimated_calories_kcal as number) ?? (originalAction.calories_kcal as number) ?? null
+    let finalProtein = (parsed.estimated_protein_g as number) ?? (originalAction.protein_g as number) ?? null
+    let finalFat = (parsed.estimated_fat_g as number) ?? (originalAction.fat_g as number) ?? null
+    let finalCarbs = (parsed.estimated_carbs_g as number) ?? (originalAction.carbs_g as number) ?? null
+    const mealType = (parsed.meal_type_guess as string) || (originalAction.meal_type as string) || 'other'
+
+    // 4. food_master マッチング
+    let foodMatchData: Record<string, unknown> | null = null
+    let matchSummaryText = ''
+
+    if (foodItems.length > 0) {
+      try {
+        const matches = await matchFoodItems(env.DB, foodItems)
+        const nutrition = calculateTotalNutrition(matches)
+
+        const matchDetails: Array<Record<string, unknown>> = []
+        for (const [name, matchResult] of matches) {
+          if (matchResult) {
+            matchDetails.push({
+              ai_name: name,
+              master_name: matchResult.food.name,
+              master_id: matchResult.food.id,
+              match_score: matchResult.matchScore,
+              calories_kcal: matchResult.food.calories_kcal,
+              serving_label: matchResult.food.serving_label,
+            })
+          } else {
+            matchDetails.push({ ai_name: name, master_name: null, match_score: 0 })
+          }
+        }
+
+        foodMatchData = {
+          matched_count: nutrition.matchedCount,
+          total_count: foodItems.length,
+          unmatched_names: nutrition.unmatchedNames,
+          items: matchDetails,
+        }
+
+        if (nutrition.matchedCount > 0) {
+          const matchRate = nutrition.matchedCount / foodItems.length
+          if (matchRate >= 0.5) {
+            const unmatchedRatio = nutrition.unmatchedNames.length / foodItems.length
+            const aiCal = finalCalories ?? 0
+            finalCalories = nutrition.totalCalories + Math.round(aiCal * unmatchedRatio)
+            finalProtein = Math.round((nutrition.totalProtein + (finalProtein ?? 0) * unmatchedRatio) * 10) / 10
+            finalFat = Math.round((nutrition.totalFat + (finalFat ?? 0) * unmatchedRatio) * 10) / 10
+            finalCarbs = Math.round((nutrition.totalCarbs + (finalCarbs ?? 0) * unmatchedRatio) * 10) / 10
+          }
+
+          const matchedNames = matchDetails
+            .filter(d => d.master_name)
+            .map(d => `${d.ai_name}→${d.master_name}`)
+            .slice(0, 3)
+          matchSummaryText = `\n📊 食品DB照合: ${nutrition.matchedCount}/${foodItems.length}品マッチ`
+          if (matchedNames.length > 0) {
+            matchSummaryText += `\n   ${matchedNames.join(', ')}`
+          }
+        }
+      } catch (err) {
+        console.warn('[ImageCorrectionPush] food_master matching failed:', err)
+      }
+    }
+
+    // 5. proposed_action_json を更新
+    const newProposedAction = {
+      ...originalAction,
+      action: 'create_or_update_meal_entry',
+      meal_type: mealType,
+      meal_text: desc,
+      calories_kcal: finalCalories,
+      protein_g: finalProtein,
+      fat_g: finalFat,
+      carbs_g: finalCarbs,
+      food_match_data: foodMatchData,
+    }
+
+    const newExtracted = {
+      ...originalExtracted,
+      ...parsed,
+      food_match_data: foodMatchData,
+      correction_applied: true,
+      correction_text: correctionText,
+    }
+
+    await updateIntakeResultProposedAction(env.DB, result.id, newProposedAction, newExtracted)
+
+    // 6. push で修正結果を送信
+    const mealTypeJa =
+      mealType === 'breakfast' ? '朝食' :
+      mealType === 'lunch' ? '昼食' :
+      mealType === 'dinner' ? '夕食' :
+      mealType === 'snack' ? '間食' : '食事'
+
+    const correctionNote = (parsed.correction_note as string) || ''
+
+    const replyMessage =
+      `✏️ 修正を反映しました！\n\n` +
+      `🍽 ${mealTypeJa}\n` +
+      `📝 ${desc}\n` +
+      (finalCalories ? `🔥 推定カロリー: ${finalCalories} kcal\n` : '') +
+      (finalProtein ? `💪 P: ${finalProtein}g` : '') +
+      (finalFat ? ` / F: ${finalFat}g` : '') +
+      (finalCarbs ? ` / C: ${finalCarbs}g` : '') +
+      matchSummaryText +
+      (correctionNote ? `\n\n📌 ${correctionNote}` : '') +
+      '\n\n↓ この内容で記録しますか？'
+
+    await pushWithQuickReplies(
+      lineUserId,
+      replyMessage,
+      [
+        { label: '✅ 確定', text: '確定' },
+        { label: '❌ 取消', text: '取消' },
+      ],
+      env.LINE_CHANNEL_ACCESS_TOKEN
+    ).catch(e => console.error('[ImageCorrectionPush] push failed:', e))
+
+    console.log(`[ImageCorrectionPush] correction applied for ${intakeResultId}: "${correctionText}"`)
+  } catch (err) {
+    console.error('[ImageCorrectionPush] error:', err)
+    await pushWithQuickReplies(
+      lineUserId,
+      '修正の処理中にエラーが発生しました。\n「確定」でそのまま記録、「取消」でやり直しできます。',
+      [
+        { label: '✅ 確定', text: '確定' },
+        { label: '❌ 取消', text: '取消' },
+      ],
+      env.LINE_CHANNEL_ACCESS_TOKEN
+    ).catch(e => console.error('[ImageCorrectionPush] error push also failed:', e))
+  }
+}
+
+/**
+ * handleImageMetadataUpdateWithPush
+ * replyToken を使わず pushText で応答するバージョン
+ */
+async function handleImageMetadataUpdateWithPush(
+  metadataText: string,
+  intakeResultId: string,
+  lineUserId: string,
+  clientAccountId: string,
+  env: Bindings
+): Promise<void> {
+  const {
+    findIntakeResultById,
+    updateIntakeResultProposedAction,
+  } = await import('../../repositories/image-intake-repo')
+  const { deleteModeSession } = await import('../../repositories/mode-sessions-repo')
+
+  const result = await findIntakeResultById(env.DB, intakeResultId)
+
+  if (!result || result.applied_flag !== 0) {
+    await pushText(lineUserId, '確認対象のデータが見つかりませんでした。', env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => {})
+    await deleteModeSession(env.DB, clientAccountId, lineUserId)
+    return
+  }
+
+  try {
+    let originalAction: Record<string, unknown> = {}
+    try {
+      originalAction = result.proposed_action_json
+        ? (typeof result.proposed_action_json === 'string'
+          ? JSON.parse(result.proposed_action_json)
+          : result.proposed_action_json)
+        : {}
+    } catch { /* ignore */ }
+
+    let originalExtracted: Record<string, unknown> = {}
+    try {
+      originalExtracted = result.extracted_json
+        ? (typeof result.extracted_json === 'string'
+          ? JSON.parse(result.extracted_json)
+          : result.extracted_json)
+        : {}
+    } catch { /* ignore */ }
+
+    // AI でテキストから日付・食事区分を抽出
+    const ai = createOpenAIClient(env)
+    const today = todayJst()
+
+    /** 今日から offset 日分ずらした日付を YYYY-MM-DD で返す */
+    const getDateOffset = (offset: number): string => {
+      const d = new Date()
+      d.setHours(d.getHours() + 9) // JST
+      d.setDate(d.getDate() + offset)
+      return d.toISOString().slice(0, 10)
+    }
+
+    const raw = await ai.createResponse(
+      [
+        {
+          role: 'system',
+          content: `今日は${today}です。ユーザーの発言から日付と食事区分を抽出してください。
+
+必ず以下のJSON形式のみで返答してください:
+{
+  "target_date": "YYYY-MM-DD形式の日付。不明なら null",
+  "meal_type": "breakfast|lunch|dinner|snack|other のいずれか。不明なら null",
+  "reasoning": "判定理由"
+}
+
+例:
+- "昨日の晩御飯" → {"target_date": "${getDateOffset(-1)}", "meal_type": "dinner", "reasoning": "昨日=前日、晩御飯=dinner"}
+- "これは朝食です" → {"target_date": null, "meal_type": "breakfast", "reasoning": "朝食=breakfast"}
+- "3月10日の夕食" → {"target_date": "2026-03-10", "meal_type": "dinner", "reasoning": "3月10日, 夕食=dinner"}`
+        },
+        { role: 'user', content: metadataText }
+      ],
+      { temperature: 0, maxTokens: 200 }
+    )
+
+    let parsed: { target_date?: string | null; meal_type?: string | null; reasoning?: string } = {}
+    try {
+      const jsonMatch = raw.match(/\{[\s\S]*\}/)
+      parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {}
+    } catch {
+      parsed = {}
+    }
+
+    // 変更があった項目だけ更新
+    let changed = false
+    const newAction = { ...originalAction }
+    const newExtracted = { ...originalExtracted }
+
+    if (parsed.target_date) {
+      newAction.target_date = parsed.target_date
+      newExtracted.target_date = parsed.target_date
+      changed = true
+    }
+
+    if (parsed.meal_type && ['breakfast', 'lunch', 'dinner', 'snack', 'other'].includes(parsed.meal_type)) {
+      newAction.meal_type = parsed.meal_type
+      newExtracted.meal_type_guess = parsed.meal_type
+      changed = true
+    }
+
+    if (changed) {
+      newExtracted.metadata_update_applied = true
+      newExtracted.metadata_update_text = metadataText
+      await updateIntakeResultProposedAction(env.DB, result.id, newAction, newExtracted)
+    }
+
+    // push で更新結果を送信
+    const mealType = (newAction.meal_type as string) ?? 'other'
+    const mealTypeJa =
+      mealType === 'breakfast' ? '朝食' :
+      mealType === 'lunch' ? '昼食' :
+      mealType === 'dinner' ? '夕食' :
+      mealType === 'snack' ? '間食' : '食事'
+
+    const targetDate = (newAction.target_date as string) ?? today
+    const dateDisplay = targetDate === today
+      ? '今日'
+      : targetDate === getDateOffset(-1) ? '昨日' : targetDate
+
+    const desc = (newAction.meal_text as string) ?? '食事'
+    const cal = newAction.calories_kcal as number | null
+
+    const replyMessage =
+      `📅 ${dateDisplay}の${mealTypeJa}に変更しました！\n\n` +
+      `📝 ${desc}\n` +
+      (cal ? `🔥 推定カロリー: ${cal} kcal\n` : '') +
+      (newAction.protein_g ? `💪 P: ${newAction.protein_g}g` : '') +
+      (newAction.fat_g ? ` / F: ${newAction.fat_g}g` : '') +
+      (newAction.carbs_g ? ` / C: ${newAction.carbs_g}g` : '') +
+      '\n\n↓ この内容で記録しますか？'
+
+    await pushWithQuickReplies(
+      lineUserId,
+      replyMessage,
+      [
+        { label: '✅ 確定', text: '確定' },
+        { label: '❌ 取消', text: '取消' },
+      ],
+      env.LINE_CHANNEL_ACCESS_TOKEN
+    ).catch(e => console.error('[ImageMetadataUpdatePush] push failed:', e))
+
+    console.log(`[ImageMetadataUpdatePush] metadata updated for ${intakeResultId}: date=${parsed.target_date}, type=${parsed.meal_type}`)
+  } catch (err) {
+    console.error('[ImageMetadataUpdatePush] error:', err)
+    await pushWithQuickReplies(
+      lineUserId,
+      '情報の更新中にエラーが発生しました。\n「確定」でそのまま記録、「取消」でやり直しできます。',
+      [
+        { label: '✅ 確定', text: '確定' },
+        { label: '❌ 取消', text: '取消' },
+      ],
+      env.LINE_CHANNEL_ACCESS_TOKEN
+    ).catch(e => console.error('[ImageMetadataUpdatePush] error push also failed:', e))
+  }
 }
