@@ -530,6 +530,7 @@ function switchModalTab(tab) {
   else if (tab === 'records') loadModalRecords();
   else if (tab === 'photos') loadModalPhotos();
   else if (tab === 'reports') loadModalReports();
+  else if (tab === 'corrections') loadModalCorrections();
 }
 
 function renderModalOverview() {
@@ -755,6 +756,25 @@ function renderModalOverview() {
     ` : ''}
 
     <div>
+      <h3 class="font-semibold text-gray-700 mb-3"><i class="fas fa-history text-orange-500 mr-1"></i>最近の修正 (${(u.correctionHistory || []).length}件)</h3>
+      ${(u.correctionHistory || []).length === 0
+        ? '<p class="text-gray-400 text-sm">修正履歴なし</p>'
+        : `<div class="space-y-2">${(u.correctionHistory || []).slice(0, 5).map(ch => {
+            const tableLabels = { meal_entries: '食事', body_metrics: '体重', daily_logs: '日次ログ' };
+            const typeLabels = { text_correction: 'テキスト修正', overwrite: '上書き', delete: '削除', auto_merge: '自動マージ', manual_fix: '手動修正' };
+            return `<div class="flex items-center justify-between bg-gray-50 p-3 rounded-lg text-sm">
+              <div class="flex items-center gap-2">
+                <span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">${esc(typeLabels[ch.correctionType] || ch.correctionType)}</span>
+                <span class="text-xs text-gray-500">${esc(tableLabels[ch.targetTable] || ch.targetTable)}</span>
+                ${ch.reason ? '<span class="text-xs text-gray-400 truncate max-w-[150px]" title="' + esc(ch.reason) + '">' + esc(ch.reason) + '</span>' : ''}
+              </div>
+              <span class="text-xs text-gray-400">${fmtDateTime(ch.createdAt)}</span>
+            </div>`;
+          }).join('')}</div>${(u.correctionHistory || []).length > 5 ? '<p class="text-xs text-blue-500 mt-2 cursor-pointer" onclick="switchModalTab(\'corrections\')"><i class="fas fa-arrow-right mr-1"></i>すべて表示</p>' : ''}`
+      }
+    </div>
+
+    <div>
       <h3 class="font-semibold text-gray-700 mb-3">直近の記録（7日分）</h3>
       ${logs.length === 0
         ? '<p class="text-gray-400 text-sm">記録なし</p>'
@@ -896,6 +916,81 @@ async function loadModalReports() {
     }).join('');
   } catch {
     el.innerHTML = '<p class="text-red-400 text-sm">レポートデータの取得に失敗しました</p>';
+  }
+}
+
+// Corrections Tab
+async function loadModalCorrections() {
+  const el = document.getElementById('modal-content');
+  el.innerHTML = '<div class="text-center py-8"><i class="fas fa-spinner fa-spin text-gray-400 text-2xl"></i></div>';
+  try {
+    const res = await axios.get(API_BASE + '/admin/users/' + modalLineUserId + '/corrections?limit=30', { headers: apiHeaders() });
+    const corrections = res.data.data.corrections || [];
+    if (corrections.length === 0) {
+      el.innerHTML = '<div class="text-center py-8 text-gray-400"><i class="fas fa-history text-3xl mb-3"></i><p>修正履歴がありません</p></div>';
+      return;
+    }
+
+    const tableLabels = { meal_entries: '食事', body_metrics: '体重', daily_logs: '日次ログ' };
+    const typeLabels = { text_correction: 'テキスト修正', overwrite: '上書き', delete: '削除', auto_merge: '自動マージ', manual_fix: '手動修正' };
+    const triggerLabels = { user: 'ユーザー', system: 'システム', admin: '管理者' };
+    const triggerColors = { user: 'bg-blue-100 text-blue-700', system: 'bg-gray-100 text-gray-700', admin: 'bg-purple-100 text-purple-700' };
+
+    el.innerHTML = `
+      <div class="text-xs text-gray-500 mb-3">全 ${corrections.length} 件の修正履歴</div>
+      ${corrections.map(ch => {
+        const table = tableLabels[ch.targetTable] || ch.targetTable;
+        const type = typeLabels[ch.correctionType] || ch.correctionType;
+        const trigger = triggerLabels[ch.triggeredBy] || ch.triggeredBy;
+        const triggerCls = triggerColors[ch.triggeredBy] || 'bg-gray-100 text-gray-600';
+
+        let diffHtml = '';
+        try {
+          const oldVal = ch.oldValueJson ? JSON.parse(ch.oldValueJson) : null;
+          const newVal = ch.newValueJson ? JSON.parse(ch.newValueJson) : null;
+          if (oldVal || newVal) {
+            const oldLines = [];
+            const newLines = [];
+            if (oldVal) {
+              for (const [k, v] of Object.entries(oldVal)) {
+                if (v != null) oldLines.push(esc(k) + ': ' + esc(String(v)));
+              }
+            }
+            if (newVal) {
+              for (const [k, v] of Object.entries(newVal)) {
+                if (v != null) newLines.push(esc(k) + ': ' + esc(String(v)));
+              }
+            }
+            diffHtml = '<div class="grid grid-cols-2 gap-2 mt-2">';
+            if (oldLines.length > 0) {
+              diffHtml += '<div class="bg-red-50 border border-red-200 rounded p-2"><p class="text-[10px] text-red-600 font-bold mb-1">変更前</p><p class="text-xs text-red-800 whitespace-pre-wrap">' + oldLines.join('\n') + '</p></div>';
+            }
+            if (newLines.length > 0) {
+              diffHtml += '<div class="bg-green-50 border border-green-200 rounded p-2"><p class="text-[10px] text-green-600 font-bold mb-1">変更後</p><p class="text-xs text-green-800 whitespace-pre-wrap">' + newLines.join('\n') + '</p></div>';
+            }
+            diffHtml += '</div>';
+          }
+        } catch { /* ignore parse errors */ }
+
+        return `<div class="bg-white border rounded-xl mb-3 overflow-hidden">
+          <div class="bg-gray-50 px-4 py-3 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span class="text-xs px-2 py-0.5 rounded-full ${triggerCls} font-medium">${esc(trigger)}</span>
+              <span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">${esc(type)}</span>
+              <span class="text-xs text-gray-500">${esc(table)}</span>
+            </div>
+            <span class="text-xs text-gray-400">${fmtDateTime(ch.createdAt)}</span>
+          </div>
+          <div class="px-4 py-3">
+            <div class="text-xs text-gray-500">対象ID: <code class="bg-gray-100 px-1 rounded">${esc((ch.targetRecordId || '').substring(0, 16))}...</code></div>
+            ${ch.reason ? '<div class="text-xs text-gray-600 mt-1"><i class="fas fa-comment text-gray-400 mr-1"></i>' + esc(ch.reason) + '</div>' : ''}
+            ${diffHtml}
+          </div>
+        </div>`;
+      }).join('')}
+    `;
+  } catch {
+    el.innerHTML = '<p class="text-red-400 text-sm">修正履歴の取得に失敗しました</p>';
   }
 }
 

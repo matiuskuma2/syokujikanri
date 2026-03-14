@@ -12,6 +12,7 @@ import { listRecentDailyLogs } from '../../repositories/daily-logs-repo'
 import { listMealEntriesByDailyLogIds } from '../../repositories/meal-entries-repo'
 import { listWeightHistory } from '../../repositories/body-metrics-repo'
 import { upsertUserServiceStatus, findUserServiceStatus } from '../../repositories/subscriptions-repo'
+import { findCorrectionsByUser } from '../../repositories/correction-history-repo'
 import type { UserProfile } from '../../types/db'
 import { ok, badRequest, notFound } from '../../utils/response'
 
@@ -143,6 +144,12 @@ usersRouter.get('/:lineUserId', async (c) => {
   // 体重推移取得（グラフ用）
   const weightHistory = await listWeightHistory(c.env.DB, userAccount.id, 30)
 
+  // 修正履歴取得
+  let correctionHistory: Awaited<ReturnType<typeof findCorrectionsByUser>> = []
+  try {
+    correctionHistory = await findCorrectionsByUser(c.env.DB, userAccount.id, 20)
+  } catch { /* table may not exist */ }
+
   // ====== 連携ステータス・不整合チェック ======
   // 現在のモードセッション（current_mode / current_step / pending状態）
   let currentMode: string | null = null
@@ -249,6 +256,18 @@ usersRouter.get('/:lineUserId', async (c) => {
     intakeAnswers: intakeAnswers ?? [],
     recentLogs,
     weightHistory,
+    // ====== 修正履歴 ======
+    correctionHistory: correctionHistory.map(ch => ({
+      id: ch.id,
+      targetTable: ch.target_table,
+      targetRecordId: ch.target_record_id,
+      correctionType: ch.correction_type,
+      oldValueJson: ch.old_value_json,
+      newValueJson: ch.new_value_json,
+      triggeredBy: ch.triggered_by,
+      reason: ch.reason,
+      createdAt: ch.created_at,
+    })),
     // ====== 連携・不整合情報 ======
     linkage: {
       currentMode,
@@ -405,6 +424,43 @@ usersRouter.get('/:lineUserId/reports', async (c) => {
   `).bind(userAccount.id, limit).all()
 
   return ok(c, { reports })
+})
+
+// ===================================================================
+// 修正履歴一覧（管理者閲覧）
+// GET /api/admin/users/:lineUserId/corrections?limit=30
+// ===================================================================
+
+usersRouter.get('/:lineUserId/corrections', async (c) => {
+  const payload = c.get('jwtPayload')
+  const lineUserId = c.req.param('lineUserId')
+  const accountId = payload.accountId
+  const isSuperadmin = payload.role === 'superadmin'
+  const limit = parseInt(c.req.query('limit') || '30', 10)
+
+  const userAccount = isSuperadmin
+    ? await findUserAccountByLineUserId(c.env.DB, lineUserId)
+    : await findUserAccount(c.env.DB, lineUserId, accountId)
+  if (!userAccount) return notFound(c, 'User not found')
+
+  try {
+    const corrections = await findCorrectionsByUser(c.env.DB, userAccount.id, limit)
+    return ok(c, {
+      corrections: corrections.map(ch => ({
+        id: ch.id,
+        targetTable: ch.target_table,
+        targetRecordId: ch.target_record_id,
+        correctionType: ch.correction_type,
+        oldValueJson: ch.old_value_json,
+        newValueJson: ch.new_value_json,
+        triggeredBy: ch.triggered_by,
+        reason: ch.reason,
+        createdAt: ch.created_at,
+      })),
+    })
+  } catch {
+    return ok(c, { corrections: [] })
+  }
 })
 
 export default usersRouter

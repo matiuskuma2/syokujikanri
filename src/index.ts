@@ -1451,6 +1451,9 @@ https://lin.ee/n4PoXrR</div>
       <button class="modal-tab" data-tab="reports" onclick="switchModalTab('reports')">
         <i class="fas fa-chart-bar mr-1"></i>レポート
       </button>
+      <button class="modal-tab" data-tab="corrections" onclick="switchModalTab('corrections')">
+        <i class="fas fa-history mr-1"></i>修正履歴
+      </button>
     </div>
     <div id="modal-content" class="overflow-y-auto p-6 flex-1">読み込み中...</div>
   </div>
