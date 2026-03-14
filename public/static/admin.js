@@ -555,10 +555,25 @@ function renderModalOverview() {
   const lastImgAt = linkage.lastImageAnalysisAt || u.lastImageAnalysisAt;
   const lastCorAt = linkage.lastCorrectionAt;
 
+  // 統一ステータス判定 (SSOT: linked / intake_pending / active / pending_image_confirm / pending_clarification / inconsistent)
+  const unifiedState = (() => {
+    if (hasIssues) return { label: 'inconsistent', color: 'bg-red-100 text-red-700 border-red-300', icon: 'fa-exclamation-triangle' };
+    if (pending?.type === 'pending_image_confirm') return { label: 'pending_image_confirm', color: 'bg-amber-100 text-amber-700 border-amber-300', icon: 'fa-hourglass-half' };
+    if (pendingClar) return { label: 'pending_clarification', color: 'bg-blue-100 text-blue-700 border-blue-300', icon: 'fa-question-circle' };
+    if (!u.service || u.service.intake_completed !== 1) return { label: 'intake_pending', color: 'bg-yellow-100 text-yellow-700 border-yellow-300', icon: 'fa-clipboard-list' };
+    if (integrity.followStatus === 'blocked') return { label: 'linked (blocked)', color: 'bg-gray-100 text-gray-500 border-gray-300', icon: 'fa-ban' };
+    return { label: 'active', color: 'bg-green-100 text-green-700 border-green-300', icon: 'fa-check-circle' };
+  })();
+
   document.getElementById('modal-content').innerHTML = `
     <!-- 連携ステータス -->
     <div class="mb-6">
-      <h3 class="font-semibold text-gray-700 mb-3"><i class="fas fa-link text-blue-500 mr-1"></i>連携ステータス</h3>
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-semibold text-gray-700"><i class="fas fa-link text-blue-500 mr-1"></i>連携ステータス</h3>
+        <span class="text-xs px-3 py-1 rounded-full border font-bold ${unifiedState.color}">
+          <i class="fas ${unifiedState.icon} mr-1"></i>${esc(unifiedState.label)}
+        </span>
+      </div>
       <div class="grid grid-cols-3 gap-3 text-sm">
         <div class="bg-gray-50 p-3 rounded-lg">
           <p class="text-gray-500 text-xs mb-1">LINE 表示名</p>
@@ -783,7 +798,11 @@ function renderModalOverview() {
         ? '<p class="text-gray-400 text-sm">修正履歴なし</p>'
         : `<div class="space-y-2">${(u.correctionHistory || []).slice(0, 5).map(ch => {
             const tableLabels = { meal_entries: '食事', body_metrics: '体重', daily_logs: '日次ログ' };
-            const typeLabels = { text_correction: 'テキスト修正', overwrite: '上書き', delete: '削除', auto_merge: '自動マージ', manual_fix: '手動修正' };
+            const typeLabels = {
+              text_correction: 'テキスト修正', overwrite: '上書き', delete: '削除', auto_merge: '自動マージ', manual_fix: '手動修正',
+              meal_type_change: '区分変更', content_change: '内容修正', date_change: '日付変更',
+              nutrition_change: '栄養値変更', weight_change: '体重修正', append: '追記'
+            };
             return `<div class="flex items-center justify-between bg-gray-50 p-3 rounded-lg text-sm">
               <div class="flex items-center gap-2">
                 <span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">${esc(typeLabels[ch.correctionType] || ch.correctionType)}</span>
@@ -954,7 +973,11 @@ async function loadModalCorrections() {
     }
 
     const tableLabels = { meal_entries: '食事', body_metrics: '体重', daily_logs: '日次ログ' };
-    const typeLabels = { text_correction: 'テキスト修正', overwrite: '上書き', delete: '削除', auto_merge: '自動マージ', manual_fix: '手動修正' };
+    const typeLabels = {
+      text_correction: 'テキスト修正', overwrite: '上書き', delete: '削除', auto_merge: '自動マージ', manual_fix: '手動修正',
+      meal_type_change: '区分変更', content_change: '内容修正', date_change: '日付変更',
+      nutrition_change: '栄養値変更', weight_change: '体重修正', append: '追記'
+    };
     const triggerLabels = { user: 'ユーザー', system: 'システム', admin: '管理者' };
     const triggerColors = { user: 'bg-blue-100 text-blue-700', system: 'bg-gray-100 text-gray-700', admin: 'bg-purple-100 text-purple-700' };
 
