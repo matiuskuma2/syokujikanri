@@ -542,17 +542,27 @@ function renderModalOverview() {
   const weightHistory = u.weightHistory || [];
   const isReadOnly = currentAdmin?.role === 'staff';
 
-  // 連携・整合性ステータス
-  const integrity = u.integrity || {};
-  const pending = u.pendingStatus;
-  const pendingClar = u.pendingClarification;
+  // 連携・整合性ステータス (API v2: linkage nested object)
+  const linkage = u.linkage || {};
+  const integrity = linkage.integrity || u.integrity || {};
+  const pending = linkage.pendingStatus || u.pendingStatus;
+  const pendingClar = linkage.pendingClarification || u.pendingClarification;
   const hasIssues = integrity.issues && integrity.issues.length > 0;
+  const currentMode = linkage.currentMode;
+  const currentStep = linkage.currentStep;
+  const lastMsgAt = linkage.lastMessageAt || u.lastMessageAt;
+  const lastImgAt = linkage.lastImageAnalysisAt || u.lastImageAnalysisAt;
+  const lastCorAt = linkage.lastCorrectionAt;
 
   document.getElementById('modal-content').innerHTML = `
     <!-- 連携ステータス -->
     <div class="mb-6">
       <h3 class="font-semibold text-gray-700 mb-3"><i class="fas fa-link text-blue-500 mr-1"></i>連携ステータス</h3>
-      <div class="grid grid-cols-2 gap-3 text-sm">
+      <div class="grid grid-cols-3 gap-3 text-sm">
+        <div class="bg-gray-50 p-3 rounded-lg">
+          <p class="text-gray-500 text-xs mb-1">LINE 表示名</p>
+          <p class="font-medium">${esc(u.display_name || '-')}</p>
+        </div>
         <div class="bg-gray-50 p-3 rounded-lg">
           <p class="text-gray-500 text-xs mb-1">LINE User ID</p>
           <p class="font-mono text-xs truncate" title="${esc(lineUserId)}">${esc(lineUserId)}</p>
@@ -562,8 +572,8 @@ function renderModalOverview() {
           <p class="font-mono text-xs truncate" title="${esc(u.userAccountId)}">${esc(u.userAccountId)}</p>
         </div>
         <div class="bg-gray-50 p-3 rounded-lg">
-          <p class="text-gray-500 text-xs mb-1">LINE 表示名</p>
-          <p class="font-medium">${esc(u.display_name || '-')}</p>
+          <p class="text-gray-500 text-xs mb-1">Client Account ID</p>
+          <p class="font-mono text-xs truncate" title="${esc(u.clientAccountId || '-')}">${esc(u.clientAccountId || '-')}</p>
         </div>
         <div class="bg-gray-50 p-3 rounded-lg">
           <p class="text-gray-500 text-xs mb-1">参加日</p>
@@ -577,13 +587,30 @@ function renderModalOverview() {
             : '<span class="text-gray-400">' + esc(integrity.followStatus || '不明') + '</span>'
           }</p>
         </div>
-        <div class="bg-gray-50 p-3 rounded-lg">
-          <p class="text-gray-500 text-xs mb-1">問診完了</p>
-          <p class="font-medium">${
-            u.service?.intake_completed === 1
-              ? '<span class="text-green-600"><i class="fas fa-check-circle mr-1"></i>完了</span>'
-              : '<span class="text-amber-600"><i class="fas fa-clock mr-1"></i>未完了</span>'
-          }</p>
+      </div>
+
+      <!-- BOT状態フラグ -->
+      <div class="grid grid-cols-5 gap-2 mt-3 text-xs text-center">
+        <div class="p-2 rounded-lg ${u.service?.intake_completed === 1 ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}">
+          <i class="fas ${u.service?.intake_completed === 1 ? 'fa-check-circle' : 'fa-clock'} mb-1"></i>
+          <p class="font-medium">問診${u.service?.intake_completed === 1 ? '完了' : '未完了'}</p>
+        </div>
+        <div class="p-2 rounded-lg ${u.service?.bot_enabled === 1 ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}">
+          <i class="fas ${u.service?.bot_enabled === 1 ? 'fa-robot' : 'fa-robot'} mb-1"></i>
+          <p class="font-medium">BOT ${u.service?.bot_enabled === 1 ? 'ON' : 'OFF'}</p>
+        </div>
+        <div class="p-2 rounded-lg ${u.service?.record_enabled === 1 ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'}">
+          <i class="fas fa-utensils mb-1"></i>
+          <p class="font-medium">記録 ${u.service?.record_enabled === 1 ? 'ON' : 'OFF'}</p>
+        </div>
+        <div class="p-2 rounded-lg ${u.service?.consult_enabled === 1 ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'}">
+          <i class="fas fa-comments mb-1"></i>
+          <p class="font-medium">相談 ${u.service?.consult_enabled === 1 ? 'ON' : 'OFF'}</p>
+        </div>
+        <div class="p-2 rounded-lg ${currentMode ? 'bg-purple-50 text-purple-700' : 'bg-gray-100 text-gray-400'}">
+          <i class="fas fa-cog mb-1"></i>
+          <p class="font-medium">${currentMode ? esc(currentMode) : 'idle'}</p>
+          ${currentStep ? '<p class="text-[10px] truncate" title="' + esc(currentStep) + '">' + esc(currentStep) + '</p>' : ''}
         </div>
       </div>
 
@@ -612,14 +639,18 @@ function renderModalOverview() {
       </div>` : ''}
 
       <!-- アクティビティ -->
-      <div class="grid grid-cols-2 gap-3 mt-3 text-sm">
+      <div class="grid grid-cols-3 gap-3 mt-3 text-sm">
         <div class="bg-gray-50 p-3 rounded-lg">
           <p class="text-gray-500 text-xs mb-1">最終メッセージ</p>
-          <p class="font-medium text-xs">${fmtDateTime(u.lastMessageAt) || '-'}</p>
+          <p class="font-medium text-xs">${fmtDateTime(lastMsgAt) || '-'}</p>
         </div>
         <div class="bg-gray-50 p-3 rounded-lg">
           <p class="text-gray-500 text-xs mb-1">最終画像解析</p>
-          <p class="font-medium text-xs">${fmtDateTime(u.lastImageAnalysisAt) || '-'}</p>
+          <p class="font-medium text-xs">${fmtDateTime(lastImgAt) || '-'}</p>
+        </div>
+        <div class="bg-gray-50 p-3 rounded-lg">
+          <p class="text-gray-500 text-xs mb-1">最終修正</p>
+          <p class="font-medium text-xs">${fmtDateTime(lastCorAt) || '-'}</p>
         </div>
       </div>
 
