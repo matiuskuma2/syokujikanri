@@ -183,11 +183,12 @@ async function applyProposedAction(
 
   switch (actionType) {
     case 'create_or_update_meal_entry': {
-      const today = todayJst()
+      // target_date が指定されていればそれを使う（メタデータ更新で変更される場合がある）
+      const logDate = (action.target_date as string) ?? todayJst()
       const dailyLog = await ensureDailyLog(env.DB, {
         userAccountId,
         clientAccountId,
-        logDate: today,
+        logDate,
       })
 
       const mealType = (action.meal_type as string) ?? 'other'
@@ -233,11 +234,11 @@ async function applyProposedAction(
       const weightKg = action.weight_kg as number
       if (!weightKg || weightKg <= 20 || weightKg >= 300) return
 
-      const today = todayJst()
+      const weightDate = (action.target_date as string) ?? todayJst()
       const dailyLog = await ensureDailyLog(env.DB, {
         userAccountId,
         clientAccountId,
-        logDate: today,
+        logDate: weightDate,
       })
       await upsertBodyMetrics(env.DB, {
         dailyLogId: dailyLog.id,
@@ -306,6 +307,303 @@ function buildConfirmMessage(result: ImageIntakeResult): string {
     default:
       return '✅ 記録を保存しました！'
   }
+}
+
+// ===================================================================
+// 意図判定: pending_image_confirm 中のテキスト分類
+// ===================================================================
+
+/**
+ * pending_image_confirm 中にユーザーが送ったテキストの意図を判定する。
+ *
+ * 分類:
+ *   - "food_correction"   : 食品内容の修正（鮭→スクランブルエッグ、白米2膳 等）
+ *   - "metadata_update"   : 日付・食事区分の変更（昨日の晩御飯、これは朝食 等）
+ *   - "both"              : 食品修正 + メタデータ更新の両方を含む
+ *   - "unrelated"         : 確認中の食事とは無関係のテキスト
+ *
+ * 軽量に判定するため、まずルールベースで判定し、
+ * 判定不能な場合のみ AI を使う。
+ */
+export type PendingTextIntent = 'food_correction' | 'metadata_update' | 'both' | 'unrelated'
+
+// ルールベース: 日付・時間帯・食事区分を示すパターン
+const DATE_PATTERNS = [
+  /昨日/,
+  /一昨日|おととい/,
+  /今日/,
+  /(\d{1,2})[\/\-月](\d{1,2})/,  // 3/10, 3-10, 3月10日
+  /先週/,
+  /今週/,
+  /(月|火|水|木|金|土|日)曜/,
+]
+
+const MEAL_TYPE_PATTERNS = [
+  /朝(食|ごはん|ご飯|メシ|めし|飯)/,
+  /昼(食|ごはん|ご飯|メシ|めし|飯)/,
+  /ランチ/,
+  /晩(御飯|ごはん|ご飯|メシ|めし|飯)/,
+  /夕(食|飯|ごはん|ご飯|メシ|めし)/,
+  /夜(ご飯|ごはん|食|飯)/,
+  /ディナー/,
+  /間食|おやつ|スナック/,
+  /夜食/,
+]
+
+// ルールベース: 食品修正を示すパターン
+const FOOD_CORRECTION_PATTERNS = [
+  /ではなく|じゃなく|じゃなくて/,
+  /違う|ちがう/,
+  /ではない|じゃない/,
+  /実は|じつは/,
+  /正しくは/,
+  /(\d+)(膳|杯|個|枚|切れ|本|皿|パック|袋)/,
+  /量[はが]|多め|少なめ|大盛|小盛/,
+  /追加で|あと|それと|プラス/,
+  /入って(い|な)|含まれ/,
+  /なし[でに]|抜き|除い/,
+]
+
+export async function classifyPendingText(
+  text: string,
+  env: Bindings
+): Promise<PendingTextIntent> {
+  const trimmed = text.trim()
+
+  // 短すぎるテキストは判定不要（確定/取消は既にハンドル済み）
+  if (trimmed.length <= 1) return 'unrelated'
+
+  // ルールベース判定
+  const hasDatePattern = DATE_PATTERNS.some(p => p.test(trimmed))
+  const hasMealTypePattern = MEAL_TYPE_PATTERNS.some(p => p.test(trimmed))
+  const hasFoodCorrection = FOOD_CORRECTION_PATTERNS.some(p => p.test(trimmed))
+
+  const hasMetadata = hasDatePattern || hasMealTypePattern
+
+  // 明確なパターンの場合はルールベースで返す
+  if (hasFoodCorrection && hasMetadata) return 'both'
+  if (hasFoodCorrection && !hasMetadata) return 'food_correction'
+
+  // メタデータのみ且つ短い（食品情報が含まれていない）→ metadata_update
+  // 例: "昨日の晩御飯", "これは朝食です", "今日の昼食"
+  if (hasMetadata && trimmed.length <= 30) return 'metadata_update'
+
+  // ルールベースで判定できない場合 → AI判定
+  try {
+    const ai = createOpenAIClient(env)
+    const raw = await ai.createResponse(
+      [
+        {
+          role: 'system',
+          content: `食事画像の解析結果を確認中のユーザーが送ったテキストを分類してください。
+
+分類:
+- "food_correction": 食品の内容・量・種類の修正（例: 「鮭ではなくスクランブルエッグ」「白米2膳」「ブロッコリーも入ってた」）
+- "metadata_update": 日付や食事区分の情報（例: 「昨日の晩御飯」「これは朝食」「3/10の夕食」）
+- "both": 食品修正と日付/区分の両方（例: 「昨日の夕食で白米は大盛りだった」）
+- "unrelated": 確認中の食事とは無関係（例: 「ありがとう」「他の話」）
+
+テキストの分類を1単語で返してください: food_correction, metadata_update, both, unrelated`
+        },
+        { role: 'user', content: trimmed }
+      ],
+      { temperature: 0, maxTokens: 20 }
+    )
+
+    const result = raw.trim().toLowerCase()
+    if (result.includes('food_correction')) return 'food_correction'
+    if (result.includes('metadata_update')) return 'metadata_update'
+    if (result.includes('both')) return 'both'
+    if (result.includes('unrelated')) return 'unrelated'
+
+    // AI判定が不明確な場合、テキスト長で推定
+    // 長いテキストは修正の可能性が高い
+    return trimmed.length > 10 ? 'food_correction' : 'unrelated'
+  } catch (err) {
+    console.error('[classifyPendingText] AI classification failed:', err)
+    // AI失敗時のフォールバック: メタデータパターンがあればそれ、なければ食品修正
+    if (hasMetadata) return 'metadata_update'
+    return trimmed.length > 5 ? 'food_correction' : 'unrelated'
+  }
+}
+
+// ===================================================================
+// メタデータ更新ハンドラー（日付・食事区分の変更）
+// ===================================================================
+
+/**
+ * pending_image_confirm 中にユーザーが日付・食事区分の変更を送った場合のハンドラー
+ *
+ * 例: "昨日の晩御飯", "これは朝食です", "3/10の夕食"
+ *
+ * proposed_action_json の meal_type と target_date を更新し、
+ * 更新後の内容を再度提示する。
+ */
+export async function handleImageMetadataUpdate(
+  replyToken: string,
+  metadataText: string,
+  intakeResultId: string,
+  lineUserId: string,
+  clientAccountId: string,
+  env: Bindings
+): Promise<void> {
+  const result = await findIntakeResultById(env.DB, intakeResultId)
+
+  if (!result || result.applied_flag !== 0) {
+    await replyText(replyToken, '確認対象のデータが見つかりませんでした。', env.LINE_CHANNEL_ACCESS_TOKEN)
+      .catch(async () => {
+        await pushText(lineUserId, '確認対象のデータが見つかりませんでした。', env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => {})
+      })
+    await deleteModeSession(env.DB, clientAccountId, lineUserId)
+    return
+  }
+
+  try {
+    let originalAction: Record<string, unknown> = {}
+    try {
+      originalAction = result.proposed_action_json
+        ? (typeof result.proposed_action_json === 'string'
+          ? JSON.parse(result.proposed_action_json)
+          : result.proposed_action_json)
+        : {}
+    } catch { /* ignore */ }
+
+    let originalExtracted: Record<string, unknown> = {}
+    try {
+      originalExtracted = result.extracted_json
+        ? (typeof result.extracted_json === 'string'
+          ? JSON.parse(result.extracted_json)
+          : result.extracted_json)
+        : {}
+    } catch { /* ignore */ }
+
+    // AI でテキストから日付・食事区分を抽出
+    const ai = createOpenAIClient(env)
+    const today = todayJst()
+    const raw = await ai.createResponse(
+      [
+        {
+          role: 'system',
+          content: `今日は${today}です。ユーザーの発言から日付と食事区分を抽出してください。
+
+必ず以下のJSON形式のみで返答してください:
+{
+  "target_date": "YYYY-MM-DD形式の日付。不明なら null",
+  "meal_type": "breakfast|lunch|dinner|snack|other のいずれか。不明なら null",
+  "reasoning": "判定理由"
+}
+
+例:
+- "昨日の晩御飯" → {"target_date": "${getDateOffset(-1)}", "meal_type": "dinner", "reasoning": "昨日=前日、晩御飯=dinner"}
+- "これは朝食です" → {"target_date": null, "meal_type": "breakfast", "reasoning": "朝食=breakfast"}
+- "3月10日の夕食" → {"target_date": "2026-03-10", "meal_type": "dinner", "reasoning": "3月10日, 夕食=dinner"}`
+        },
+        { role: 'user', content: metadataText }
+      ],
+      { temperature: 0, maxTokens: 200 }
+    )
+
+    let parsed: { target_date?: string | null; meal_type?: string | null; reasoning?: string } = {}
+    try {
+      const jsonMatch = raw.match(/\{[\s\S]*\}/)
+      parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {}
+    } catch {
+      parsed = {}
+    }
+
+    // 変更があった項目だけ更新
+    let changed = false
+    const newAction = { ...originalAction }
+    const newExtracted = { ...originalExtracted }
+
+    if (parsed.target_date) {
+      newAction.target_date = parsed.target_date
+      newExtracted.target_date = parsed.target_date
+      changed = true
+    }
+
+    if (parsed.meal_type && ['breakfast', 'lunch', 'dinner', 'snack', 'other'].includes(parsed.meal_type)) {
+      newAction.meal_type = parsed.meal_type
+      newExtracted.meal_type_guess = parsed.meal_type
+      changed = true
+    }
+
+    if (changed) {
+      newExtracted.metadata_update_applied = true
+      newExtracted.metadata_update_text = metadataText
+      await updateIntakeResultProposedAction(env.DB, result.id, newAction, newExtracted)
+    }
+
+    // 更新後の内容を提示
+    const mealType = (newAction.meal_type as string) ?? 'other'
+    const mealTypeJa =
+      mealType === 'breakfast' ? '朝食' :
+      mealType === 'lunch' ? '昼食' :
+      mealType === 'dinner' ? '夕食' :
+      mealType === 'snack' ? '間食' : '食事'
+
+    const targetDate = (newAction.target_date as string) ?? today
+    const dateDisplay = targetDate === today
+      ? '今日'
+      : targetDate === getDateOffset(-1) ? '昨日' : targetDate
+
+    const desc = (newAction.meal_text as string) ?? '食事'
+    const cal = newAction.calories_kcal as number | null
+
+    let replyMessage =
+      `📅 ${dateDisplay}の${mealTypeJa}に変更しました！\n\n` +
+      `📝 ${desc}\n` +
+      (cal ? `🔥 推定カロリー: ${cal} kcal\n` : '') +
+      (newAction.protein_g ? `💪 P: ${newAction.protein_g}g` : '') +
+      (newAction.fat_g ? ` / F: ${newAction.fat_g}g` : '') +
+      (newAction.carbs_g ? ` / C: ${newAction.carbs_g}g` : '') +
+      '\n\n↓ この内容で記録しますか？'
+
+    await replyTextWithQuickReplies(
+      replyToken,
+      replyMessage,
+      [
+        { label: '✅ 確定', text: '確定' },
+        { label: '❌ 取消', text: '取消' },
+      ],
+      env.LINE_CHANNEL_ACCESS_TOKEN
+    ).catch(async (replyErr) => {
+      console.warn('[ImageMetadataUpdate] reply failed, falling back to push:', replyErr)
+      await pushWithQuickReplies(
+        lineUserId,
+        replyMessage,
+        [
+          { label: '✅ 確定', text: '確定' },
+          { label: '❌ 取消', text: '取消' },
+        ],
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      ).catch(e => console.error('[ImageMetadataUpdate] push fallback also failed:', e))
+    })
+
+    console.log(`[ImageMetadataUpdate] metadata updated for ${intakeResultId}: date=${parsed.target_date}, type=${parsed.meal_type}`)
+  } catch (err) {
+    console.error('[ImageMetadataUpdate] error:', err)
+    await replyText(
+      replyToken,
+      '情報の更新中にエラーが発生しました。\n「確定」でそのまま記録、「取消」でやり直しできます。',
+      env.LINE_CHANNEL_ACCESS_TOKEN
+    ).catch(async () => {
+      await pushText(
+        lineUserId,
+        '情報の更新中にエラーが発生しました。\n「確定」でそのまま記録、「取消」でやり直しできます。',
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      ).catch(() => {})
+    })
+  }
+}
+
+/** 今日から offset 日分ずらした日付を YYYY-MM-DD で返す */
+function getDateOffset(offset: number): string {
+  const d = new Date()
+  // JST (UTC+9)
+  d.setHours(d.getHours() + 9)
+  d.setDate(d.getDate() + offset)
+  return d.toISOString().slice(0, 10)
 }
 
 // ===================================================================

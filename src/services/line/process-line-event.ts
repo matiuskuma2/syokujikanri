@@ -324,7 +324,7 @@ async function handleTextMessageEvent(
       if (PENDING_BLOCK_COMMANDS.includes(textTrim)) {
         await replyWithQuickReplies(
           event.replyToken,
-          '🔄 いま前の食事の確認待ちです。\n先にこの内容を「✅ 確定」「修正テキスト」「❌ 取消」のいずれかで完了してください。',
+          '🔄 いま前の食事の確認待ちです。\n先に「✅ 確定」「修正テキスト」「❌ 取消」のいずれかで完了してください。',
           [
             { label: '✅ 確定', text: '確定' },
             { label: '❌ 取消', text: '取消' },
@@ -349,10 +349,39 @@ async function handleTextMessageEvent(
         await handleImageDiscard(event.replyToken, intakeResultId, lineUserId, preEffectiveAccountId, env)
         return
       } else {
-        // テキスト修正として処理: ユーザーの修正を AI で再解析し、提案を更新する
-        const { handleImageCorrection } = await import('./image-confirm-handler')
-        await handleImageCorrection(event.replyToken, textTrim, intakeResultId, lineUserId, preEffectiveAccountId, env)
-        return
+        // AI 意図判定: 食品修正 / メタデータ更新（日付・区分） / 両方 / 無関係 を判別
+        const { classifyPendingText, handleImageCorrection, handleImageMetadataUpdate } = await import('./image-confirm-handler')
+        const pendingIntent = await classifyPendingText(textTrim, env)
+        console.log(`[LINE] pending_image_confirm text intent: "${textTrim}" → ${pendingIntent}`)
+
+        switch (pendingIntent) {
+          case 'food_correction':
+            await handleImageCorrection(event.replyToken, textTrim, intakeResultId, lineUserId, preEffectiveAccountId, env)
+            return
+
+          case 'metadata_update':
+            await handleImageMetadataUpdate(event.replyToken, textTrim, intakeResultId, lineUserId, preEffectiveAccountId, env)
+            return
+
+          case 'both':
+            // 食品修正 + メタデータ更新: 食品修正 AI に全て任せる（meal_type_guess で区分も反映される）
+            await handleImageCorrection(event.replyToken, textTrim, intakeResultId, lineUserId, preEffectiveAccountId, env)
+            return
+
+          case 'unrelated':
+          default:
+            // 無関係テキスト → 確認待ちを案内
+            await replyWithQuickReplies(
+              event.replyToken,
+              '🔄 いま前の食事の確認待ちです。\n\n内容を修正する場合は修正内容をテキストで送ってください。\n例: 「鮭ではなくスクランブルエッグ」\n例: 「昨日の夕食」\n\nまたは「✅ 確定」「❌ 取消」で完了してください。',
+              [
+                { label: '✅ 確定', text: '確定' },
+                { label: '❌ 取消', text: '取消' },
+              ],
+              env.LINE_CHANNEL_ACCESS_TOKEN
+            )
+            return
+        }
       }
     }
   }
