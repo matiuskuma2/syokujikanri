@@ -26,7 +26,7 @@ import {
 } from '../../repositories/meal-entries-repo'
 import { upsertBodyMetrics } from '../../repositories/body-metrics-repo'
 import { createProgressPhoto } from '../../repositories/progress-photos-repo'
-import { replyText, replyTextWithQuickReplies, pushWithQuickReplies } from './reply'
+import { replyText, replyTextWithQuickReplies, pushText, pushWithQuickReplies } from './reply'
 import { deleteModeSession } from '../../repositories/mode-sessions-repo'
 import { todayJst } from '../../utils/id'
 import { createOpenAIClient } from '../ai/openai-client'

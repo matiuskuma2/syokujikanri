@@ -317,7 +317,7 @@ async function handleTextMessageEvent(
       // リッチメニュー系コマンド → 確認完了を促す（新しい操作を開始させない）
       const PENDING_BLOCK_COMMANDS = [
         '記録する', '記録モード', '記録にして', '戻る',
-        '相談する', '相談モード', '相談にして',
+        '相談する', '相談モード', '相談にして', '相談続ける',
         '写真を送る', '体重記録', '体重を記録',
         '問診', 'ヒアリング', '登録', '初期設定', '問診やり直し', '問診リセット', '問診再開',
       ]
@@ -543,7 +543,7 @@ async function handleTextMessageEvent(
       })
     } catch (e) { console.error('[LINE] auto-switch consult session error:', e) }
     // 自動切替の場合、切替メッセージは送らず直接相談処理へ
-    await handleConsultText(event.replyToken, textTrim, thread.id, userAccount.id, ctx)
+    await handleConsultText(event.replyToken, textTrim, thread.id, userAccount.id, ctx, lineUserId)
     return
   }
 
@@ -551,7 +551,7 @@ async function handleTextMessageEvent(
   // ⑦⑧ 現在のモードに応じて処理
   // ------------------------------------------------------------------
   if (currentMode === 'consult') {
-    await handleConsultText(event.replyToken, textTrim, thread.id, userAccount.id, ctx)
+    await handleConsultText(event.replyToken, textTrim, thread.id, userAccount.id, ctx, lineUserId)
   } else {
     await handleRecordText(event.replyToken, textTrim, userAccount.id, effectiveAccountId, lineUserId, thread.id, ctx, event.message.id)
   }
@@ -691,7 +691,7 @@ async function handleRecordText(
   // 相談意図を検出 → 自動切替
   if (intent.intent_primary === 'consult') {
     try { await updateThreadMode(env.DB, threadId, 'consult') } catch { /* ignore */ }
-    await handleConsultText(replyToken, text, threadId, userAccountId, ctx)
+    await handleConsultText(replyToken, text, threadId, userAccountId, ctx, lineUserId)
     return
   }
 
@@ -902,7 +902,8 @@ async function handleConsultText(
   text: string,
   threadId: string,
   userAccountId: string,
-  ctx: ProcessContext
+  ctx: ProcessContext,
+  lineUserId?: string
 ): Promise<void> {
   const { env } = ctx
 
@@ -1095,12 +1096,16 @@ async function handleConsultText(
 
   } catch (err) {
     console.error('[LINE] consult AI error:', err)
+    const errorMsg = 'AIの応答に失敗しました。しばらくしてから再度お試しください。'
     await replyText(
       replyToken,
-      'AIの応答に失敗しました。しばらくしてから再度お試しください。',
+      errorMsg,
       env.LINE_CHANNEL_ACCESS_TOKEN
-    ).catch((replyErr) => {
-      console.warn('[Consult] error reply also failed:', replyErr)
+    ).catch(async (replyErr) => {
+      console.warn('[Consult] error reply failed, trying push fallback:', replyErr)
+      if (lineUserId) {
+        await pushText(lineUserId, errorMsg, env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => {})
+      }
     })
   }
 }

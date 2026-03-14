@@ -678,6 +678,28 @@ function renderModalOverview() {
       </div>`}
     </div>
 
+    <!-- 最近の画像解析結果 -->
+    ${(() => {
+      const imgResults = linkage.recentImageResults || [];
+      if (imgResults.length === 0) return '';
+      const flagLabels = { 0: ['⏳ 確認待ち', 'bg-amber-100 text-amber-700'], 1: ['✅ 確定', 'bg-green-100 text-green-700'], 2: ['🗑 取消', 'bg-gray-100 text-gray-500'] };
+      const catLabels = { meal_photo: '🍽 食事写真', nutrition_label: '📋 栄養表示', body_scale: '⚖️ 体重計', progress_body_photo: '📸 体型写真', food_package: '📦 食品パッケージ' };
+      return '<div class="mb-6"><h3 class="font-semibold text-gray-700 mb-3"><i class="fas fa-camera text-indigo-500 mr-1"></i>最近の画像解析 (' + imgResults.length + '件)</h3><div class="space-y-2">' +
+        imgResults.map(r => {
+          const [flagLabel, flagClass] = flagLabels[r.appliedFlag] || ['❓ 不明', 'bg-gray-100 text-gray-500'];
+          const catLabel = catLabels[r.imageCategory] || r.imageCategory || '不明';
+          return '<div class="flex items-center justify-between bg-gray-50 p-3 rounded-lg text-sm">' +
+            '<div class="flex items-center gap-2 flex-1 min-w-0">' +
+              '<span class="text-xs px-2 py-0.5 rounded-full ' + flagClass + ' font-medium whitespace-nowrap">' + flagLabel + '</span>' +
+              '<span class="text-xs text-gray-500 whitespace-nowrap">' + esc(catLabel) + '</span>' +
+              (r.mealDescription ? '<span class="text-xs text-gray-700 truncate" title="' + esc(r.mealDescription) + '">' + esc(r.mealDescription.substring(0, 30)) + '</span>' : '') +
+              (r.estimatedCalories ? '<span class="text-xs text-orange-600 whitespace-nowrap">' + r.estimatedCalories + 'kcal</span>' : '') +
+            '</div>' +
+            '<span class="text-xs text-gray-400 whitespace-nowrap ml-2">' + fmtDateTime(r.createdAt) + '</span>' +
+          '</div>';
+        }).join('') + '</div></div>';
+    })()}
+
     ${profile ? `
     <div class="mb-6">
       <h3 class="font-semibold text-gray-700 mb-3"><i class="fas fa-id-card text-green-500 mr-1"></i>プロフィール</h3>

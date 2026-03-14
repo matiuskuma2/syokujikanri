@@ -143,9 +143,29 @@ lineAuthRouter.post('/', async (c) => {
 
   // ------------------------------------------------------------------
   // 3.5 サービスステータス取得（問診完了状態の判定用）
+  //      user_accounts の client_account_id を優先的に使用
+  //      （招待コードで別アカウントに紐付けされた場合に対応）
   // ------------------------------------------------------------------
   const { findUserServiceStatus } = await import('../../repositories/subscriptions-repo')
-  const serviceStatus = await findUserServiceStatus(c.env.DB, clientAccountId, lineUserId)
+  const effectiveAccountId = userAccount.client_account_id || clientAccountId
+  let serviceStatus = await findUserServiceStatus(c.env.DB, effectiveAccountId, lineUserId)
+  // フォールバック: デフォルトアカウントIDでも探す
+  if (!serviceStatus && effectiveAccountId !== clientAccountId) {
+    serviceStatus = await findUserServiceStatus(c.env.DB, clientAccountId, lineUserId)
+  }
+  // さらにフォールバック: lineUserIdのみで検索
+  if (!serviceStatus) {
+    const { checkServiceAccess } = await import('../../repositories/subscriptions-repo')
+    const access = await checkServiceAccess(c.env.DB, { accountId: effectiveAccountId, lineUserId })
+    if (access) {
+      serviceStatus = {
+        intake_completed: access.intakeCompleted ? 1 : 0,
+        bot_enabled: access.botEnabled ? 1 : 0,
+        record_enabled: access.recordEnabled ? 1 : 0,
+        consult_enabled: access.consultEnabled ? 1 : 0,
+      } as any
+    }
+  }
 
   // ------------------------------------------------------------------
   // 4. JWT 発行
@@ -154,7 +174,7 @@ lineAuthRouter.post('/', async (c) => {
     {
       sub: userAccount.id,
       role: 'user',
-      accountId: clientAccountId,
+      accountId: effectiveAccountId,
     },
     c.env.JWT_SECRET,
     c.env.JWT_EXPIRES_IN ?? '7d'

@@ -216,6 +216,44 @@ usersRouter.get('/:lineUserId', async (c) => {
     lastCorrectionAt = cor?.created_at ?? null
   } catch { /* ignore */ }
 
+  // 最近の画像解析結果（5件: pending/confirmed/discarded を一覧表示）
+  let recentImageResults: Array<{
+    id: string
+    imageCategory: string | null
+    appliedFlag: number
+    mealDescription: string | null
+    estimatedCalories: number | null
+    createdAt: string
+    confirmedAt: string | null
+  }> = []
+  try {
+    const { results: imgResults } = await c.env.DB.prepare(
+      `SELECT id, image_category, applied_flag, extracted_json, proposed_action_json, created_at, confirmed_at
+       FROM image_intake_results
+       WHERE user_account_id = ?1
+       ORDER BY created_at DESC
+       LIMIT 5`
+    ).bind(userAccount.id).all<any>()
+    recentImageResults = (imgResults ?? []).map((r: any) => {
+      let mealDesc: string | null = null
+      let estCal: number | null = null
+      try {
+        const action = r.proposed_action_json ? JSON.parse(r.proposed_action_json) : {}
+        mealDesc = action.meal_text ?? null
+        estCal = action.calories_kcal ?? null
+      } catch { /* ignore */ }
+      return {
+        id: r.id,
+        imageCategory: r.image_category,
+        appliedFlag: r.applied_flag,
+        mealDescription: mealDesc,
+        estimatedCalories: estCal,
+        createdAt: r.created_at,
+        confirmedAt: r.confirmed_at,
+      }
+    })
+  } catch { /* ignore */ }
+
   // 整合性チェック
   const integrity = {
     lineUserExists: !!lineUser,
@@ -277,6 +315,7 @@ usersRouter.get('/:lineUserId', async (c) => {
       lastMessageAt,
       lastImageAnalysisAt,
       lastCorrectionAt,
+      recentImageResults,
       integrity,
     },
   })
