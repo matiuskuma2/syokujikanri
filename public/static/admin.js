@@ -493,14 +493,14 @@ function badge(val) {
 
 function userStatusLabel(u) {
   if (u.status === 'blocked')
-    return '<span class="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-600 font-medium">ブロック</span>';
+    return '<span class="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-600 font-medium"><i class="fas fa-ban mr-1"></i>blocked</span>';
   if (!u.botEnabled)
-    return '<span class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">停止中</span>';
+    return '<span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 font-medium"><i class="fas fa-link mr-1"></i>linked</span>';
   if (!u.intakeCompleted)
-    return '<span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-medium">問診未完了</span>';
+    return '<span class="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-medium"><i class="fas fa-clipboard-list mr-1"></i>intake_pending</span>';
   if (!u.recordEnabled && !u.consultEnabled)
-    return '<span class="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">制限中</span>';
-  return '<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">利用中</span>';
+    return '<span class="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium"><i class="fas fa-lock mr-1"></i>restricted</span>';
+  return '<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium"><i class="fas fa-check-circle mr-1"></i>active</span>';
 }
 
 // ================================================================
@@ -560,8 +560,9 @@ function renderModalOverview() {
     if (hasIssues) return { label: 'inconsistent', color: 'bg-red-100 text-red-700 border-red-300', icon: 'fa-exclamation-triangle' };
     if (pending?.type === 'pending_image_confirm') return { label: 'pending_image_confirm', color: 'bg-amber-100 text-amber-700 border-amber-300', icon: 'fa-hourglass-half' };
     if (pendingClar) return { label: 'pending_clarification', color: 'bg-blue-100 text-blue-700 border-blue-300', icon: 'fa-question-circle' };
-    if (!u.service || u.service.intake_completed !== 1) return { label: 'intake_pending', color: 'bg-yellow-100 text-yellow-700 border-yellow-300', icon: 'fa-clipboard-list' };
-    if (integrity.followStatus === 'blocked') return { label: 'linked (blocked)', color: 'bg-gray-100 text-gray-500 border-gray-300', icon: 'fa-ban' };
+    if (!u.service) return { label: 'linked', color: 'bg-gray-100 text-gray-600 border-gray-300', icon: 'fa-link' };
+    if (u.service.intake_completed !== 1) return { label: 'intake_pending', color: 'bg-yellow-100 text-yellow-700 border-yellow-300', icon: 'fa-clipboard-list' };
+    if (integrity.followStatus === 'blocked') return { label: 'active (blocked)', color: 'bg-gray-100 text-gray-500 border-gray-300', icon: 'fa-ban' };
     return { label: 'active', color: 'bg-green-100 text-green-700 border-green-300', icon: 'fa-check-circle' };
   })();
 
