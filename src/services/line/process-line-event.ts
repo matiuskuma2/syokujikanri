@@ -96,8 +96,19 @@ export async function processLineEvent(
         console.log(`[LINE] Unhandled event type: ${event.type}`)
     }
   } catch (err) {
-    console.error(`[LINE] processLineEvent error (type=${event.type}):`, err)
-    // webhook 全体は落とさない — エラーログのみ
+    console.error(`[LINE] processLineEvent CRITICAL error (type=${event.type}):`, err)
+    // ★ 無応答防止: トップレベルエラーでも必ずユーザーに通知
+    try {
+      const msgEvent = event as LineMessageEvent
+      const lineUserId = msgEvent?.source?.userId
+      if (lineUserId && ctx.env.LINE_CHANNEL_ACCESS_TOKEN) {
+        await pushText(
+          lineUserId,
+          '⚠️ 処理中にエラーが発生しました。もう一度送り直してください。',
+          ctx.env.LINE_CHANNEL_ACCESS_TOKEN
+        ).catch(e => console.error('[LINE] processLineEvent emergency push failed:', e))
+      }
+    } catch { /* 最終手段も失敗 — ログのみ */ }
   }
 }
 
@@ -278,6 +289,8 @@ async function handleTextMessageEvent(
   const text = event.message.type === 'text' ? event.message.text ?? '' : ''
   const textTrim = text.trim()
 
+  console.log(`[LINE] handleText START: user=${lineUserId?.substring(0,8)}, text="${textTrim.substring(0,30)}", msgId=${event.message.id}`)
+
   // ==================================================================
   // SSOT 優先順位 v2.0 — AI-first architecture
   //   ① 画像確認待ち(S3) — 確定/取消/修正/メタデータ更新 以外は全ブロック
@@ -319,15 +332,19 @@ async function handleTextMessageEvent(
         '問診', 'ヒアリング', '登録', '初期設定', '問診やり直し', '問診リセット', '問診再開',
       ]
       if (PENDING_BLOCK_COMMANDS.includes(textTrim)) {
-        await replyWithQuickReplies(
-          event.replyToken,
-          '🔄 いま前の食事の確認待ちです。\n先に「✅ 確定」「修正テキスト」「❌ 取消」のいずれかで完了してください。',
-          [
-            { label: '✅ 確定', text: '確定' },
-            { label: '❌ 取消', text: '取消' },
-          ],
-          env.LINE_CHANNEL_ACCESS_TOKEN
-        ).catch(async () => {
+        // reply + push フォールバック
+        try {
+          await replyWithQuickReplies(
+            event.replyToken,
+            '🔄 いま前の食事の確認待ちです。\n先に「✅ 確定」「修正テキスト」「❌ 取消」のいずれかで完了してください。',
+            [
+              { label: '✅ 確定', text: '確定' },
+              { label: '❌ 取消', text: '取消' },
+            ],
+            env.LINE_CHANNEL_ACCESS_TOKEN
+          )
+        } catch {
+          console.warn('[LINE] pending block reply failed, using push')
           await pushWithQuickReplies(
             lineUserId,
             '🔄 いま前の食事の確認待ちです。\n先に「✅ 確定」「修正テキスト」「❌ 取消」のいずれかで完了してください。',
@@ -337,7 +354,7 @@ async function handleTextMessageEvent(
             ],
             env.LINE_CHANNEL_ACCESS_TOKEN
           ).catch(e => console.error('[LINE] pending block push fallback failed:', e))
-        })
+        }
         return
       }
 
@@ -360,7 +377,7 @@ async function handleTextMessageEvent(
         // ★ 修正テキスト・メタデータ更新は OpenAI を2回呼ぶため replyToken が期限切れになる
         //    → replyToken は最初に「処理中」通知で消費し、以降は pushText を使う
         try {
-          const { classifyPendingText, handleImageCorrection, handleImageMetadataUpdate } = await import('./image-confirm-handler')
+          const { classifyPendingText } = await import('./image-confirm-handler')
           const pendingIntent = await classifyPendingText(textTrim, env)
           console.log(`[LINE] pending_image_confirm text intent: "${textTrim}" → ${pendingIntent}`)
 
@@ -368,30 +385,39 @@ async function handleTextMessageEvent(
             case 'food_correction':
             case 'both':
               // replyToken で即座に中間応答を送る（期限切れ前に消費）
-              await replyText(event.replyToken, '✏️ 修正内容を反映中です…少々お待ちください。', env.LINE_CHANNEL_ACCESS_TOKEN)
-                .catch(() => {}) // replyToken 失敗しても続行
+              try {
+                await replyText(event.replyToken, '✏️ 修正内容を反映中です…少々お待ちください。', env.LINE_CHANNEL_ACCESS_TOKEN)
+              } catch (replyErr) {
+                console.warn('[LINE] correction interim reply failed:', replyErr)
+                // replyToken失敗でもpush処理は続行
+              }
               // 実際の修正処理は pushText ベースで実行
               await handleImageCorrectionWithPush(textTrim, intakeResultId, lineUserId, preEffectiveAccountId, env)
               return
 
             case 'metadata_update':
-              await replyText(event.replyToken, '📅 日付・区分を変更中です…少々お待ちください。', env.LINE_CHANNEL_ACCESS_TOKEN)
-                .catch(() => {})
+              try {
+                await replyText(event.replyToken, '📅 日付・区分を変更中です…少々お待ちください。', env.LINE_CHANNEL_ACCESS_TOKEN)
+              } catch (replyErr) {
+                console.warn('[LINE] metadata interim reply failed:', replyErr)
+              }
               await handleImageMetadataUpdateWithPush(textTrim, intakeResultId, lineUserId, preEffectiveAccountId, env)
               return
 
             case 'unrelated':
             default:
               // 無関係テキスト → 確認待ちを案内
-              await replyWithQuickReplies(
-                event.replyToken,
-                '🔄 いま前の食事の確認待ちです。\n\n内容を修正する場合は修正内容をテキストで送ってください。\n例: 「鮭ではなくスクランブルエッグ」\n例: 「昨日の夕食」\n\nまたは「✅ 確定」「❌ 取消」で完了してください。',
-                [
-                  { label: '✅ 確定', text: '確定' },
-                  { label: '❌ 取消', text: '取消' },
-                ],
-                env.LINE_CHANNEL_ACCESS_TOKEN
-              ).catch(async () => {
+              try {
+                await replyWithQuickReplies(
+                  event.replyToken,
+                  '🔄 いま前の食事の確認待ちです。\n\n内容を修正する場合は修正内容をテキストで送ってください。\n例: 「鮭ではなくスクランブルエッグ」\n例: 「昨日の夕食」\n\nまたは「✅ 確定」「❌ 取消」で完了してください。',
+                  [
+                    { label: '✅ 確定', text: '確定' },
+                    { label: '❌ 取消', text: '取消' },
+                  ],
+                  env.LINE_CHANNEL_ACCESS_TOKEN
+                )
+              } catch {
                 await pushWithQuickReplies(
                   lineUserId,
                   '🔄 いま前の食事の確認待ちです。\n\n内容を修正する場合は修正内容をテキストで送ってください。\n例: 「鮭ではなくスクランブルエッグ」\n例: 「昨日の夕食」\n\nまたは「✅ 確定」「❌ 取消」で完了してください。',
@@ -401,7 +427,7 @@ async function handleTextMessageEvent(
                   ],
                   env.LINE_CHANNEL_ACCESS_TOKEN
                 ).catch(e => console.error('[LINE] pending unrelated push fallback failed:', e))
-              })
+              }
               return
           }
         } catch (pendingErr) {
@@ -540,6 +566,7 @@ async function handleTextWithAIFirst(
 
   try {
   // ★ handleTextWithAIFirst 全体を try-catch で囲む（無応答防止）
+  console.log(`[AIFirst] START: text="${text.substring(0,30)}", mode=${currentMode}, user=${lineUserId?.substring(0,8)}`)
 
   // ------------------------------------------------------------------
   // Phase B 復帰: pending_clarification 中の場合
@@ -688,7 +715,9 @@ async function handleTextWithAIFirst(
         currentStep: 'idle',
       })
     } catch { /* ignore */ }
+    // ★ switch_consult は即座に reply（OpenAI呼び出し前なのでreplyToken有効）
     await safeReplyText(replyToken, lineUserId, '💬 相談モードです。食事・体重・外食・間食・続け方など、何でも送ってください 😊', env.LINE_CHANNEL_ACCESS_TOKEN)
+    console.log(`[AIFirst] switch_consult: reply sent for ${lineUserId}`)
     return
   }
 
@@ -889,11 +918,16 @@ async function safeReplyWithQuickReplies(
 ): Promise<void> {
   try {
     await replyTextWithQuickReplies(replyToken, text, items, accessToken)
-  } catch {
+    console.log(`[safeReply] QR reply success to ${lineUserId?.substring(0,8)}`)
+  } catch (replyErr) {
     // replyToken 失敗 → push フォールバック
-    console.warn('[safeReply] reply failed, falling back to push')
-    await pushWithQuickReplies(lineUserId, text, items, accessToken)
-      .catch(e => console.error('[safeReply] push fallback also failed:', e))
+    console.warn(`[safeReply] QR reply failed to ${lineUserId?.substring(0,8)}, falling back to push:`, replyErr)
+    try {
+      await pushWithQuickReplies(lineUserId, text, items, accessToken)
+      console.log(`[safeReply] QR push fallback success to ${lineUserId?.substring(0,8)}`)
+    } catch (pushErr) {
+      console.error(`[safeReply] QR push fallback ALSO failed to ${lineUserId?.substring(0,8)}:`, pushErr)
+    }
   }
 }
 
@@ -908,10 +942,15 @@ async function safeReplyText(
 ): Promise<void> {
   try {
     await replyText(replyToken, text, accessToken)
-  } catch {
-    console.warn('[safeReply] text reply failed, falling back to push')
-    await pushText(lineUserId, text, accessToken)
-      .catch(e => console.error('[safeReply] text push fallback also failed:', e))
+    console.log(`[safeReply] text reply success to ${lineUserId?.substring(0,8)}`)
+  } catch (replyErr) {
+    console.warn(`[safeReply] text reply failed to ${lineUserId?.substring(0,8)}, falling back to push:`, replyErr)
+    try {
+      await pushText(lineUserId, text, accessToken)
+      console.log(`[safeReply] text push fallback success to ${lineUserId?.substring(0,8)}`)
+    } catch (pushErr) {
+      console.error(`[safeReply] text push fallback ALSO failed to ${lineUserId?.substring(0,8)}:`, pushErr)
+    }
   }
 }
 
@@ -1138,17 +1177,10 @@ async function handleConsultText(
       ? `${response}\n\n📝 ※会話中の記録情報も保存しました`
       : response
 
-    await replyTextWithQuickReplies(
-      replyToken,
-      replyMsg,
-      [
-        { label: '📝 記録に戻る', text: '記録モード' },
-        { label: '💬 続けて相談', text: '相談続ける' },
-      ],
-      env.LINE_CHANNEL_ACCESS_TOKEN
-    ).catch(async (replyErr) => {
-      console.warn('[Consult] reply failed, falling back to push:', replyErr)
-      if (lineUserId) {
+    // ★ OpenAI 呼び出し後は replyToken が期限切れの可能性が高い
+    //    → push を先に試み、失敗時のみ reply を試す
+    if (lineUserId) {
+      try {
         await pushWithQuickReplies(
           lineUserId,
           replyMsg,
@@ -1157,22 +1189,52 @@ async function handleConsultText(
             { label: '💬 続けて相談', text: '相談続ける' },
           ],
           env.LINE_CHANNEL_ACCESS_TOKEN
-        ).catch(e => console.error('[Consult] push fallback also failed:', e))
+        )
+      } catch (pushErr) {
+        console.warn('[Consult] push failed, trying reply:', pushErr)
+        try {
+          await replyTextWithQuickReplies(
+            replyToken,
+            replyMsg,
+            [
+              { label: '📝 記録に戻る', text: '記録モード' },
+              { label: '💬 続けて相談', text: '相談続ける' },
+            ],
+            env.LINE_CHANNEL_ACCESS_TOKEN
+          )
+        } catch (replyErr) {
+          console.error('[Consult] both push and reply failed:', replyErr)
+        }
       }
-    })
+    } else {
+      // lineUserId なし（通常は起きないが念のため）
+      try {
+        await replyTextWithQuickReplies(
+          replyToken,
+          replyMsg,
+          [
+            { label: '📝 記録に戻る', text: '記録モード' },
+            { label: '💬 続けて相談', text: '相談続ける' },
+          ],
+          env.LINE_CHANNEL_ACCESS_TOKEN
+        )
+      } catch { /* ignore */ }
+    }
 
     // バックグラウンド: メモリ抽出
     fireMemoryExtraction(text, userAccountId, null, env, ctx.waitUntil)
 
   } catch (err) {
     console.error('[LINE] consult AI error:', err)
-    const errorMsg = 'AIの応答に失敗しました。しばらくしてから再度お試しください。'
-    // replyToken は既に期限切れの可能性が高いため、push を先に試す
+    const errorMsg = '⚠️ AIの応答に失敗しました。しばらくしてから再度お試しください。'
+    // ★ push を先に試す（replyToken は既に期限切れの可能性が高い）
     if (lineUserId) {
-      await pushText(lineUserId, errorMsg, env.LINE_CHANNEL_ACCESS_TOKEN).catch(async () => {
+      try {
+        await pushText(lineUserId, errorMsg, env.LINE_CHANNEL_ACCESS_TOKEN)
+      } catch {
         // push も失敗した場合のみ reply を試す
         await replyText(replyToken, errorMsg, env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => {})
-      })
+      }
     } else {
       await replyText(replyToken, errorMsg, env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => {})
     }

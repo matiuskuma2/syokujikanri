@@ -67,6 +67,8 @@ export class OpenAIClient {
       temperature?: number
       maxTokens?: number
       responseFormat?: 'text' | 'json_object'
+      /** 軽量呼び出し用の短いタイムアウトを使う（分類タスク等） */
+      lightTimeout?: boolean
     } = {}
   ): Promise<string> {
     const body: Record<string, unknown> = {
@@ -79,6 +81,9 @@ export class OpenAIClient {
       body.response_format = { type: 'json_object' }
     }
 
+    const timeout = opts.lightTimeout ? TIMEOUT.OPENAI_CHAT_LIGHT : TIMEOUT.OPENAI_CHAT
+    const startTime = Date.now()
+
     const res = await fetchWithTimeout(
       `${this.baseUrl}/chat/completions`,
       {
@@ -89,8 +94,11 @@ export class OpenAIClient {
         },
         body: JSON.stringify(body),
       },
-      TIMEOUT.OPENAI_CHAT
+      timeout
     )
+
+    const elapsed = Date.now() - startTime
+    console.log(`[OpenAI] createResponse: ${res.status} (${elapsed}ms, timeout=${timeout}ms, maxTokens=${opts.maxTokens ?? this.maxTokens})`)
 
     if (!res.ok) {
       const err = await res.text().catch(() => '')

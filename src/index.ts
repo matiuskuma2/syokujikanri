@@ -65,6 +65,31 @@ app.get('/health', (c) => c.json({ status: 'ok', service: 'diet-bot', version: '
 app.get('/api/health', (c) => c.json({ status: 'ok' }))
 
 // ===================================================================
+// 診断: LINE Push API テスト（本番でも利用可能 — 管理者のみ）
+// ===================================================================
+
+app.post('/api/diag/push-test', async (c) => {
+  const env = c.env
+  try {
+    const { lineUserId, message } = await c.req.json<{ lineUserId: string; message?: string }>()
+    if (!lineUserId) return c.json({ error: 'lineUserId is required' }, 400)
+
+    const { pushText } = await import('./services/line/reply')
+    const text = message ?? '🔧 Push API 診断テスト: このメッセージが見えれば push は正常に動作しています。'
+
+    const startTime = Date.now()
+    await pushText(lineUserId, text, env.LINE_CHANNEL_ACCESS_TOKEN)
+    const elapsed = Date.now() - startTime
+
+    return c.json({ success: true, elapsed_ms: elapsed })
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('[diag] push-test failed:', err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// ===================================================================
 // E2E テスト用 DB クエリ API（開発環境のみ）
 // ===================================================================
 

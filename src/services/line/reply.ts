@@ -44,27 +44,39 @@ async function callLineApi(
   accessToken: string,
   body: unknown
 ): Promise<{ ok: boolean; status: number }> {
-  const res = await fetchWithTimeout(
-    `${LINE_API}${endpoint}`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
+  console.log(`[LINE API] calling ${endpoint}, body keys: ${Object.keys(body as Record<string, unknown>).join(',')})`)
+  const startTime = Date.now()
+  try {
+    const res = await fetchWithTimeout(
+      `${LINE_API}${endpoint}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify(body),
       },
-      body: JSON.stringify(body),
-    },
-    TIMEOUT.LINE_API
-  )
-  if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    console.error(`[LINE API] ${endpoint} failed: ${res.status} ${text}`)
-    // reply エンドポイントで失敗した場合は throw して push フォールバックを発動させる
-    if (endpoint === '/message/reply') {
-      throw new Error(`LINE reply failed: ${res.status} ${text}`)
+      TIMEOUT.LINE_API
+    )
+    const elapsed = Date.now() - startTime
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      console.error(`[LINE API] ${endpoint} failed: ${res.status} ${text} (${elapsed}ms)`)
+      // reply / push どちらも失敗時は throw する（無応答防止）
+      throw new Error(`LINE ${endpoint} failed: ${res.status} ${text}`)
     }
+    console.log(`[LINE API] ${endpoint} success (${elapsed}ms)`)
+    return { ok: res.ok, status: res.status }
+  } catch (err) {
+    const elapsed = Date.now() - startTime
+    if (err instanceof Error && err.message.startsWith('LINE ')) {
+      throw err // 既に上で throw したエラーを再 throw
+    }
+    // AbortError (timeout) やネットワークエラー
+    console.error(`[LINE API] ${endpoint} exception after ${elapsed}ms:`, err)
+    throw new Error(`LINE ${endpoint} exception: ${err instanceof Error ? err.message : String(err)}`)
   }
-  return { ok: res.ok, status: res.status }
 }
 
 // ===================================================================
@@ -124,6 +136,7 @@ export async function pushText(
   text: string,
   accessToken: string
 ): Promise<void> {
+  console.log(`[LINE push] pushText to=${lineUserId?.substring(0,8)}..., text=${text.substring(0,50)}...`)
   await callLineApi('/message/push', accessToken, {
     to: lineUserId,
     messages: [{ type: 'text', text }],
@@ -214,27 +227,11 @@ export async function replyWithQuickReplies(
     })),
   }
 
-  const res = await fetchWithTimeout(
-    `${LINE_API}/message/reply`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
-        replyToken,
-        messages: [{ type: 'text', text, quickReply }],
-      }),
-    },
-    TIMEOUT.LINE_API
-  )
-
-  if (!res.ok) {
-    const err = await res.text().catch(() => '')
-    console.error(`[LINE] replyWithQuickReplies failed ${res.status}: ${err}`)
-    throw new Error(`LINE replyWithQuickReplies failed: ${res.status} ${err}`)
-  }
+  // callLineApi を使用（reply失敗時は throw → push フォールバック可能）
+  await callLineApi('/message/reply', accessToken, {
+    replyToken,
+    messages: [{ type: 'text', text, quickReply }],
+  })
 }
 
 /** クイックリプライ付きテキストメッセージをプッシュ送信 */
@@ -244,6 +241,7 @@ export async function pushWithQuickReplies(
   items: QuickReplyItem[],
   accessToken: string
 ): Promise<void> {
+  console.log(`[LINE push] pushWithQuickReplies to=${lineUserId?.substring(0,8)}..., text=${text.substring(0,50)}..., items=${items.length}`)
   const quickReply = {
     items: items.slice(0, 13).map(item => ({
       type: 'action',
@@ -255,24 +253,9 @@ export async function pushWithQuickReplies(
     })),
   }
 
-  const res = await fetchWithTimeout(
-    `${LINE_API}/message/push`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
-        to: lineUserId,
-        messages: [{ type: 'text', text, quickReply }],
-      }),
-    },
-    TIMEOUT.LINE_API
-  )
-
-  if (!res.ok) {
-    const err = await res.text().catch(() => '')
-    console.error(`[LINE] pushWithQuickReplies failed ${res.status}: ${err}`)
-  }
+  // callLineApi を使って push（エラー時は throw されるので呼び出し元で catch）
+  await callLineApi('/message/push', accessToken, {
+    to: lineUserId,
+    messages: [{ type: 'text', text, quickReply }],
+  })
 }

@@ -16,8 +16,10 @@ export const TIMEOUT = {
   LINE_CONTENT: 15_000,
   /** LINE ID Token 検証 */
   LINE_VERIFY: 5_000,
-  /** OpenAI Chat Completions / Vision */
+  /** OpenAI Chat Completions / Vision（重い処理用） */
   OPENAI_CHAT: 25_000,
+  /** OpenAI Chat Completions（軽い分類用：maxTokens <= 100） */
+  OPENAI_CHAT_LIGHT: 10_000,
   /** OpenAI Embeddings */
   OPENAI_EMBEDDINGS: 15_000,
   /** SendGrid メール送信 */

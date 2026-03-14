@@ -362,6 +362,14 @@ const FOOD_CORRECTION_PATTERNS = [
   /追加で|あと|それと|プラス/,
   /入って(い|な)|含まれ/,
   /なし[でに]|抜き|除い/,
+  // 追加: よくある修正パターン
+  /半分|はんぶん/,
+  /[23456789]倍|倍[にで]/,
+  /だけ食べ|しか食べ|残し/,
+  /卵|たまご|玉子|ご飯|ごはん|白米|味噌汁|みそ汁/,  // 食品名単体
+  /食べた|飲んだ|たべた|のんだ/,
+  /です$|でした$/,  // 断定系（食品修正の可能性が高い）
+  /[ぁ-ん]{2,}を/,  // 「○○を」パターン（食品修正の可能性）
 ]
 
 export async function classifyPendingText(
@@ -388,7 +396,7 @@ export async function classifyPendingText(
   // 例: "昨日の晩御飯", "これは朝食です", "今日の昼食"
   if (hasMetadata && trimmed.length <= 30) return 'metadata_update'
 
-  // ルールベースで判定できない場合 → AI判定
+  // ルールベースで判定できない場合 → AI判定（軽量タイムアウト使用）
   try {
     const ai = createOpenAIClient(env)
     const raw = await ai.createResponse(
@@ -398,7 +406,7 @@ export async function classifyPendingText(
           content: `食事画像の解析結果を確認中のユーザーが送ったテキストを分類してください。
 
 分類:
-- "food_correction": 食品の内容・量・種類の修正（例: 「鮭ではなくスクランブルエッグ」「白米2膳」「ブロッコリーも入ってた」）
+- "food_correction": 食品の内容・量・種類の修正（例: 「鮭ではなくスクランブルエッグ」「白米2膳」「ブロッコリーも入ってた」「この半分だけ食べた」「卵焼きです」）
 - "metadata_update": 日付や食事区分の情報（例: 「昨日の晩御飯」「これは朝食」「3/10の夕食」）
 - "both": 食品修正と日付/区分の両方（例: 「昨日の夕食で白米は大盛りだった」）
 - "unrelated": 確認中の食事とは無関係（例: 「ありがとう」「他の話」）
@@ -407,7 +415,7 @@ export async function classifyPendingText(
         },
         { role: 'user', content: trimmed }
       ],
-      { temperature: 0, maxTokens: 20 }
+      { temperature: 0, maxTokens: 20, lightTimeout: true }
     )
 
     const result = raw.trim().toLowerCase()
