@@ -538,6 +538,9 @@ async function handleTextWithAIFirst(
 ): Promise<void> {
   const { env } = ctx
 
+  try {
+  // ★ handleTextWithAIFirst 全体を try-catch で囲む（無応答防止）
+
   // ------------------------------------------------------------------
   // Phase B 復帰: pending_clarification 中の場合
   // ------------------------------------------------------------------
@@ -707,8 +710,9 @@ async function handleTextWithAIFirst(
   if (intent.intent_primary === 'trigger_photo') {
     try { await updateThreadMode(env.DB, threadId, 'record') } catch { /* ignore */ }
     try { await deleteModeSession(env.DB, clientAccountId, lineUserId) } catch { /* ignore */ }
-    await replyText(
+    await safeReplyText(
       replyToken,
+      lineUserId,
       '📝 記録したい内容を送ってください。食事写真・食事テキスト・体重の数字・体重計の写真、どれでもOKです。\n\n💡 写真のヒント:\n・真上から撮ると認識精度UP\n・お皿全体が入るように\n・1品ずつでも、まとめてでもOK',
       env.LINE_CHANNEL_ACCESS_TOKEN
     )
@@ -718,8 +722,9 @@ async function handleTextWithAIFirst(
   if (intent.intent_primary === 'trigger_weight_input') {
     try { await updateThreadMode(env.DB, threadId, 'record') } catch { /* ignore */ }
     try { await deleteModeSession(env.DB, clientAccountId, lineUserId) } catch { /* ignore */ }
-    await replyTextWithQuickReplies(
+    await safeReplyWithQuickReplies(
       replyToken,
+      lineUserId,
       '⚖️ 体重を入力してください！\n\n例: 65.5kg\n例: 58キロ\n\n※ 数字＋kg（またはキロ）で記録されます',
       [{ label: '📝 記録する', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
       env.LINE_CHANNEL_ACCESS_TOKEN
@@ -743,8 +748,9 @@ async function handleTextWithAIFirst(
 
   // --- 挨拶 ---
   if (intent.intent_primary === 'greeting') {
-    await replyTextWithQuickReplies(
+    await safeReplyWithQuickReplies(
       replyToken,
+      lineUserId,
       '👋 こんにちは！\n\n食事の内容や体重を送ってくださいね 😊\n\n例: 「朝食 トースト・コーヒー」\n例: 「58.5kg」',
       [{ label: '📝 記録する', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
       env.LINE_CHANNEL_ACCESS_TOKEN
@@ -828,8 +834,9 @@ async function handleTextWithAIFirst(
 
   // unclear → ガイド
   if (intent.intent_primary === 'unclear') {
-    await replyTextWithQuickReplies(
+    await safeReplyWithQuickReplies(
       replyToken,
+      lineUserId,
       '🤔 記録内容が判定できませんでした。\n\n体重・食事・運動などを入力してください。\n例: 「体重58.5kg」\n例: 「朝食 トースト・コーヒー」',
       [{ label: '📝 記録する', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
       env.LINE_CHANNEL_ACCESS_TOKEN
@@ -838,12 +845,31 @@ async function handleTextWithAIFirst(
   }
 
   // フォールバック
-  await replyTextWithQuickReplies(
+  await safeReplyWithQuickReplies(
     replyToken,
+    lineUserId,
     '🤔 記録内容が判定できませんでした。\n\n体重・食事・運動などを入力してください。\n例: 「体重58.5kg」\n例: 「朝食 トースト・コーヒー」',
     [{ label: '📝 記録する', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
     env.LINE_CHANNEL_ACCESS_TOKEN
   )
+
+  } catch (topLevelErr) {
+    // ★ handleTextWithAIFirst トップレベルのエラーキャッチ
+    // ここに到達 = 内部のどこかで未キャッチの例外が発生
+    // 絶対に無応答にしない
+    console.error(`[AIFirst] CRITICAL top-level error for "${text}":`, topLevelErr)
+    try {
+      await pushText(
+        lineUserId,
+        '⚠️ 一時的な処理エラーが発生しました。もう一度送り直してください。',
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+    } catch (pushErr) {
+      console.error('[AIFirst] even push fallback failed:', pushErr)
+      // 最後の手段: replyToken を試す
+      await replyText(replyToken, '⚠️ 一時的なエラーです。もう一度お試しください。', env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => {})
+    }
+  }
 }
 
 // ===================================================================
