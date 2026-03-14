@@ -1559,12 +1559,12 @@ function getLiffEntryHtml(liffId: string): string {
         errScreen.style.display = 'flex';
         errScreen.innerHTML = \`
           <i class="fas fa-user-plus" style="font-size:48px;color:#22c55e;margin-bottom:12px;"></i>
-          <p style="font-size:17px;font-weight:700;color:#1f2937;">まだ登録が完了していません</p>
+          <p style="font-size:17px;font-weight:700;color:#1f2937;">LINE連携がまだ完了していません</p>
           <p class="liff-msg" style="margin:8px 0 4px;">LINEで以下の手順を行ってください:</p>
           <div style="text-align:left;background:#f0fdf4;border-radius:12px;padding:16px 20px;margin:12px 0;max-width:320px;">
             <ol style="font-size:13px;color:#374151;line-height:2.2;margin:0;padding-left:20px;">
               <li><strong>diet-bot</strong> を友達追加する</li>
-              <li>初回問診（9問）に回答する</li>
+              <li>招待コードを送信する</li>
               <li>完了後にこのページを再読み込み</li>
             </ol>
           </div>
@@ -1618,6 +1618,10 @@ function getLiffEntryHtml(liffId: string): string {
 
     // JWT を保存してダッシュボードへ
     localStorage.setItem(JWT_KEY, data.data.token);
+    // ユーザー情報（intakeCompleted等）も保存
+    if (data.data.user) {
+      localStorage.setItem('dietbot_user', JSON.stringify(data.data.user));
+    }
     setStatus('ダッシュボードを開いています...');
     location.href = '/dashboard';
 

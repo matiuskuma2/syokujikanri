@@ -76,14 +76,31 @@ lineAuthRouter.post('/', async (c) => {
 
   // ------------------------------------------------------------------
   // 3. user_accounts から userAccountId を取得
+  //    user_account が見つからない場合でも、line_users があれば
+  //    自動的にアカウントを作成して LIFF アクセスを許可する
   // ------------------------------------------------------------------
-  const userAccount = await findUserAccount(c.env.DB, lineUserId, clientAccountId)
+  let userAccount = await findUserAccount(c.env.DB, lineUserId, clientAccountId)
   if (!userAccount) {
-    return c.json(
-      { success: false, error: 'ACCOUNT_NOT_FOUND', message: 'User account not found' },
-      403
-    )
+    // line_users は存在するが user_accounts がない場合、自動作成を試みる
+    try {
+      const { ensureUserAccount } = await import('../../repositories/line-users-repo')
+      userAccount = await ensureUserAccount(c.env.DB, lineUserId, clientAccountId)
+    } catch (err) {
+      console.error('[LineAuth] ensureUserAccount fallback failed:', err)
+    }
+    if (!userAccount) {
+      return c.json(
+        { success: false, error: 'ACCOUNT_NOT_FOUND', message: 'User account not found' },
+        403
+      )
+    }
   }
+
+  // ------------------------------------------------------------------
+  // 3.5 サービスステータス取得（問診完了状態の判定用）
+  // ------------------------------------------------------------------
+  const { findUserServiceStatus } = await import('../../repositories/subscriptions-repo')
+  const serviceStatus = await findUserServiceStatus(c.env.DB, clientAccountId, lineUserId)
 
   // ------------------------------------------------------------------
   // 4. JWT 発行
@@ -107,6 +124,8 @@ lineAuthRouter.post('/', async (c) => {
         lineUserId,
         displayName: lineUser.display_name ?? null,
         pictureUrl: lineUser.picture_url ?? null,
+        intakeCompleted: serviceStatus?.intake_completed === 1,
+        botEnabled: serviceStatus?.bot_enabled === 1,
       },
     },
   })

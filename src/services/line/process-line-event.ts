@@ -312,19 +312,48 @@ async function handleTextMessageEvent(
       // データ不整合 — セッションをクリアして通常処理へ
       await deleteModeSession(env.DB, preEffectiveAccountId, lineUserId)
       // fall through to normal processing
-    } else if (IMAGE_CONFIRM_KEYWORDS.some(kw => textTrim.includes(kw))) {
-      const { handleImageConfirm } = await import('./image-confirm-handler')
-      await handleImageConfirm(event.replyToken, intakeResultId, lineUserId, preEffectiveAccountId, env)
-      return
-    } else if (IMAGE_CANCEL_KEYWORDS.some(kw => textTrim.includes(kw))) {
-      const { handleImageDiscard } = await import('./image-confirm-handler')
-      await handleImageDiscard(event.replyToken, intakeResultId, lineUserId, preEffectiveAccountId, env)
-      return
     } else {
-      // テキスト修正として処理: ユーザーの修正を AI で再解析し、提案を更新する
-      const { handleImageCorrection } = await import('./image-confirm-handler')
-      await handleImageCorrection(event.replyToken, textTrim, intakeResultId, lineUserId, preEffectiveAccountId, env)
-      return
+      // --- pending_image_confirm 中は確認フロー優先 ---
+      // リッチメニュー系コマンド → 確認完了を促す（新しい操作を開始させない）
+      const PENDING_BLOCK_COMMANDS = [
+        '記録する', '記録モード', '記録にして', '戻る',
+        '相談する', '相談モード', '相談にして',
+        '写真を送る', '体重記録', '体重を記録',
+        '問診', 'ヒアリング', '登録', '初期設定', '問診やり直し', '問診リセット', '問診再開',
+      ]
+      if (PENDING_BLOCK_COMMANDS.includes(textTrim)) {
+        await replyWithQuickReplies(
+          event.replyToken,
+          '🔄 いま前の食事の確認待ちです。\n先にこの内容を「✅ 確定」「修正テキスト」「❌ 取消」のいずれかで完了してください。',
+          [
+            { label: '✅ 確定', text: '確定' },
+            { label: '❌ 取消', text: '取消' },
+          ],
+          env.LINE_CHANNEL_ACCESS_TOKEN
+        )
+        return
+      }
+
+      // 確定キーワード（完全一致優先、部分一致は「確定」「はい」など短いキーワードのみ）
+      const isConfirm = IMAGE_CONFIRM_KEYWORDS.some(kw => textTrim === kw) ||
+        (textTrim.length <= 4 && IMAGE_CONFIRM_KEYWORDS.some(kw => textTrim.includes(kw)))
+      const isCancel = IMAGE_CANCEL_KEYWORDS.some(kw => textTrim === kw) ||
+        (textTrim.length <= 6 && IMAGE_CANCEL_KEYWORDS.some(kw => textTrim.includes(kw)))
+
+      if (isConfirm) {
+        const { handleImageConfirm } = await import('./image-confirm-handler')
+        await handleImageConfirm(event.replyToken, intakeResultId, lineUserId, preEffectiveAccountId, env)
+        return
+      } else if (isCancel) {
+        const { handleImageDiscard } = await import('./image-confirm-handler')
+        await handleImageDiscard(event.replyToken, intakeResultId, lineUserId, preEffectiveAccountId, env)
+        return
+      } else {
+        // テキスト修正として処理: ユーザーの修正を AI で再解析し、提案を更新する
+        const { handleImageCorrection } = await import('./image-confirm-handler')
+        await handleImageCorrection(event.replyToken, textTrim, intakeResultId, lineUserId, preEffectiveAccountId, env)
+        return
+      }
     }
   }
 

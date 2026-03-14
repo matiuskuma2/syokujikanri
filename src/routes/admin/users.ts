@@ -120,8 +120,8 @@ usersRouter.get('/:lineUserId', async (c) => {
   const recentLogs = await listRecentDailyLogs(c.env.DB, userAccount.id, 30)
 
   const lineUser = await c.env.DB.prepare(
-    'SELECT display_name, picture_url FROM line_users WHERE line_user_id = ?1 LIMIT 1'
-  ).bind(lineUserId).first<{ display_name: string | null; picture_url: string | null }>()
+    'SELECT display_name, picture_url, follow_status FROM line_users WHERE line_user_id = ?1 LIMIT 1'
+  ).bind(lineUserId).first<{ display_name: string | null; picture_url: string | null; follow_status: string | null }>()
 
   // プロフィール取得
   const profile = await c.env.DB.prepare(
@@ -142,6 +142,69 @@ usersRouter.get('/:lineUserId', async (c) => {
 
   // 体重推移取得（グラフ用）
   const weightHistory = await listWeightHistory(c.env.DB, userAccount.id, 30)
+
+  // ====== 連携ステータス・不整合チェック ======
+  // pending_image_confirm / clarification の状態
+  let pendingStatus: { type: string; id: string | null; createdAt: string | null } | null = null
+  try {
+    const modeSession = await c.env.DB.prepare(
+      `SELECT current_step, session_data, updated_at FROM bot_mode_sessions
+       WHERE client_account_id = ?1 AND line_user_id = ?2 LIMIT 1`
+    ).bind(effectiveAccountId, lineUserId).first<any>()
+    if (modeSession?.current_step === 'pending_image_confirm') {
+      let sessionData: any = {}
+      try { sessionData = modeSession.session_data ? JSON.parse(modeSession.session_data) : {} } catch { }
+      pendingStatus = { type: 'pending_image_confirm', id: sessionData.intakeResultId ?? null, createdAt: modeSession.updated_at }
+    }
+  } catch { /* ignore */ }
+
+  let pendingClarification: { id: string; currentField: string; status: string; createdAt: string } | null = null
+  try {
+    const clar = await c.env.DB.prepare(
+      `SELECT id, current_field, status, created_at FROM pending_clarifications
+       WHERE user_account_id = ?1 AND status = 'asking' LIMIT 1`
+    ).bind(userAccount.id).first<any>()
+    if (clar) {
+      pendingClarification = { id: clar.id, currentField: clar.current_field, status: clar.status, createdAt: clar.created_at }
+    }
+  } catch { /* ignore */ }
+
+  // 最新会話日時
+  let lastMessageAt: string | null = null
+  try {
+    const msg = await c.env.DB.prepare(
+      `SELECT sent_at FROM conversation_messages cm
+       JOIN conversation_threads ct ON ct.id = cm.thread_id
+       WHERE ct.user_account_id = ?1
+       ORDER BY cm.sent_at DESC LIMIT 1`
+    ).bind(userAccount.id).first<any>()
+    lastMessageAt = msg?.sent_at ?? null
+  } catch { /* ignore */ }
+
+  // 最新画像解析日時
+  let lastImageAnalysisAt: string | null = null
+  try {
+    const img = await c.env.DB.prepare(
+      `SELECT created_at FROM image_intake_results
+       WHERE user_account_id = ?1
+       ORDER BY created_at DESC LIMIT 1`
+    ).bind(userAccount.id).first<any>()
+    lastImageAnalysisAt = img?.created_at ?? null
+  } catch { /* ignore */ }
+
+  // 整合性チェック
+  const integrity = {
+    lineUserExists: !!lineUser,
+    userAccountExists: true,
+    serviceStatusExists: !!svc,
+    profileExists: !!profile,
+    followStatus: lineUser?.follow_status ?? 'unknown',
+    issues: [] as string[],
+  }
+  if (!lineUser) integrity.issues.push('line_users レコードなし')
+  if (!svc) integrity.issues.push('user_service_statuses レコードなし')
+  if (svc && svc.intake_completed === 1 && !profile) integrity.issues.push('問診完了だが profile なし')
+  if (lineUser?.follow_status === 'blocked') integrity.issues.push('ユーザーがブロック/アンフォロー済み')
 
   return ok(c, {
     userAccountId: userAccount.id,

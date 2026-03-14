@@ -135,7 +135,8 @@ async function initApp() {
     setToggleState('toggle-record', svc.recordEnabled !== false);
     setToggleState('toggle-consult', svc.consultEnabled !== false);
 
-    if (state.serviceState === 'active') await loadHomePage();
+    // active でも intake_pending でもホーム画面のデータをロード
+    await loadHomePage();
   } catch (e) {
     console.error('[initApp]', e);
     showAuthError('データの読み込みに失敗しました。再度お試しください。');
@@ -154,7 +155,7 @@ function showStatusBanner(status) {
   banner.style.display = 'block';
   if (status === 'intake_pending') {
     banner.className = 'status-banner intake-pending';
-    banner.innerHTML = `<i class="fas fa-clipboard-list"></i><div><div class="banner-title">初回問診が未完了です</div><div class="banner-desc">LINEで「問診」と送って初回登録を完了してください。</div></div>`;
+    banner.innerHTML = `<i class="fas fa-clipboard-list"></i><div><div class="banner-title">初回ヒアリングが未完了です</div><div class="banner-desc">アカウント連携はできています。LINEでヒアリングを完了すると、すべての機能が使えるようになります。</div></div>`;
   }
 }
 
@@ -171,10 +172,7 @@ function showSuspendedScreen() {
 }
 
 function disableDataPages() {
-  const homeSection = document.getElementById('page-home');
-  if (homeSection) {
-    homeSection.innerHTML = `<div class="card" style="margin-top:8px;"><div class="card-body" style="text-align:center;padding:32px 16px;"><i class="fas fa-clipboard-list" style="font-size:48px;color:#f59e0b;margin-bottom:16px;"></i><p style="font-size:16px;font-weight:700;color:#92400e;margin-bottom:8px;">初回問診を完了してください</p><p style="font-size:13px;color:#6b7280;line-height:1.8;">LINEで「問診」と送ると9問の簡単なアンケートが始まります。</p></div></div>`;
-  }
+  // ホームページは表示したまま（データがあれば見れる）、過去記録等は制限
   ['records','photos','report'].forEach(page => {
     const nav = document.querySelector(`.nav-item[data-page="${page}"]`);
     if (nav) { nav.style.opacity = '0.4'; nav.style.pointerEvents = 'none'; }
