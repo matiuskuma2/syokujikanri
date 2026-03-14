@@ -1099,7 +1099,9 @@ async function handleConsultText(
       replyToken,
       'AIの応答に失敗しました。しばらくしてから再度お試しください。',
       env.LINE_CHANNEL_ACCESS_TOKEN
-    )
+    ).catch((replyErr) => {
+      console.warn('[Consult] error reply also failed:', replyErr)
+    })
   }
 }
 

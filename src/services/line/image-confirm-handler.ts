@@ -53,6 +53,9 @@ export async function handleImageConfirm(
 
   if (!result || result.applied_flag !== 0) {
     await replyText(replyToken, '確認対象のデータが見つかりませんでした。', env.LINE_CHANNEL_ACCESS_TOKEN)
+      .catch(async () => {
+        await pushText(lineUserId, '確認対象のデータが見つかりませんでした。', env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => {})
+      })
     await deleteModeSession(env.DB, clientAccountId, lineUserId)
     return
   }
@@ -67,16 +70,42 @@ export async function handleImageConfirm(
     // mode_session をクリア
     await deleteModeSession(env.DB, clientAccountId, lineUserId)
 
-    // 確定メッセージ
+    // 確定メッセージ（QuickReply付き + pushフォールバック）
     const confirmMsg = buildConfirmMessage(result)
-    await replyText(replyToken, confirmMsg, env.LINE_CHANNEL_ACCESS_TOKEN)
+    await replyTextWithQuickReplies(
+      replyToken,
+      confirmMsg,
+      [
+        { label: '📝 続けて記録', text: '記録モード' },
+        { label: '💬 相談する', text: '相談モード' },
+      ],
+      env.LINE_CHANNEL_ACCESS_TOKEN
+    ).catch(async (replyErr) => {
+      console.warn('[ImageConfirm] reply failed, falling back to push:', replyErr)
+      await pushWithQuickReplies(
+        lineUserId,
+        confirmMsg,
+        [
+          { label: '📝 続けて記録', text: '記録モード' },
+          { label: '💬 相談する', text: '相談モード' },
+        ],
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      ).catch(e => console.error('[ImageConfirm] push fallback also failed:', e))
+    })
   } catch (err) {
     console.error('[ImageConfirm] apply error:', err)
     await replyText(
       replyToken,
       '記録の保存中にエラーが発生しました。お手数ですが、もう一度お試しください。',
       env.LINE_CHANNEL_ACCESS_TOKEN
-    )
+    ).catch(async (replyErr) => {
+      console.warn('[ImageConfirm] error reply failed:', replyErr)
+      await pushText(
+        lineUserId,
+        '記録の保存中にエラーが発生しました。お手数ですが、もう一度お試しください。',
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      ).catch(() => {})
+    })
   }
 }
 
@@ -98,6 +127,9 @@ export async function handleImageDiscard(
 
   if (!result || result.applied_flag !== 0) {
     await replyText(replyToken, '確認対象のデータが見つかりませんでした。', env.LINE_CHANNEL_ACCESS_TOKEN)
+      .catch(async () => {
+        await pushText(lineUserId, '確認対象のデータが見つかりませんでした。', env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => {})
+      })
     await deleteModeSession(env.DB, clientAccountId, lineUserId)
     return
   }
@@ -112,7 +144,14 @@ export async function handleImageDiscard(
     replyToken,
     '🗑 この記録を取り消しました。\n\n画像を再送していただくか、テキストで直接入力できます。',
     env.LINE_CHANNEL_ACCESS_TOKEN
-  )
+  ).catch(async (replyErr) => {
+    console.warn('[ImageDiscard] reply failed, falling back to push:', replyErr)
+    await pushText(
+      lineUserId,
+      '🗑 この記録を取り消しました。\n\n画像を再送していただくか、テキストで直接入力できます。',
+      env.LINE_CHANNEL_ACCESS_TOKEN
+    ).catch(e => console.error('[ImageDiscard] push fallback also failed:', e))
+  })
 }
 
 // ===================================================================
@@ -318,6 +357,9 @@ export async function handleImageCorrection(
 
   if (!result || result.applied_flag !== 0) {
     await replyText(replyToken, '確認対象のデータが見つかりませんでした。', env.LINE_CHANNEL_ACCESS_TOKEN)
+      .catch(async () => {
+        await pushText(lineUserId, '確認対象のデータが見つかりませんでした。', env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => {})
+      })
     await deleteModeSession(env.DB, clientAccountId, lineUserId)
     return
   }
@@ -489,7 +531,18 @@ export async function handleImageCorrection(
         { label: '❌ 取消', text: '取消' },
       ],
       env.LINE_CHANNEL_ACCESS_TOKEN
-    )
+    ).catch(async (replyErr) => {
+      console.warn('[ImageCorrection] reply failed, falling back to push:', replyErr)
+      await pushWithQuickReplies(
+        lineUserId,
+        replyMessage,
+        [
+          { label: '✅ 確定', text: '確定' },
+          { label: '❌ 取消', text: '取消' },
+        ],
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      ).catch(e => console.error('[ImageCorrection] push fallback also failed:', e))
+    })
 
     console.log(`[ImageCorrection] correction applied for ${intakeResultId}: "${correctionText}"`)
   } catch (err) {
@@ -498,6 +551,13 @@ export async function handleImageCorrection(
       replyToken,
       '修正の処理中にエラーが発生しました。\n「確定」でそのまま記録、「取消」でやり直しできます。',
       env.LINE_CHANNEL_ACCESS_TOKEN
-    )
+    ).catch(async (replyErr) => {
+      console.warn('[ImageCorrection] error reply failed, falling back to push:', replyErr)
+      await pushText(
+        lineUserId,
+        '修正の処理中にエラーが発生しました。\n「確定」でそのまま記録、「取消」でやり直しできます。',
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      ).catch(e => console.error('[ImageCorrection] error push fallback also failed:', e))
+    })
   }
 }

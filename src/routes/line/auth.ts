@@ -62,11 +62,56 @@ lineAuthRouter.post('/', async (c) => {
 
   // ------------------------------------------------------------------
   // 2. line_users テーブルから存在確認
+  //    LINE_CHANNEL_ID は LINE API の Channel ID (数字10桁) の場合と
+  //    内部 UUID (ch_xxx) の場合があるため、line_channels テーブルで
+  //    内部IDを解決してから line_users を検索する
   // ------------------------------------------------------------------
   const clientAccountId = c.env.CLIENT_ACCOUNT_ID
-  const lineChannelId = c.env.LINE_CHANNEL_ID
+  const envChannelId = c.env.LINE_CHANNEL_ID ?? ''
 
-  const lineUser = await findLineUser(c.env.DB, lineChannelId, lineUserId)
+  // line_channels テーブルから内部IDを解決（webhook.ts と同じロジック）
+  let lineChannelId = envChannelId
+  try {
+    // まず channel_id (LINE API の数字10桁) で検索
+    const channelRow = await c.env.DB.prepare(
+      `SELECT id FROM line_channels WHERE channel_id = ?1 AND is_active = 1 LIMIT 1`
+    ).bind(envChannelId).first<{ id: string }>()
+    if (channelRow) {
+      lineChannelId = channelRow.id
+    } else {
+      // 内部 ID として直接使えるか確認
+      const directRow = await c.env.DB.prepare(
+        `SELECT id FROM line_channels WHERE id = ?1 AND is_active = 1 LIMIT 1`
+      ).bind(envChannelId).first<{ id: string }>()
+      if (directRow) {
+        lineChannelId = directRow.id
+      } else {
+        // フォールバック: 最初のアクティブチャンネル
+        const fallbackRow = await c.env.DB.prepare(
+          `SELECT id FROM line_channels WHERE is_active = 1 LIMIT 1`
+        ).first<{ id: string }>()
+        lineChannelId = fallbackRow?.id ?? envChannelId
+      }
+    }
+  } catch (err) {
+    console.error('[LineAuth] Failed to resolve lineChannelId:', err)
+    // エラー時は env 値をそのまま使う
+  }
+
+  // まず解決した内部IDで検索
+  let lineUser = await findLineUser(c.env.DB, lineChannelId, lineUserId)
+
+  // 見つからない場合: lineUserId のみで検索（channel_id 不一致でも救済）
+  if (!lineUser) {
+    const fallbackRow = await c.env.DB.prepare(
+      `SELECT * FROM line_users WHERE line_user_id = ?1 AND follow_status = 'following' LIMIT 1`
+    ).bind(lineUserId).first<any>()
+    if (fallbackRow) {
+      lineUser = fallbackRow
+      console.log(`[LineAuth] lineUser found by lineUserId fallback: ${lineUserId} (channel_id mismatch recovered)`)
+    }
+  }
+
   if (!lineUser) {
     return c.json(
       { success: false, error: 'USER_NOT_REGISTERED', message: 'User has not followed the bot yet' },
