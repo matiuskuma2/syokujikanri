@@ -74,6 +74,11 @@ export type IntentPrimary =
   | 'delete_record'         // 既存記録の削除
   | 'consult'               // 相談・質問
   | 'greeting'              // 挨拶・雑談
+  | 'switch_record'         // 記録モードへ切替
+  | 'switch_consult'        // 相談モードへ切替
+  | 'trigger_intake'        // 問診開始/再開
+  | 'trigger_photo'         // 写真送信を促す
+  | 'trigger_weight_input'  // 体重入力を促す
   | 'unclear'               // 意図不明
 
 /** 日付の解決状態 */
@@ -309,7 +314,9 @@ export const MEAL_TIME_NIGHT_START = 1380      // 23:00
 
 const VALID_INTENT_PRIMARIES = new Set<IntentPrimary>([
   'record_meal', 'record_weight', 'record_progress_photo',
-  'correct_record', 'delete_record', 'consult', 'greeting', 'unclear',
+  'correct_record', 'delete_record', 'consult', 'greeting',
+  'switch_record', 'switch_consult', 'trigger_intake',
+  'trigger_photo', 'trigger_weight_input', 'unclear',
 ])
 
 const VALID_MEAL_TYPES = new Set<MealTypeValue>([

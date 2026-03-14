@@ -90,6 +90,16 @@ ${memoryContext}
 4. 送信時刻: 上記の時間帯マッピングを使用（source=timestamp, needs_confirmation=true）
 5. 不明 → null
 
+## モード切替・操作コマンドの検出
+- 「記録する」「記録モード」「記録にして」「戻る」→ switch_record
+- 「相談する」「相談モード」「相談にして」「相談続ける」→ switch_consult
+- 「問診」「ヒアリング」「登録」「問診やり直し」「問診再開」→ trigger_intake
+- 「写真を送る」→ trigger_photo
+- 「体重記録」「体重を記録」→ trigger_weight_input
+- 注意: 「今日の体重58.5kg」→ record_weight（具体的な数値がある場合は記録であり、切替ではない）
+- 注意: 「今日の昧にトースト」→ record_meal（具体的な内容がある場合は記録であり、切替ではない）
+- switch/trigger 系は「まだ具体的な記録内容がない」場合にのみ使う
+
 ## 修正の検出
 - 「鮭じゃなくて卵焼き」→ correct_record (content_change)
 - 「朝食じゃなくて夕食」→ correct_record (meal_type_change)
@@ -108,7 +118,7 @@ ${memoryContext}
 
 ## 出力形式（JSON）
 {
-  "intent_primary": "record_meal" | "record_weight" | "correct_record" | "delete_record" | "consult" | "greeting" | "unclear",
+  "intent_primary": "record_meal" | "record_weight" | "correct_record" | "delete_record" | "consult" | "greeting" | "switch_record" | "switch_consult" | "trigger_intake" | "trigger_photo" | "trigger_weight_input" | "unclear",
   "intent_secondary": null | (同上),
   "target_date": {
     "resolved": "YYYY-MM-DD" | null,

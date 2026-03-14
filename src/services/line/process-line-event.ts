@@ -46,11 +46,9 @@ type ProcessContext = {
   waitUntil?: (promise: Promise<unknown>) => void
 }
 
-// テキスト分類用キーワード
-const CONSULT_KEYWORDS = ['相談', '質問', 'アドバイス', '教えて', 'どうすれば', '悩み', 'ヘルプ', '相談したい']
-const RECORD_KEYWORDS = ['記録', 'ログ', 'メモ']
-const SWITCH_TO_CONSULT = ['相談モード', '相談にして', '相談する']
-const SWITCH_TO_RECORD = ['記録モード', '記録にして', '記録する', '戻る']
+// テキスト分類用キーワード（AI判定のフォールバック用に保持）
+// AI-first フローでは interpretMessage() が意図を判定するが、
+// pending_image_confirm ブロック用にリッチメニューコマンドは残す
 
 // 画像確認 — 確定/取消キーワード（SSOT §8.1）
 const IMAGE_CONFIRM_KEYWORDS = ['確定', 'はい', 'yes', 'ok', 'OK', '記録', '保存']
@@ -281,15 +279,14 @@ async function handleTextMessageEvent(
   const textTrim = text.trim()
 
   // ==================================================================
-  // SSOT 優先順位（docs/07_diet-bot_LINE_運用フロー_画面要件_SSOT.md §2）
-  //   ① 画像確認待ち(S3) — 確定/取消以外は全ブロック
+  // SSOT 優先順位 v2.0 — AI-first architecture
+  //   ① 画像確認待ち(S3) — 確定/取消/修正/メタデータ更新 以外は全ブロック
   //   ② 招待コード(認証前OK)
   //   ③ サービスアクセス確認
   //   ④ 問診途中(S1)
-  //   ⑤ モード切替コマンド
-  //   ⑥ 相談キーワード自動切替(CONSULT_KEYWORDS)
-  //   ⑦ 体重記録
-  //   ⑧ 相談テキスト / 通常テキスト
+  //   ⑤ AI意図判定ファースト — 全テキストを interpretMessage() で解釈
+  //      → switch_record / switch_consult / trigger_* / record_* / consult / etc.
+  //      → pending_clarification の回答 vs 新規意図の自動判別
   // ==================================================================
 
   // ------------------------------------------------------------------
@@ -447,7 +444,8 @@ async function handleTextMessageEvent(
   }
 
   // ------------------------------------------------------------------
-  // ④ 問診途中（S1: mode=intake）— モード切替コマンドより前に評価
+  // ④ 問診途中（S1: mode=intake）— AI判定より前に評価
+  //    問診中は AI 解析不要（問診ステップ処理のみ）
   // ------------------------------------------------------------------
   const currentMode = session?.current_mode ?? thread.current_mode
 
@@ -461,238 +459,78 @@ async function handleTextMessageEvent(
       env
     )
     if (handled) return
-    // handleIntakeStep が false を返した場合（セッション不整合）→ 通常処理へ
+    // handleIntakeStep が false を返した場合（セッション不整合）→ AI判定フローへ
   }
 
-  // ------------------------------------------------------------------
-  // ⑤ モード切替コマンド判定
-  // ------------------------------------------------------------------
-
-  // 問診開始 / 再開コマンド
-  if (['問診', 'ヒアリング', '登録', '初期設定'].includes(textTrim) || /ヒアリング.*(お願い|開始|して|したい)/i.test(textTrim)) {
-    await startIntakeFlow(event.replyToken, lineUserId, effectiveAccountId, env, 'command')
-    return
-  }
-
-  // 「問診やり直し」→ 最初から新規開始
-  if (textTrim === '問診やり直し' || textTrim === '問診リセット') {
-    await upsertUserServiceStatus(env.DB, {
-      accountId: effectiveAccountId,
-      lineUserId,
-      intakeCompleted: 0,
-    })
-    await beginIntakeFromStart(event.replyToken, lineUserId, effectiveAccountId, env)
-    return
-  }
-
-  // 「問診再開」→ 途中のステップから続行
-  if (textTrim === '問診再開') {
-    await resumeIntakeFlow(event.replyToken, lineUserId, effectiveAccountId, env)
-    return
-  }
-
-  // ------------------------------------------------------------------
-  // ⑤a Rich Menu ボタンからの特殊トリガー
-  // ------------------------------------------------------------------
-
-  // 「写真を送る」ボタン → 画像送信を促す案内
-  if (textTrim === '写真を送る') {
-    // record モードへ切替
-    try { await updateThreadMode(env.DB, thread.id, 'record') } catch (e) { console.error('[LINE] updateThreadMode(record) error:', e) }
-    try { await deleteModeSession(env.DB, effectiveAccountId, lineUserId) } catch (e) { /* ignore */ }
-    await replyText(
-      event.replyToken,
-      '📝 記録したい内容を送ってください。食事写真・食事テキスト・体重の数字・体重計の写真、どれでもOKです。\n\n💡 写真のヒント:\n・真上から撮ると認識精度UP\n・お皿全体が入るように\n・1品ずつでも、まとめてでもOK',
-      env.LINE_CHANNEL_ACCESS_TOKEN
-    )
-    return
-  }
-
-  // 「体重記録」ボタン → 体重入力を促す案内
-  if (textTrim === '体重記録' || textTrim === '体重を記録') {
-    // record モードへ切替
-    try { await updateThreadMode(env.DB, thread.id, 'record') } catch (e) { console.error('[LINE] updateThreadMode(record) error:', e) }
-    try { await deleteModeSession(env.DB, effectiveAccountId, lineUserId) } catch (e) { /* ignore */ }
-    await replyTextWithQuickReplies(
-      event.replyToken,
-      '⚖️ 体重を入力してください！\n\n例: 65.5kg\n例: 58キロ\n\n※ 数字＋kg（またはキロ）で記録されます',
-      [
-        { label: '📝 記録する', text: '記録モード' },
-        { label: '💬 相談する', text: '相談モード' },
-      ],
-      env.LINE_CHANNEL_ACCESS_TOKEN
-    )
-    return
-  }
-
-  // R6-2: モード切替コマンドで pending_clarification を cancelled に
-  // 明示的モード切替
-  if (SWITCH_TO_CONSULT.some(kw => textTrim.includes(kw))) {
-    try {
-      const { cancelActiveClarifications } = await import('../../repositories/pending-clarifications-repo')
-      await cancelActiveClarifications(env.DB, userAccount.id)
-    } catch (e) { console.warn('[LINE] cancelActiveClarifications on consult switch:', e) }
-    try { await updateThreadMode(env.DB, thread.id, 'consult') } catch (e) { console.error('[LINE] updateThreadMode(consult) error:', e) }
-    try {
-      await upsertModeSession(env.DB, {
-        clientAccountId: effectiveAccountId,
-        lineUserId,
-        currentMode: 'consult',
-        currentStep: 'idle',
-      })
-    } catch (e) { console.error('[LINE] upsertModeSession(consult) error:', e) }
-    await replyText(event.replyToken, '💬 相談モードです。食事・体重・外食・間食・続け方など、何でも送ってください 😊', env.LINE_CHANNEL_ACCESS_TOKEN)
-    return
-  }
-
-  if (SWITCH_TO_RECORD.some(kw => textTrim.includes(kw))) {
-    // R6-2: モード切替コマンドで pending_clarification を cancelled に
-    try {
-      const { cancelActiveClarifications } = await import('../../repositories/pending-clarifications-repo')
-      await cancelActiveClarifications(env.DB, userAccount.id)
-    } catch (e) { console.warn('[LINE] cancelActiveClarifications on record switch:', e) }
-    try { await updateThreadMode(env.DB, thread.id, 'record') } catch (e) { console.error('[LINE] updateThreadMode(record) error:', e) }
-    try { await deleteModeSession(env.DB, effectiveAccountId, lineUserId) } catch (e) { console.error('[LINE] deleteModeSession error:', e) }
-    await replyText(event.replyToken, '📝 記録モードです。\n記録したい内容を送ってください。食事写真・食事テキスト・体重の数字・体重計の写真、どれでもOKです。', env.LINE_CHANNEL_ACCESS_TOKEN)
-    return
-  }
-
-  // ------------------------------------------------------------------
-  // ⑥ CONSULT_KEYWORDS 暗黙的切替（record モード中のみ）
-  //    「相談」「教えて」等のキーワードで自動的に consult へ切替
-  // ------------------------------------------------------------------
-  if (currentMode !== 'consult' && CONSULT_KEYWORDS.some(kw => textTrim.includes(kw))) {
-    try { await updateThreadMode(env.DB, thread.id, 'consult') } catch (e) { console.error('[LINE] auto-switch consult error:', e) }
-    try {
-      await upsertModeSession(env.DB, {
-        clientAccountId: effectiveAccountId,
-        lineUserId,
-        currentMode: 'consult',
-        currentStep: 'idle',
-      })
-    } catch (e) { console.error('[LINE] auto-switch consult session error:', e) }
-    // 自動切替の場合、切替メッセージは送らず直接相談処理へ
-    await handleConsultText(event.replyToken, textTrim, thread.id, userAccount.id, ctx, lineUserId)
-    return
-  }
-
-  // ------------------------------------------------------------------
-  // ⑦⑧ 現在のモードに応じて処理
-  // ------------------------------------------------------------------
-  if (currentMode === 'consult') {
-    await handleConsultText(event.replyToken, textTrim, thread.id, userAccount.id, ctx, lineUserId)
-  } else {
-    await handleRecordText(event.replyToken, textTrim, userAccount.id, effectiveAccountId, lineUserId, thread.id, ctx, event.message.id)
-  }
+  // ==================================================================
+  // ⑤ AI意図判定ファースト — 全テキストをまず interpretMessage() に通す
+  //    キーワードマッチは AI 判定結果に基づいてルーティングする
+  // ==================================================================
+  await handleTextWithAIFirst(
+    event.replyToken,
+    textTrim,
+    userAccount.id,
+    effectiveAccountId,
+    lineUserId,
+    thread.id,
+    currentMode,
+    ctx,
+    event.message.id,
+    event.timestamp
+  )
 }
 
 // ===================================================================
-// handleRecordText — 記録モードのテキスト処理
-// SSOT v2.0: Phase A → Phase B → Phase C パイプライン
+// handleTextWithAIFirst — AI意図判定ファーストのテキスト処理
+// 全テキストを最初にAI解析し、結果に基づいてルーティングする
 // ===================================================================
 
-async function handleRecordText(
+async function handleTextWithAIFirst(
   replyToken: string,
   text: string,
   userAccountId: string,
   clientAccountId: string,
   lineUserId: string,
   threadId: string,
+  currentMode: string,
   ctx: ProcessContext,
-  lineMessageId?: string
+  lineMessageId: string,
+  eventTimestamp: number
 ): Promise<void> {
   const { env } = ctx
 
   // ------------------------------------------------------------------
-  // Phase B 復帰: pending_clarification に対する回答チェック
+  // Phase B 復帰: pending_clarification 中の場合
   // ------------------------------------------------------------------
-  try {
-    const { handleClarificationAnswer, sendNextClarificationQuestion } =
-      await import('./clarification-handler')
-    const { findActiveClarification } = await import('../../repositories/pending-clarifications-repo')
-
-    const pendingClar = await findActiveClarification(env.DB, userAccountId)
-    if (pendingClar) {
-      const clarResult = await handleClarificationAnswer(
-        text, userAccountId, clientAccountId, lineUserId, env
-      )
-
-      if (clarResult.complete && clarResult.updatedIntent) {
-        // Phase B 完了 → Phase C 保存
-        const { persistRecord } = await import('./record-persister')
-        const result = await persistRecord(clarResult.updatedIntent, userAccountId, clientAccountId, env)
-
-        // 明確化レコードを物理削除
-        if (clarResult.pendingId) {
-          const { deleteClarification } = await import('../../repositories/pending-clarifications-repo')
-          await deleteClarification(env.DB, clarResult.pendingId)
-        }
-
-        await saveBotMessage(env.DB, threadId, result.replyMessage)
-        await replyTextWithQuickReplies(
-          replyToken,
-          result.replyMessage,
-          [
-            { label: '📝 続けて記録', text: '記録モード' },
-            { label: '💬 相談する', text: '相談モード' },
-          ],
-          env.LINE_CHANNEL_ACCESS_TOKEN
-        )
-
-        // バックグラウンド: メモリ抽出
-        fireMemoryExtraction(text, userAccountId, null, env, ctx.waitUntil)
-        return
-      } else if (clarResult.pendingId && clarResult.updatedIntent) {
-        // まだ不足フィールドあり → 次の質問を送信
-        await sendNextClarificationQuestion(
-          replyToken, clarResult.updatedIntent, clarResult.pendingId, env
-        )
-        return
-      } else if (clarResult.pendingId && !clarResult.updatedIntent) {
-        // パース失敗 → 再質問（同じフィールド）
-        const rePending = await findActiveClarification(env.DB, userAccountId)
-        if (rePending) {
-          const currentField = rePending.current_field
-          let reText = '🤔 もう少し教えてください。'
-          if (currentField === 'target_date') reText = '🤔 日付がわかりませんでした。「今日」「昨日」「3/10」のように教えてください。'
-          if (currentField === 'meal_type') reText = '🤔 食事区分がわかりませんでした。「朝食」「昼食」「夕食」「間食」のどれですか？'
-          if (currentField === 'weight_value') reText = '🤔 体重がわかりませんでした。「58.5」のように数字で教えてください。'
-
-          await replyText(replyToken, reText, env.LINE_CHANNEL_ACCESS_TOKEN)
-          return
-        }
-      }
-      // それ以外 → pending が見つからない等 → 通常のPhase Aへフォールスルー
-    }
-  } catch (err) {
-    console.error('[RecordText] clarification check error:', err)
-    // エラー時は通常の Phase A 処理へフォールスルー
-  }
+  const { findActiveClarification, cancelActiveClarifications } =
+    await import('../../repositories/pending-clarifications-repo')
+  const pendingClar = await findActiveClarification(env.DB, userAccountId)
 
   // ------------------------------------------------------------------
-  // Phase A: AI 解釈 → Unified Intent JSON
+  // Phase A: AI 解釈 → Unified Intent JSON（全テキスト共通）
   // ------------------------------------------------------------------
-  const { interpretMessage, buildUserContextForInterpretation } =
+  const { interpretMessage, buildUserContextForInterpretation, createFallbackIntent } =
     await import('../ai/interpretation')
   const { canSaveImmediately, canSaveWithConfirmation } =
     await import('../../types/intent')
 
+  const resolvedMode = (currentMode === 'record' || currentMode === 'consult')
+    ? currentMode as 'record' | 'consult'
+    : 'record'
   const userCtx = await buildUserContextForInterpretation(
-    env.DB, threadId, userAccountId, 'record', Date.now()
+    env.DB, threadId, userAccountId, resolvedMode, eventTimestamp
   )
 
   let intent: Awaited<ReturnType<typeof interpretMessage>>
   let fallbackUsed: 'gpt' | 'regex' | 'unclear' = 'gpt'
   try {
     intent = await interpretMessage(text, userCtx, env)
-    // R14: フォールバック検出
     if (intent.reasoning?.includes('フォールバック')) {
       fallbackUsed = intent.intent_primary === 'unclear' ? 'unclear' : 'regex'
     }
   } catch (interpretErr) {
-    console.error('[RecordText] Phase A interpret error:', interpretErr)
+    console.error('[AIFirst] Phase A interpret error:', interpretErr)
     fallbackUsed = 'regex'
-    const { createFallbackIntent } = await import('../ai/interpretation')
     intent = createFallbackIntent(text, userCtx)
     if (intent.intent_primary === 'unclear') fallbackUsed = 'unclear'
   }
@@ -700,7 +538,7 @@ async function handleRecordText(
   // R13: Phase A 監査ログ
   console.log(JSON.stringify({
     event: 'phase_a_result',
-    line_message_id: lineMessageId ?? null,
+    line_message_id: lineMessageId,
     user_account_id: userAccountId,
     intent_primary: intent.intent_primary,
     intent_secondary: intent.intent_secondary,
@@ -709,170 +547,262 @@ async function handleRecordText(
     target_date_source: intent.target_date.source,
     meal_type_source: intent.meal_type?.source ?? null,
     fallback_used: fallbackUsed,
+    current_mode: currentMode,
+    has_pending_clarification: !!pendingClar,
   }))
 
-  console.log(`[RecordText] Phase A: primary=${intent.intent_primary}, conf=${intent.confidence}, clarify=[${intent.needs_clarification.join(',')}], fallback=${fallbackUsed}`)
+  console.log(`[AIFirst] primary=${intent.intent_primary}, conf=${intent.confidence}, clarify=[${intent.needs_clarification.join(',')}], mode=${currentMode}, pendingClar=${!!pendingClar}`)
 
   // ------------------------------------------------------------------
-  // 意図別ルーティング
+  // pending_clarification が存在する場合の処理
+  // 新しい明確な意図 → pending キャンセル + 新規処理
+  // 回答っぽい → 既存の clarification を継続
   // ------------------------------------------------------------------
+  if (pendingClar) {
+    const isNewActionIntent = [
+      'record_meal', 'record_weight', 'correct_record', 'delete_record',
+      'consult', 'switch_record', 'switch_consult',
+      'trigger_intake', 'trigger_photo', 'trigger_weight_input',
+    ].includes(intent.intent_primary)
 
-  // 相談意図を検出 → 自動切替
-  if (intent.intent_primary === 'consult') {
-    try { await updateThreadMode(env.DB, threadId, 'consult') } catch { /* ignore */ }
-    await handleConsultText(replyToken, text, threadId, userAccountId, ctx, lineUserId)
+    const isHighConfidenceNewIntent = isNewActionIntent && intent.confidence >= 0.7
+
+    if (isHighConfidenceNewIntent) {
+      // 新しい明確な意図 → pending をキャンセルして新規処理へ
+      console.log(`[AIFirst] cancelling pending clarification for new intent: ${intent.intent_primary}`)
+      try { await cancelActiveClarifications(env.DB, userAccountId) } catch { /* ignore */ }
+      // フォールスルー: 新しい intent で処理
+    } else {
+      // 既存の clarification の回答として処理
+      try {
+        const { handleClarificationAnswer, sendNextClarificationQuestion } =
+          await import('./clarification-handler')
+
+        const clarResult = await handleClarificationAnswer(
+          text, userAccountId, clientAccountId, lineUserId, env
+        )
+
+        if (clarResult.complete && clarResult.updatedIntent) {
+          const { persistRecord } = await import('./record-persister')
+          const result = await persistRecord(clarResult.updatedIntent, userAccountId, clientAccountId, env)
+
+          if (clarResult.pendingId) {
+            const { deleteClarification } = await import('../../repositories/pending-clarifications-repo')
+            await deleteClarification(env.DB, clarResult.pendingId)
+          }
+
+          await saveBotMessage(env.DB, threadId, result.replyMessage)
+          await replyTextWithQuickReplies(
+            replyToken, result.replyMessage,
+            [{ label: '📝 続けて記録', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
+            env.LINE_CHANNEL_ACCESS_TOKEN
+          )
+          fireMemoryExtraction(text, userAccountId, null, env, ctx.waitUntil)
+          return
+        } else if (clarResult.pendingId && clarResult.updatedIntent) {
+          await sendNextClarificationQuestion(replyToken, clarResult.updatedIntent, clarResult.pendingId, env)
+          return
+        } else if (clarResult.pendingId && !clarResult.updatedIntent) {
+          const rePending = await findActiveClarification(env.DB, userAccountId)
+          if (rePending) {
+            const currentField = rePending.current_field
+            let reText = '🤔 もう少し教えてください。'
+            if (currentField === 'target_date') reText = '🤔 日付がわかりませんでした。「今日」「昨日」「3/10」のように教えてください。'
+            if (currentField === 'meal_type') reText = '🤔 食事区分がわかりませんでした。「朝食」「昼食」「夕食」「間食」のどれですか？'
+            if (currentField === 'weight_value') reText = '🤔 体重がわかりませんでした。「58.5」のように数字で教えてください。'
+            await replyText(replyToken, reText, env.LINE_CHANNEL_ACCESS_TOKEN)
+            return
+          }
+        }
+      } catch (err) {
+        console.error('[AIFirst] clarification handling error:', err)
+        // エラー → キャンセルして新規処理へ
+        try { await cancelActiveClarifications(env.DB, userAccountId) } catch { /* ignore */ }
+      }
+    }
+  }
+
+  // ==================================================================
+  // Intent-based routing
+  // ==================================================================
+
+  // --- モード切替系 ---
+  if (intent.intent_primary === 'switch_record') {
+    try { await cancelActiveClarifications(env.DB, userAccountId) } catch { /* ignore */ }
+    try { await updateThreadMode(env.DB, threadId, 'record') } catch { /* ignore */ }
+    try { await deleteModeSession(env.DB, clientAccountId, lineUserId) } catch { /* ignore */ }
+    await replyText(replyToken, '📝 記録モードです。\n記録したい内容を送ってください。食事写真・食事テキスト・体重の数字・体重計の写真、どれでもOKです。', env.LINE_CHANNEL_ACCESS_TOKEN)
     return
   }
 
-  // 挨拶 → フレンドリーに返す
+  if (intent.intent_primary === 'switch_consult') {
+    try { await cancelActiveClarifications(env.DB, userAccountId) } catch { /* ignore */ }
+    try { await updateThreadMode(env.DB, threadId, 'consult') } catch { /* ignore */ }
+    try {
+      await upsertModeSession(env.DB, {
+        clientAccountId,
+        lineUserId,
+        currentMode: 'consult',
+        currentStep: 'idle',
+      })
+    } catch { /* ignore */ }
+    await replyText(replyToken, '💬 相談モードです。食事・体重・外食・間食・続け方など、何でも送ってください 😊', env.LINE_CHANNEL_ACCESS_TOKEN)
+    return
+  }
+
+  if (intent.intent_primary === 'trigger_intake') {
+    // 問診開始/やり直し/再開 を判別
+    const isReset = /やり直し|リセット/.test(text)
+    const isResume = /再開/.test(text)
+    if (isReset) {
+      await upsertUserServiceStatus(env.DB, { accountId: clientAccountId, lineUserId, intakeCompleted: 0 })
+      await beginIntakeFromStart(replyToken, lineUserId, clientAccountId, env)
+    } else if (isResume) {
+      await resumeIntakeFlow(replyToken, lineUserId, clientAccountId, env)
+    } else {
+      await startIntakeFlow(replyToken, lineUserId, clientAccountId, env, 'command')
+    }
+    return
+  }
+
+  if (intent.intent_primary === 'trigger_photo') {
+    try { await updateThreadMode(env.DB, threadId, 'record') } catch { /* ignore */ }
+    try { await deleteModeSession(env.DB, clientAccountId, lineUserId) } catch { /* ignore */ }
+    await replyText(
+      replyToken,
+      '📝 記録したい内容を送ってください。食事写真・食事テキスト・体重の数字・体重計の写真、どれでもOKです。\n\n💡 写真のヒント:\n・真上から撮ると認識精度UP\n・お皿全体が入るように\n・1品ずつでも、まとめてでもOK',
+      env.LINE_CHANNEL_ACCESS_TOKEN
+    )
+    return
+  }
+
+  if (intent.intent_primary === 'trigger_weight_input') {
+    try { await updateThreadMode(env.DB, threadId, 'record') } catch { /* ignore */ }
+    try { await deleteModeSession(env.DB, clientAccountId, lineUserId) } catch { /* ignore */ }
+    await replyTextWithQuickReplies(
+      replyToken,
+      '⚖️ 体重を入力してください！\n\n例: 65.5kg\n例: 58キロ\n\n※ 数字＋kg（またはキロ）で記録されます',
+      [{ label: '📝 記録する', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
+      env.LINE_CHANNEL_ACCESS_TOKEN
+    )
+    return
+  }
+
+  // --- 相談意図 ---
+  if (intent.intent_primary === 'consult') {
+    if (currentMode !== 'consult') {
+      try { await updateThreadMode(env.DB, threadId, 'consult') } catch { /* ignore */ }
+      try {
+        await upsertModeSession(env.DB, {
+          clientAccountId, lineUserId, currentMode: 'consult', currentStep: 'idle',
+        })
+      } catch { /* ignore */ }
+    }
+    await handleConsultText(replyToken, text, threadId, userAccountId, ctx, lineUserId, intent)
+    return
+  }
+
+  // --- 挨拶 ---
   if (intent.intent_primary === 'greeting') {
     await replyTextWithQuickReplies(
       replyToken,
       '👋 こんにちは！\n\n食事の内容や体重を送ってくださいね 😊\n\n例: 「朝食 トースト・コーヒー」\n例: 「58.5kg」',
-      [
-        { label: '📝 記録する', text: '記録モード' },
-        { label: '💬 相談する', text: '相談モード' },
-      ],
+      [{ label: '📝 記録する', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
       env.LINE_CHANNEL_ACCESS_TOKEN
     )
     return
   }
 
-  // 意図不明 → ガイド
-  if (intent.intent_primary === 'unclear') {
-    await replyTextWithQuickReplies(
-      replyToken,
-      '🤔 記録内容が判定できませんでした。\n\n体重・食事・運動などを入力してください。\n例: 「体重58.5kg」\n例: 「朝食 トースト・コーヒー」',
-      [
-        { label: '📝 記録する', text: '記録モード' },
-        { label: '💬 相談する', text: '相談モード' },
-      ],
-      env.LINE_CHANNEL_ACCESS_TOKEN
-    )
-    return
+  // --- 記録系 intent (record_meal / record_weight / correct_record / delete_record) ---
+  // record モードに自動切替（consult 中に記録意図が検出された場合）
+  if (currentMode === 'consult' &&
+      (intent.intent_primary === 'record_meal' || intent.intent_primary === 'record_weight' ||
+       intent.intent_primary === 'correct_record' || intent.intent_primary === 'delete_record')) {
+    try { await updateThreadMode(env.DB, threadId, 'record') } catch { /* ignore */ }
   }
 
-  // ------------------------------------------------------------------
-  // 即時保存チェック (Phase C 直行)
-  // ------------------------------------------------------------------
+  // 即時保存チェック
   if (canSaveImmediately(intent)) {
     const { persistRecord } = await import('./record-persister')
     const result = await persistRecord(intent, userAccountId, clientAccountId, env)
 
-    // R13: Phase C 監査ログ
     console.log(JSON.stringify({
       event: 'phase_c_result',
-      line_message_id: lineMessageId ?? null,
+      line_message_id: lineMessageId,
       user_account_id: userAccountId,
       persist_action: result.persist_action ?? (result.success ? 'created' : 'rejected'),
       target_table: intent.intent_primary === 'record_weight' ? 'body_metrics' : 'meal_entries',
-      target_record_id: null,
       error: result.error ?? null,
     }))
 
     await saveBotMessage(env.DB, threadId, result.replyMessage)
     await replyTextWithQuickReplies(
-      replyToken,
-      result.replyMessage,
-      [
-        { label: '📝 続けて記録', text: '記録モード' },
-        { label: '💬 相談する', text: '相談モード' },
-      ],
+      replyToken, result.replyMessage,
+      [{ label: '📝 続けて記録', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
       env.LINE_CHANNEL_ACCESS_TOKEN
     )
-
-    // バックグラウンド: メモリ抽出
     fireMemoryExtraction(text, userAccountId, null, env, ctx.waitUntil)
-
-    // 副次意図: 相談レスポンスも生成 (Phase 2 で実装予定)
-      // intent.reply_policy.generate_consult_reply が true の場合、
-      // push で相談返答を送信する機能を追加予定
     return
   }
 
   if (canSaveWithConfirmation(intent)) {
-    // timestamp 由来でも保存はする。ただし確認メッセージを添える
     const { persistRecord } = await import('./record-persister')
     const result = await persistRecord(intent, userAccountId, clientAccountId, env)
-
-    // R13: Phase C 監査ログ（確認付き保存）
-    console.log(JSON.stringify({
-      event: 'phase_c_result',
-      line_message_id: lineMessageId ?? null,
-      user_account_id: userAccountId,
-      persist_action: result.persist_action ?? (result.success ? 'created' : 'rejected'),
-      target_table: 'meal_entries',
-      target_record_id: null,
-      error: result.error ?? null,
-    }))
 
     const confirmNote = intent.target_date.source === 'timestamp' && intent.meal_type?.source === 'timestamp'
       ? '\n\n⏰ 日付と食事区分は送信時刻から推定しました。違う場合はお知らせください。'
       : intent.target_date.source === 'timestamp'
         ? '\n\n⏰ 日付は送信時刻から推定しました。違う場合は「昨日」などと教えてください。'
-        : (intent.meal_type?.source === 'timestamp'
+        : intent.meal_type?.source === 'timestamp'
           ? '\n\n⏰ 食事区分は送信時刻から推定しました。違う場合は「朝食」などと教えてください。'
-          : '')
+          : ''
 
     await saveBotMessage(env.DB, threadId, result.replyMessage + confirmNote)
     await replyTextWithQuickReplies(
-      replyToken,
-      result.replyMessage + confirmNote,
-      [
-        { label: '📝 続けて記録', text: '記録モード' },
-        { label: '💬 相談する', text: '相談モード' },
-      ],
+      replyToken, result.replyMessage + confirmNote,
+      [{ label: '📝 続けて記録', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
       env.LINE_CHANNEL_ACCESS_TOKEN
     )
-
-    // バックグラウンド: メモリ抽出
     fireMemoryExtraction(text, userAccountId, null, env, ctx.waitUntil)
     return
   }
 
-  // ------------------------------------------------------------------
-  // 修正・削除の場合 → Phase C 直行（対象探索は persistRecord 内で行う）
-  // ------------------------------------------------------------------
+  // 修正・削除
   if (intent.intent_primary === 'correct_record' || intent.intent_primary === 'delete_record') {
     const { persistRecord } = await import('./record-persister')
     const result = await persistRecord(intent, userAccountId, clientAccountId, env)
-
     await saveBotMessage(env.DB, threadId, result.replyMessage)
     await replyTextWithQuickReplies(
-      replyToken,
-      result.replyMessage,
-      [
-        { label: '📝 続けて記録', text: '記録モード' },
-        { label: '💬 相談する', text: '相談モード' },
-      ],
+      replyToken, result.replyMessage,
+      [{ label: '📝 続けて記録', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
       env.LINE_CHANNEL_ACCESS_TOKEN
     )
     return
   }
 
-  // ------------------------------------------------------------------
-  // Phase B: 不足フィールドあり → 明確化フロー開始
-  // ------------------------------------------------------------------
+  // Phase B: 明確化フロー
   if (intent.needs_clarification.length > 0) {
     const { startClarificationFlow } = await import('./clarification-handler')
-    await startClarificationFlow(
-      replyToken, intent, text,
-      userAccountId, clientAccountId, null,
-      lineUserId, env
+    await startClarificationFlow(replyToken, intent, text, userAccountId, clientAccountId, null, lineUserId, env)
+    return
+  }
+
+  // unclear → ガイド
+  if (intent.intent_primary === 'unclear') {
+    await replyTextWithQuickReplies(
+      replyToken,
+      '🤔 記録内容が判定できませんでした。\n\n体重・食事・運動などを入力してください。\n例: 「体重58.5kg」\n例: 「朝食 トースト・コーヒー」',
+      [{ label: '📝 記録する', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
+      env.LINE_CHANNEL_ACCESS_TOKEN
     )
     return
   }
 
-  // ------------------------------------------------------------------
-  // フォールバック: ここに来るケースは少ないはず
-  // ------------------------------------------------------------------
+  // フォールバック
   await replyTextWithQuickReplies(
     replyToken,
     '🤔 記録内容が判定できませんでした。\n\n体重・食事・運動などを入力してください。\n例: 「体重58.5kg」\n例: 「朝食 トースト・コーヒー」',
-    [
-      { label: '📝 記録する', text: '記録モード' },
-      { label: '💬 相談する', text: '相談モード' },
-    ],
+    [{ label: '📝 記録する', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
     env.LINE_CHANNEL_ACCESS_TOKEN
   )
 }
@@ -932,7 +862,8 @@ async function handleConsultText(
   threadId: string,
   userAccountId: string,
   ctx: ProcessContext,
-  lineUserId?: string
+  lineUserId?: string,
+  precomputedIntent?: import('../../types/intent').UnifiedIntent
 ): Promise<void> {
   const { env } = ctx
 
@@ -941,63 +872,53 @@ async function handleConsultText(
 
     // ------------------------------------------------------------------
     // Phase A: 副次意図チェック（相談中に記録情報が含まれていないか）
+    // AI判定は handleTextWithAIFirst で既に実施済みの場合は再利用
     // ------------------------------------------------------------------
     let secondaryRecordSaved = false
     try {
-      const { interpretMessage, buildUserContextForInterpretation } =
-        await import('../ai/interpretation')
-      const { canSaveImmediately } = await import('../../types/intent')
+      const { canSaveImmediately, CONSULT_SECONDARY_SAVE_THRESHOLD } =
+        await import('../../types/intent')
 
-      const userCtx = await buildUserContextForInterpretation(
-        env.DB, threadId, userAccountId, 'consult', Date.now()
-      )
-      const intent = await interpretMessage(text, userCtx, env)
-
-      // R1-6: 相談モードで intent_primary が record_* の場合、記録モードに自動切替
-      if (intent.intent_primary === 'record_meal' || intent.intent_primary === 'record_weight') {
-        console.log(`[Consult] auto-switch to record: primary=${intent.intent_primary}, conf=${intent.confidence}`)
-        try { await updateThreadMode(env.DB, threadId, 'record') } catch { /* ignore */ }
-        if (canSaveImmediately(intent)) {
-          const { persistRecord } = await import('./record-persister')
-          const result = await persistRecord(intent, userAccountId, ctx.clientAccountId, env)
-          if (result.success) {
-            secondaryRecordSaved = true
-            // R1-6 は「記録も保存しました」ではなく通常の記録保存返信
-            // ただし相談応答も並行して生成するため secondaryRecordSaved で追記
-            console.log(`[Consult] R1-6 primary record saved: ${intent.intent_primary}`)
-          }
-        }
-        // canSaveImmediately == false の場合は相談応答にフォールスルー
+      // precomputedIntent がある場合は再利用、なければ新規解釈
+      let intent = precomputedIntent
+      if (!intent) {
+        const { interpretMessage, buildUserContextForInterpretation } =
+          await import('../ai/interpretation')
+        const userCtx = await buildUserContextForInterpretation(
+          env.DB, threadId, userAccountId, 'consult', Date.now()
+        )
+        intent = await interpretMessage(text, userCtx, env)
       }
 
-      // R1-3, R1-4, R1-5: 副次意図の記録検出
-      // 相談モードでも体重・食事記録を副次意図として検出 → 保存
-      const { CONSULT_SECONDARY_SAVE_THRESHOLD } = await import('../../types/intent')
-      const secondaryEligible = !secondaryRecordSaved && intent.intent_secondary &&
+      // pending_clarification が存在しないことを確認
+      let hasPending = false
+      try {
+        const { findActiveClarification } = await import('../../repositories/pending-clarifications-repo')
+        hasPending = !!(await findActiveClarification(env.DB, userAccountId))
+      } catch { /* ignore */ }
+
+      // R1-3~R1-6: 副次意図の記録検出（confidence ≥ 0.80 + canSaveImmediately + no pending）
+      const secondaryEligible = !secondaryRecordSaved && !hasPending &&
+          intent.intent_secondary &&
           (intent.intent_secondary === 'record_meal' || intent.intent_secondary === 'record_weight') &&
           intent.confidence >= CONSULT_SECONDARY_SAVE_THRESHOLD
 
       if (secondaryEligible) {
-        // 副次意図を主意図に昇格させて保存
         const recordIntent = { ...intent, intent_primary: intent.intent_secondary! }
         if (canSaveImmediately(recordIntent)) {
           const { persistRecord } = await import('./record-persister')
           const result = await persistRecord(recordIntent, userAccountId, ctx.clientAccountId, env)
-          if (result.success) {
-            secondaryRecordSaved = true
-          }
+          if (result.success) secondaryRecordSaved = true
 
-          // R13: 相談中副次記録 監査ログ
           console.log(JSON.stringify({
             event: 'consult_secondary_record',
             user_account_id: userAccountId,
             intent_secondary: intent.intent_secondary,
             confidence: intent.confidence,
             saved: result.success,
-            reason: result.success ? 'threshold_met' : 'error',
+            reason: result.success ? 'threshold_met_no_pending' : 'error',
           }))
         } else {
-          // R13: canSaveImmediately 不成立
           console.log(JSON.stringify({
             event: 'consult_secondary_record',
             user_account_id: userAccountId,
@@ -1009,14 +930,13 @@ async function handleConsultText(
         }
       } else if (intent.intent_secondary &&
           (intent.intent_secondary === 'record_meal' || intent.intent_secondary === 'record_weight')) {
-        // R13: 閾値未満
         console.log(JSON.stringify({
           event: 'consult_secondary_record',
           user_account_id: userAccountId,
           intent_secondary: intent.intent_secondary,
           confidence: intent.confidence,
           saved: false,
-          reason: 'below_threshold',
+          reason: hasPending ? 'has_pending' : 'below_threshold',
         }))
       }
     } catch (err) {
