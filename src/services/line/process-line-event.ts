@@ -1297,7 +1297,7 @@ async function handleConsultText(
         ...aiMessages,
         { role: 'user', content: text },
       ],
-      { temperature: 0.7, maxTokens: 300 }
+      { temperature: 0.7, maxTokens: 300, mediumTimeout: true }
     )
 
     // bot の発言を保存
@@ -1822,7 +1822,7 @@ async function handleImageCorrectionWithPush(
     } catch { /* ignore */ }
 
     // 2. AI に修正を反映させる（★ gpt-4o-mini + 短タイムアウトで Worker 30s 制限内に収める）
-    const ai = createOpenAIClient(env)
+    const ai = createOpenAIClient(env, { model: 'gpt-4o-mini' })
     const originalSummary = [
       originalExtracted.meal_description || originalAction.meal_text || '不明',
       originalExtracted.food_items ? `食品: ${(originalExtracted.food_items as string[]).join(', ')}` : '',
@@ -2068,8 +2068,8 @@ async function handleImageMetadataUpdateWithPush(
         : {}
     } catch { /* ignore */ }
 
-    // AI でテキストから日付・食事区分を抽出（★ 短タイムアウトで Worker 30s 制限内に収める）
-    const ai = createOpenAIClient(env)
+    // AI でテキストから日付・食事区分を抽出（★ gpt-4o-mini + 短タイムアウトで Worker 30s 制限内に収める）
+    const ai = createOpenAIClient(env, { model: 'gpt-4o-mini' })
     const today = todayJst()
 
     /** 今日から offset 日分ずらした日付を YYYY-MM-DD で返す */

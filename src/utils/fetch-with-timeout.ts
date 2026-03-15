@@ -18,6 +18,8 @@ export const TIMEOUT = {
   LINE_VERIFY: 5_000,
   /** OpenAI Chat Completions / Vision（重い処理用） */
   OPENAI_CHAT: 25_000,
+  /** OpenAI Chat Completions（中間タイムアウト：相談応答等） */
+  OPENAI_CHAT_MEDIUM: 15_000,
   /** OpenAI Chat Completions（軽い分類用：maxTokens <= 100） */
   OPENAI_CHAT_LIGHT: 10_000,
   /** OpenAI Embeddings */

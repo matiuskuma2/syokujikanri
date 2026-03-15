@@ -400,9 +400,9 @@ export async function classifyPendingText(
   // 例: "昨日の晩御飯", "これは朝食です", "今日の昼食"
   if (hasMetadata && trimmed.length <= 30) return 'metadata_update'
 
-  // ルールベースで判定できない場合 → AI判定（軽量タイムアウト使用）
+  // ルールベースで判定できない場合 → AI判定（gpt-4o-mini + 軽量タイムアウト使用）
   try {
-    const ai = createOpenAIClient(env)
+    const ai = createOpenAIClient(env, { model: 'gpt-4o-mini' })
     const raw = await ai.createResponse(
       [
         {
@@ -489,8 +489,8 @@ export async function handleImageMetadataUpdate(
         : {}
     } catch { /* ignore */ }
 
-    // AI でテキストから日付・食事区分を抽出
-    const ai = createOpenAIClient(env)
+    // AI でテキストから日付・食事区分を抽出（★ gpt-4o-mini + lightTimeout で Worker 30s 制限対策）
+    const ai = createOpenAIClient(env, { model: 'gpt-4o-mini' })
     const today = todayJst()
     const raw = await ai.createResponse(
       [
@@ -512,7 +512,7 @@ export async function handleImageMetadataUpdate(
         },
         { role: 'user', content: metadataText }
       ],
-      { temperature: 0, maxTokens: 200 }
+      { temperature: 0, maxTokens: 150, lightTimeout: true }
     )
 
     let parsed: { target_date?: string | null; meal_type?: string | null; reasoning?: string } = {}
@@ -694,8 +694,8 @@ export async function handleImageCorrection(
         : {}
     } catch { /* ignore */ }
 
-    // 2. AI に修正を反映させる
-    const ai = createOpenAIClient(env)
+    // 2. AI に修正を反映させる（★ gpt-4o-mini + lightTimeout で Worker 30s 制限対策）
+    const ai = createOpenAIClient(env, { model: 'gpt-4o-mini' })
     const originalSummary = [
       originalExtracted.meal_description || originalAction.meal_text || '不明',
       originalExtracted.food_items ? `食品: ${(originalExtracted.food_items as string[]).join(', ')}` : '',
@@ -711,7 +711,7 @@ export async function handleImageCorrection(
         { role: 'system', content: prompt },
         { role: 'user', content: correctionText },
       ],
-      { temperature: 0.3, maxTokens: 512 }
+      { temperature: 0.3, maxTokens: 300, lightTimeout: true }
     )
 
     let parsed: Record<string, unknown> = {}

@@ -171,7 +171,10 @@ export async function interpretMessage(
   env: Bindings
 ): Promise<UnifiedIntent> {
   try {
-    const ai = createOpenAIClient(env)
+    // ★ Worker 30s 制限対策: 意図分類は gpt-4o-mini + 短タイムアウトで十分
+    //    後続のハンドラ（consult, correction 等）でも OpenAI を呼ぶため、
+    //    ここでの処理時間を最小化する（目標: 3-5秒以内）
+    const ai = createOpenAIClient(env, { model: 'gpt-4o-mini' })
     const systemPrompt = buildInterpretationPrompt(ctx)
 
     const raw = await ai.createResponse(
@@ -181,8 +184,9 @@ export async function interpretMessage(
       ],
       {
         temperature: 0.2,
-        maxTokens: 1024,
+        maxTokens: 500,
         responseFormat: 'json_object',
+        lightTimeout: true,
       }
     )
 

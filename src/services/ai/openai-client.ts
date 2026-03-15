@@ -67,8 +67,10 @@ export class OpenAIClient {
       temperature?: number
       maxTokens?: number
       responseFormat?: 'text' | 'json_object'
-      /** 軽量呼び出し用の短いタイムアウトを使う（分類タスク等） */
+      /** 軽量呼び出し用の短いタイムアウトを使う（分類タスク等: 10秒） */
       lightTimeout?: boolean
+      /** 中間タイムアウトを使う（相談応答等: 15秒） */
+      mediumTimeout?: boolean
     } = {}
   ): Promise<string> {
     const body: Record<string, unknown> = {
@@ -81,7 +83,9 @@ export class OpenAIClient {
       body.response_format = { type: 'json_object' }
     }
 
-    const timeout = opts.lightTimeout ? TIMEOUT.OPENAI_CHAT_LIGHT : TIMEOUT.OPENAI_CHAT
+    const timeout = opts.lightTimeout ? TIMEOUT.OPENAI_CHAT_LIGHT
+      : opts.mediumTimeout ? TIMEOUT.OPENAI_CHAT_MEDIUM
+      : TIMEOUT.OPENAI_CHAT
     const startTime = Date.now()
 
     const res = await fetchWithTimeout(
@@ -189,10 +193,10 @@ type BindingsSubset = {
 }
 
 /** Cloudflare Bindings から OpenAIClient を生成するヘルパー */
-export function createOpenAIClient(env: BindingsSubset): OpenAIClient {
+export function createOpenAIClient(env: BindingsSubset, opts?: { model?: string }): OpenAIClient {
   return new OpenAIClient({
     apiKey: env.OPENAI_API_KEY,
-    model: env.OPENAI_MODEL ?? 'gpt-4o',
+    model: opts?.model ?? env.OPENAI_MODEL ?? 'gpt-4o',
     maxTokens: env.OPENAI_MAX_TOKENS ? parseInt(env.OPENAI_MAX_TOKENS, 10) : 2048,
   })
 }
