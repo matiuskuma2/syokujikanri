@@ -24,8 +24,8 @@ import userRouter from './routes/user/index'
 import meRouter from './routes/user/me'
 import filesRouter from './routes/user/files'
 
-// Queue Consumer（Cloudflare Workers の queue export として使用）
-import { lineQueueConsumer } from './jobs/image-analysis'
+// Queue Consumer は別 Worker (diet-bot-worker) に移行済み
+// Pages Functions では Queue Consumer を持てないため
 
 // Cron ジョブ
 import { runDailyReminder } from './jobs/daily-reminder'
@@ -2254,4 +2254,5 @@ document.addEventListener('DOMContentLoaded', () => {
 // ===================================================================
 
 export default app
-export { lineQueueConsumer as queue }
+// Queue Consumer は別 Worker (diet-bot-worker) に移行済み
+// export { lineQueueConsumer as queue }

@@ -1,0 +1,38 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "diet-bot-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-03-10",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Queue Consumer — 1メッセージずつ直列処理
+  "queues": {
+    "consumers": [
+      {
+        "queue": "diet-bot-line-events",
+        "max_batch_size": 1,
+        "max_batch_timeout": 0,
+        "max_retries": 3,
+        "dead_letter_queue": "diet-bot-line-events-dlq",
+        "retry_delay": 5
+      }
+    ]
+  },
+
+  // D1 Database（Pages と同じ database_id）
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "diet-bot-production",
+      "database_id": "72e33989-d529-4a07-b907-d883c3e85614"
+    }
+  ],
+
+  // R2 Storage（Pages と同じ bucket）
+  "r2_buckets": [
+    {
+      "binding": "R2",
+      "bucket_name": "diet-bot-media"
+    }
+  ]
+}

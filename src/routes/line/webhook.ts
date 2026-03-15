@@ -1,36 +1,36 @@
 /**
  * src/routes/line/webhook.ts
- * LINE Webhook エンドポイント
+ * LINE Webhook エンドポイント（V2: Webhook 最小化）
  *
- * 責務:
- *   1. リクエスト Body を raw text で読み取り
- *   2. X-Line-Signature を verifyLineSignature で検証
- *   3. JSON パース → events 配列を並列処理
- *   4. 各イベントは processLineEvent に委譲（1イベント単位で try/catch）
- *   5. LINE に 200 OK を即時返却
+ * 責務（3つだけ）:
+ *   1. X-Line-Signature 署名検証
+ *   2. incoming_events テーブルに raw event を保存（冪等性キー: line_message_id）
+ *   3. LINE_EVENTS_QUEUE に enqueue
+ *   4. 即座に 200 OK を返却
  *
- * Context 解決ロジック:
- *   - LINE_CHANNEL_ID / CLIENT_ACCOUNT_ID は env から取得
- *   - 将来マルチチャンネル化する際はここで line_channels テーブルを検索する
+ * ★ Webhook は以下を一切やらない:
+ *   - AI 呼び出し
+ *   - reply / push 送信
+ *   - 状態変更
+ *   - 複雑な分岐
+ *
+ * 全ての実質的な処理は Consumer Worker (diet-bot-worker) が行う。
  */
 
 import { Hono } from 'hono'
 import type { Bindings } from '../../types/bindings'
 import type { LineWebhookEvent } from '../../types/bindings'
 import { verifyLineSignature } from '../../services/line/verify-signature'
-import { processLineEvent } from '../../services/line/process-line-event'
 
 const webhookRouter = new Hono<{ Bindings: Bindings }>()
 
 webhookRouter.post('/', async (c) => {
-  // ------------------------------------------------------------------
-  // 1. raw body 取得（署名検証に生テキストが必要）
-  // ------------------------------------------------------------------
-  const rawBody = await c.req.text()
+  const startTime = Date.now()
 
   // ------------------------------------------------------------------
-  // 2. 署名検証
+  // 1. raw body 取得 + 署名検証
   // ------------------------------------------------------------------
+  const rawBody = await c.req.text()
   const signature = c.req.header('x-line-signature') ?? ''
   const isValid = await verifyLineSignature(rawBody, signature, c.env.LINE_CHANNEL_SECRET)
 
@@ -40,7 +40,7 @@ webhookRouter.post('/', async (c) => {
   }
 
   // ------------------------------------------------------------------
-  // 3. JSON パース
+  // 2. JSON パース
   // ------------------------------------------------------------------
   let body: { destination?: string; events?: LineWebhookEvent[] }
   try {
@@ -53,59 +53,65 @@ webhookRouter.post('/', async (c) => {
   const events = body.events ?? []
 
   if (events.length === 0) {
-    // LINE の疎通確認（events が空の場合）
     return c.json({ ok: true })
   }
 
   // ------------------------------------------------------------------
-  // 4. チャンネルコンテキスト解決
-  //
-  //    line_channels テーブルから DB 内部 ID を取得する。
-  //    env.LINE_CHANNEL_ID は LINE の Channel ID（数値文字列 e.g. "1656660870"）
-  //    だが、line_users.line_channel_id は line_channels.id（内部ID）を参照する。
-  //    このため、line_channels テーブルで channel_id → id のルックアップが必要。
+  // 3. イベントごとに incoming_events 保存 + Queue 投入
   // ------------------------------------------------------------------
-  const envChannelId = c.env.LINE_CHANNEL_ID ?? ''
   const clientAccountId = c.env.CLIENT_ACCOUNT_ID ?? 'default'
+  const lineChannelId = c.env.LINE_CHANNEL_ID ?? ''
 
-  // line_channels テーブルから内部IDを取得
-  let lineChannelId: string
-  try {
-    const channelRow = await c.env.DB.prepare(
-      `SELECT id, account_id FROM line_channels WHERE channel_id = ?1 AND is_active = 1 LIMIT 1`
-    ).bind(envChannelId).first<{ id: string; account_id: string }>()
+  for (const event of events) {
+    const messageId = event.message?.id
+      ?? (event as any).webhookEventId
+      ?? `evt_${event.type}_${event.timestamp}`
+    const lineUserId = event.source?.userId ?? null
 
-    if (channelRow) {
-      lineChannelId = channelRow.id
-      console.log(`[Webhook] resolved lineChannelId=${lineChannelId} from channel_id=${envChannelId}`)
-    } else {
-      // フォールバック: 最初のアクティブなチャンネルを使用
-      const fallbackRow = await c.env.DB.prepare(
-        `SELECT id FROM line_channels WHERE is_active = 1 LIMIT 1`
-      ).first<{ id: string }>()
-      lineChannelId = fallbackRow?.id ?? 'default'
-      console.warn(`[Webhook] channel_id=${envChannelId} not found in line_channels, using fallback: ${lineChannelId}`)
+    // 3a. incoming_events に保存（冪等性: UNIQUE(line_message_id)）
+    try {
+      await c.env.DB.prepare(`
+        INSERT INTO incoming_events (id, line_message_id, event_type, event_json, line_user_id, received_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+      `).bind(
+        crypto.randomUUID(),
+        messageId,
+        event.type,
+        JSON.stringify(event),
+        lineUserId,
+        new Date().toISOString()
+      ).run()
+    } catch (err: any) {
+      if (err?.message?.includes('UNIQUE')) {
+        console.log(`[Webhook] duplicate event ${messageId}, skipping enqueue`)
+        continue  // 重複イベントは Queue にも入れない
+      }
+      // UNIQUE 以外のエラーはログだけ出して続行
+      console.error(`[Webhook] incoming_events insert error:`, err)
     }
-  } catch (err) {
-    console.error('[Webhook] Failed to resolve lineChannelId:', err)
-    lineChannelId = 'default'
+
+    // 3b. Queue に投入
+    try {
+      await c.env.LINE_EVENTS_QUEUE.send({
+        type: 'webhook_event',
+        accountId: clientAccountId,
+        channelId: lineChannelId,
+        event,
+        receivedAt: new Date().toISOString(),
+      })
+      console.log(`[Webhook] enqueued: ${event.type} msgId=${messageId}`)
+    } catch (err) {
+      console.error(`[Webhook] queue send error for ${messageId}:`, err)
+      // Queue 送信失敗でもイベントは incoming_events に保存されている
+      // 後から再送するか、DLQ で回収可能
+    }
   }
 
-  // ExecutionContext の waitUntil を取得（バックグラウンド処理用）
-  // Hono の c.executionCtx は Cloudflare Workers の ExecutionContext
-  const execCtx = c.executionCtx as { waitUntil?: (promise: Promise<unknown>) => void } | undefined
-  const waitUntilFn = execCtx?.waitUntil?.bind(execCtx)
-
-  const ctx = { env: c.env, lineChannelId, clientAccountId, waitUntil: waitUntilFn }
-
   // ------------------------------------------------------------------
-  // 5. イベント処理（並列・個別 try/catch は processLineEvent 内で行う）
+  // 4. 即 200 返却（reply なし — 固定事項 #4）
   // ------------------------------------------------------------------
-  await Promise.allSettled(
-    events.map((event) => processLineEvent(event, ctx))
-  )
-
-  // LINE は 200 を返さないとリトライするため必ず 200 を返す
+  const elapsed = Date.now() - startTime
+  console.log(`[Webhook] processed ${events.length} event(s) in ${elapsed}ms`)
   return c.json({ ok: true })
 })
 
