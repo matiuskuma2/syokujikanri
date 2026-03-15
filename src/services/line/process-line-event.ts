@@ -564,6 +564,54 @@ async function handleTextMessageEvent(
   }
 
   // ==================================================================
+  // ④.5 キーワードショートカット — AI 判定不要のモード切替コマンド
+  //      「相談する」「記録する」等は即 reply（Worker 30s 制限回避）
+  // ==================================================================
+  const MODE_SWITCH_KEYWORDS: Record<string, 'switch_record' | 'switch_consult'> = {
+    '相談する': 'switch_consult',
+    '相談モード': 'switch_consult',
+    '相談にして': 'switch_consult',
+    '相談続ける': 'switch_consult',
+    '記録する': 'switch_record',
+    '記録モード': 'switch_record',
+    '記録にして': 'switch_record',
+    '戻る': 'switch_record',
+    '続けて記録': 'switch_record',
+    '記録に戻る': 'switch_record',
+  }
+
+  const kwMatch = MODE_SWITCH_KEYWORDS[textTrim]
+  if (kwMatch) {
+    trace.intent = { primary: kwMatch, secondary: null, confidence: 1.0, fallbackUsed: 'keyword_shortcut' }
+    const { cancelActiveClarifications: cancelClar } = await import('../../repositories/pending-clarifications-repo')
+
+    if (kwMatch === 'switch_consult') {
+      trace.chosenHandler = 'keyword_switch_consult'
+      try { await cancelClar(env.DB, userAccount.id) } catch { /* ignore */ }
+      try { await updateThreadMode(env.DB, thread.id, 'consult') } catch { /* ignore */ }
+      try {
+        await upsertModeSession(env.DB, {
+          clientAccountId: effectiveAccountId,
+          lineUserId,
+          currentMode: 'consult',
+          currentStep: 'idle',
+        })
+      } catch { /* ignore */ }
+      await safeReplyText(event.replyToken, lineUserId, '💬 相談モードです。食事・体重・外食・間食・続け方など、何でも送ってください 😊', env.LINE_CHANNEL_ACCESS_TOKEN)
+      trace.responseSent = true
+      return
+    } else {
+      trace.chosenHandler = 'keyword_switch_record'
+      try { await cancelClar(env.DB, userAccount.id) } catch { /* ignore */ }
+      try { await updateThreadMode(env.DB, thread.id, 'record') } catch { /* ignore */ }
+      try { await deleteModeSession(env.DB, effectiveAccountId, lineUserId) } catch { /* ignore */ }
+      await safeReplyText(event.replyToken, lineUserId, '📝 記録モードです。\n記録したい内容を送ってください。食事写真・食事テキスト・体重の数字・体重計の写真、どれでもOKです。', env.LINE_CHANNEL_ACCESS_TOKEN)
+      trace.responseSent = true
+      return
+    }
+  }
+
+  // ==================================================================
   // ⑤ AI意図判定ファースト — 全テキストをまず interpretMessage() に通す
   //    キーワードマッチは AI 判定結果に基づいてルーティングする
   // ==================================================================
@@ -1249,7 +1297,7 @@ async function handleConsultText(
         ...aiMessages,
         { role: 'user', content: text },
       ],
-      { temperature: 0.7, maxTokens: 512 }
+      { temperature: 0.7, maxTokens: 300 }
     )
 
     // bot の発言を保存
@@ -1773,7 +1821,7 @@ async function handleImageCorrectionWithPush(
         : {}
     } catch { /* ignore */ }
 
-    // 2. AI に修正を反映させる
+    // 2. AI に修正を反映させる（★ gpt-4o-mini + 短タイムアウトで Worker 30s 制限内に収める）
     const ai = createOpenAIClient(env)
     const originalSummary = [
       originalExtracted.meal_description || originalAction.meal_text || '不明',
@@ -1810,7 +1858,7 @@ ${correctionText}
         { role: 'system', content: correctionPrompt },
         { role: 'user', content: correctionText },
       ],
-      { temperature: 0.3, maxTokens: 512 }
+      { temperature: 0.3, maxTokens: 300, lightTimeout: true }
     )
 
     let parsed: Record<string, unknown> = {}
@@ -2020,7 +2068,7 @@ async function handleImageMetadataUpdateWithPush(
         : {}
     } catch { /* ignore */ }
 
-    // AI でテキストから日付・食事区分を抽出
+    // AI でテキストから日付・食事区分を抽出（★ 短タイムアウトで Worker 30s 制限内に収める）
     const ai = createOpenAIClient(env)
     const today = todayJst()
 
@@ -2052,7 +2100,7 @@ async function handleImageMetadataUpdateWithPush(
         },
         { role: 'user', content: metadataText }
       ],
-      { temperature: 0, maxTokens: 200 }
+      { temperature: 0, maxTokens: 150, lightTimeout: true }
     )
 
     let parsed: { target_date?: string | null; meal_type?: string | null; reasoning?: string } = {}
