@@ -739,7 +739,7 @@ async function handleTextWithAIFirst(
           fireMemoryExtraction(text, userAccountId, null, env, ctx.waitUntil)
           return
         } else if (clarResult.pendingId && clarResult.updatedIntent) {
-          await sendNextClarificationQuestion(replyToken, clarResult.updatedIntent, clarResult.pendingId, env)
+          await sendNextClarificationQuestion(replyToken, clarResult.updatedIntent, clarResult.pendingId, env, lineUserId)
           trace.responseSent = true
           return
         } else if (clarResult.pendingId && !clarResult.updatedIntent) {
@@ -854,8 +854,8 @@ async function handleTextWithAIFirst(
         })
       } catch { /* ignore */ }
     }
-    await handleConsultText(replyToken, text, threadId, userAccountId, ctx, lineUserId, intent)
-    trace.responseSent = true
+    await handleConsultText(replyToken, text, threadId, userAccountId, ctx, lineUserId, intent, trace)
+    // trace.responseSent は handleConsultText 内で設定される
     return
   }
 
@@ -1099,7 +1099,8 @@ async function handleConsultText(
   userAccountId: string,
   ctx: ProcessContext,
   lineUserId?: string,
-  precomputedIntent?: import('../../types/intent').UnifiedIntent
+  precomputedIntent?: import('../../types/intent').UnifiedIntent,
+  trace?: TraceEntry
 ): Promise<void> {
   const { env } = ctx
 
@@ -1268,6 +1269,7 @@ async function handleConsultText(
 
     // ★ OpenAI 呼び出し後は replyToken が期限切れの可能性が高い
     //    → push を先に試み、失敗時のみ reply を試す
+    let consultResponseSent = false
     if (lineUserId) {
       try {
         await pushWithQuickReplies(
@@ -1279,8 +1281,11 @@ async function handleConsultText(
           ],
           env.LINE_CHANNEL_ACCESS_TOKEN
         )
+        consultResponseSent = true
+        if (trace) { trace.pushResult = 'success'; trace.responseSent = true }
       } catch (pushErr) {
         console.warn('[Consult] push failed, trying reply:', pushErr)
+        if (trace) trace.pushResult = 'failed'
         try {
           await replyTextWithQuickReplies(
             replyToken,
@@ -1291,8 +1296,11 @@ async function handleConsultText(
             ],
             env.LINE_CHANNEL_ACCESS_TOKEN
           )
+          consultResponseSent = true
+          if (trace) { trace.replyResult = 'success'; trace.responseSent = true }
         } catch (replyErr) {
           console.error('[Consult] both push and reply failed:', replyErr)
+          if (trace) trace.replyResult = 'failed'
         }
       }
     } else {
@@ -1307,7 +1315,15 @@ async function handleConsultText(
           ],
           env.LINE_CHANNEL_ACCESS_TOKEN
         )
-      } catch { /* ignore */ }
+        consultResponseSent = true
+        if (trace) { trace.replyResult = 'success'; trace.responseSent = true }
+      } catch (replyErr) {
+        console.error('[Consult] reply failed (no lineUserId):', replyErr)
+        if (trace) trace.replyResult = 'failed'
+      }
+    }
+    if (!consultResponseSent) {
+      console.error('[Consult] NO_RESPONSE: all send attempts failed for user ' + lineUserId)
     }
 
     // バックグラウンド: メモリ抽出
@@ -1315,17 +1331,32 @@ async function handleConsultText(
 
   } catch (err) {
     console.error('[LINE] consult AI error:', err)
+    if (trace) trace.error = String(err)
     const errorMsg = '⚠️ AIの応答に失敗しました。しばらくしてから再度お試しください。'
     // ★ push を先に試す（replyToken は既に期限切れの可能性が高い）
     if (lineUserId) {
       try {
         await pushText(lineUserId, errorMsg, env.LINE_CHANNEL_ACCESS_TOKEN)
-      } catch {
-        // push も失敗した場合のみ reply を試す
-        await replyText(replyToken, errorMsg, env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => {})
+        if (trace) { trace.pushResult = 'success'; trace.responseSent = true }
+      } catch (pushErr) {
+        console.warn('[Consult] error push failed, trying reply:', pushErr)
+        if (trace) trace.pushResult = 'failed'
+        try {
+          await replyText(replyToken, errorMsg, env.LINE_CHANNEL_ACCESS_TOKEN)
+          if (trace) { trace.replyResult = 'success'; trace.responseSent = true }
+        } catch (replyErr) {
+          console.error('[Consult] error reply also failed:', replyErr)
+          if (trace) trace.replyResult = 'failed'
+        }
       }
     } else {
-      await replyText(replyToken, errorMsg, env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => {})
+      try {
+        await replyText(replyToken, errorMsg, env.LINE_CHANNEL_ACCESS_TOKEN)
+        if (trace) { trace.replyResult = 'success'; trace.responseSent = true }
+      } catch (replyErr) {
+        console.error('[Consult] error reply failed (no lineUserId):', replyErr)
+        if (trace) trace.replyResult = 'failed'
+      }
     }
   }
 }
@@ -1900,28 +1931,48 @@ ${correctionText}
       (correctionNote ? `\n\n📌 ${correctionNote}` : '') +
       '\n\n↓ この内容で記録しますか？'
 
-    await pushWithQuickReplies(
-      lineUserId,
-      replyMessage,
-      [
-        { label: '✅ 確定', text: '確定' },
-        { label: '❌ 取消', text: '取消' },
-      ],
-      env.LINE_CHANNEL_ACCESS_TOKEN
-    ).catch(e => console.error('[ImageCorrectionPush] push failed:', e))
+    try {
+      await pushWithQuickReplies(
+        lineUserId,
+        replyMessage,
+        [
+          { label: '✅ 確定', text: '確定' },
+          { label: '❌ 取消', text: '取消' },
+        ],
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+    } catch (pushErr) {
+      console.error('[ImageCorrectionPush] push failed:', pushErr)
+      // push 失敗 → pushText で簡易メッセージを再試行
+      try {
+        await pushText(lineUserId, replyMessage + '\n\n「確定」か「取消」を送ってください。', env.LINE_CHANNEL_ACCESS_TOKEN)
+      } catch (retryErr) {
+        console.error('[ImageCorrectionPush] retry push also failed:', retryErr)
+      }
+    }
 
     console.log(`[ImageCorrectionPush] correction applied for ${intakeResultId}: "${correctionText}"`)
   } catch (err) {
     console.error('[ImageCorrectionPush] error:', err)
-    await pushWithQuickReplies(
-      lineUserId,
-      '修正の処理中にエラーが発生しました。\n「確定」でそのまま記録、「取消」でやり直しできます。',
-      [
-        { label: '✅ 確定', text: '確定' },
-        { label: '❌ 取消', text: '取消' },
-      ],
-      env.LINE_CHANNEL_ACCESS_TOKEN
-    ).catch(e => console.error('[ImageCorrectionPush] error push also failed:', e))
+    // エラー時もユーザーに通知（push → pushText の2段フォールバック）
+    try {
+      await pushWithQuickReplies(
+        lineUserId,
+        '⚠️ 修正の処理中にエラーが発生しました。\n「確定」でそのまま記録、「取消」でやり直しできます。',
+        [
+          { label: '✅ 確定', text: '確定' },
+          { label: '❌ 取消', text: '取消' },
+        ],
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+    } catch (pushErr) {
+      console.error('[ImageCorrectionPush] error push failed, trying plain push:', pushErr)
+      try {
+        await pushText(lineUserId, '⚠️ 修正処理でエラーが発生しました。「確定」か「取消」を送ってください。', env.LINE_CHANNEL_ACCESS_TOKEN)
+      } catch (finalErr) {
+        console.error('[ImageCorrectionPush] ALL push attempts failed:', finalErr)
+      }
+    }
   }
 }
 
@@ -2060,27 +2111,45 @@ async function handleImageMetadataUpdateWithPush(
       (newAction.carbs_g ? ` / C: ${newAction.carbs_g}g` : '') +
       '\n\n↓ この内容で記録しますか？'
 
-    await pushWithQuickReplies(
-      lineUserId,
-      replyMessage,
-      [
-        { label: '✅ 確定', text: '確定' },
-        { label: '❌ 取消', text: '取消' },
-      ],
-      env.LINE_CHANNEL_ACCESS_TOKEN
-    ).catch(e => console.error('[ImageMetadataUpdatePush] push failed:', e))
+    try {
+      await pushWithQuickReplies(
+        lineUserId,
+        replyMessage,
+        [
+          { label: '✅ 確定', text: '確定' },
+          { label: '❌ 取消', text: '取消' },
+        ],
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+    } catch (pushErr) {
+      console.error('[ImageMetadataUpdatePush] push failed:', pushErr)
+      try {
+        await pushText(lineUserId, replyMessage + '\n\n「確定」か「取消」を送ってください。', env.LINE_CHANNEL_ACCESS_TOKEN)
+      } catch (retryErr) {
+        console.error('[ImageMetadataUpdatePush] retry push also failed:', retryErr)
+      }
+    }
 
     console.log(`[ImageMetadataUpdatePush] metadata updated for ${intakeResultId}: date=${parsed.target_date}, type=${parsed.meal_type}`)
   } catch (err) {
     console.error('[ImageMetadataUpdatePush] error:', err)
-    await pushWithQuickReplies(
-      lineUserId,
-      '情報の更新中にエラーが発生しました。\n「確定」でそのまま記録、「取消」でやり直しできます。',
-      [
-        { label: '✅ 確定', text: '確定' },
-        { label: '❌ 取消', text: '取消' },
-      ],
-      env.LINE_CHANNEL_ACCESS_TOKEN
-    ).catch(e => console.error('[ImageMetadataUpdatePush] error push also failed:', e))
+    try {
+      await pushWithQuickReplies(
+        lineUserId,
+        '⚠️ 情報の更新中にエラーが発生しました。\n「確定」でそのまま記録、「取消」でやり直しできます。',
+        [
+          { label: '✅ 確定', text: '確定' },
+          { label: '❌ 取消', text: '取消' },
+        ],
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+    } catch (pushErr) {
+      console.error('[ImageMetadataUpdatePush] error push failed, trying plain push:', pushErr)
+      try {
+        await pushText(lineUserId, '⚠️ 情報更新でエラーが発生しました。「確定」か「取消」を送ってください。', env.LINE_CHANNEL_ACCESS_TOKEN)
+      } catch (finalErr) {
+        console.error('[ImageMetadataUpdatePush] ALL push attempts failed:', finalErr)
+      }
+    }
   }
 }

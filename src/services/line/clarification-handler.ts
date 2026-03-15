@@ -16,7 +16,7 @@ import type {
   PendingClarification,
 } from '../../types/intent'
 import { WEIGHT_MIN, WEIGHT_MAX } from '../../types/intent'
-import { replyTextWithQuickReplies, replyText } from './reply'
+import { replyTextWithQuickReplies, replyText, pushText, pushWithQuickReplies } from './reply'
 import { upsertModeSession } from '../../repositories/mode-sessions-repo'
 import {
   createPendingClarification,
@@ -136,17 +136,30 @@ export async function startClarificationFlow(
     sessionData: { clarificationId: pending.id },
   })
 
-  // 質問を送信
+  // 質問を送信（reply + push フォールバック）
   const question = buildClarificationQuestion(currentField, intent)
-  if (question.quickReplies.length > 0) {
-    await replyTextWithQuickReplies(
-      replyToken,
-      question.text,
-      question.quickReplies,
-      env.LINE_CHANNEL_ACCESS_TOKEN
-    )
-  } else {
-    await replyText(replyToken, question.text, env.LINE_CHANNEL_ACCESS_TOKEN)
+  try {
+    if (question.quickReplies.length > 0) {
+      await replyTextWithQuickReplies(
+        replyToken,
+        question.text,
+        question.quickReplies,
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+    } else {
+      await replyText(replyToken, question.text, env.LINE_CHANNEL_ACCESS_TOKEN)
+    }
+  } catch (replyErr) {
+    console.warn('[Clarification] reply failed, falling back to push:', replyErr)
+    try {
+      if (question.quickReplies.length > 0 && lineUserId) {
+        await pushWithQuickReplies(lineUserId, question.text, question.quickReplies, env.LINE_CHANNEL_ACCESS_TOKEN)
+      } else if (lineUserId) {
+        await pushText(lineUserId, question.text, env.LINE_CHANNEL_ACCESS_TOKEN)
+      }
+    } catch (pushErr) {
+      console.error('[Clarification] push fallback also failed:', pushErr)
+    }
   }
 
   console.log(`[Clarification] started: id=${pending.id}, field=${currentField}, fields=[${sortedFields.join(',')}]`)
@@ -251,7 +264,8 @@ export async function sendNextClarificationQuestion(
   replyToken: string,
   intent: UnifiedIntent,
   pendingId: string,
-  env: Bindings
+  env: Bindings,
+  lineUserId?: string
 ): Promise<void> {
   // pending_clarifications から現在のフィールドを取得
   const pending = await findClarificationById(env.DB, pendingId)
@@ -261,15 +275,28 @@ export async function sendNextClarificationQuestion(
   if (!currentField) return
 
   const question = buildClarificationQuestion(currentField, intent)
-  if (question.quickReplies.length > 0) {
-    await replyTextWithQuickReplies(
-      replyToken,
-      question.text,
-      question.quickReplies,
-      env.LINE_CHANNEL_ACCESS_TOKEN
-    )
-  } else {
-    await replyText(replyToken, question.text, env.LINE_CHANNEL_ACCESS_TOKEN)
+  try {
+    if (question.quickReplies.length > 0) {
+      await replyTextWithQuickReplies(
+        replyToken,
+        question.text,
+        question.quickReplies,
+        env.LINE_CHANNEL_ACCESS_TOKEN
+      )
+    } else {
+      await replyText(replyToken, question.text, env.LINE_CHANNEL_ACCESS_TOKEN)
+    }
+  } catch (replyErr) {
+    console.warn('[Clarification] sendNext reply failed, falling back to push:', replyErr)
+    try {
+      if (question.quickReplies.length > 0 && lineUserId) {
+        await pushWithQuickReplies(lineUserId, question.text, question.quickReplies, env.LINE_CHANNEL_ACCESS_TOKEN)
+      } else if (lineUserId) {
+        await pushText(lineUserId, question.text, env.LINE_CHANNEL_ACCESS_TOKEN)
+      }
+    } catch (pushErr) {
+      console.error('[Clarification] sendNext push fallback also failed:', pushErr)
+    }
   }
 }
 
