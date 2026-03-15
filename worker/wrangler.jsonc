@@ -5,6 +5,10 @@
   "compatibility_date": "2026-03-10",
   "compatibility_flags": ["nodejs_compat"],
 
+  // Queue Consumer は HTTP を受けないので workers.dev 不要
+  // ただし workers.dev サブドメインが登録されていないと deploy が失敗するため
+  // Cloudflare dashboard で workers.dev subdomain を登録する必要がある
+
   // Queue Consumer — 1メッセージずつ直列処理
   "queues": {
     "consumers": [
