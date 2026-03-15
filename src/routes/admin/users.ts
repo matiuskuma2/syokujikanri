@@ -502,4 +502,128 @@ usersRouter.get('/:lineUserId/corrections', async (c) => {
   }
 })
 
+// ===================================================================
+// Phase 2A: ユーザーのデバッグ状態（管理者閲覧）
+// GET /api/admin/users/:lineUserId/debug-state
+// current_mode, current_step, pending_image_confirm, pending_clarification,
+// last_intent, reply/push 成功失敗、エラー情報
+// ===================================================================
+
+usersRouter.get('/:lineUserId/debug-state', async (c) => {
+  const payload = c.get('jwtPayload')
+  const lineUserId = c.req.param('lineUserId')
+  const accountId = payload.accountId
+  const isSuperadmin = payload.role === 'superadmin'
+
+  const userAccount = isSuperadmin
+    ? await findUserAccountByLineUserId(c.env.DB, lineUserId)
+    : await findUserAccount(c.env.DB, lineUserId, accountId)
+  if (!userAccount) return notFound(c, 'User not found')
+
+  const effectiveAccountId = userAccount.client_account_id
+
+  // 1. mode_session
+  let modeSession: Record<string, unknown> | null = null
+  try {
+    const { results } = await c.env.DB.prepare(`
+      SELECT current_mode, current_step, session_data, turn_count, expires_at, created_at, updated_at
+      FROM bot_mode_sessions
+      WHERE client_account_id = ?1 AND line_user_id = ?2
+        AND expires_at > datetime('now')
+      ORDER BY updated_at DESC LIMIT 1
+    `).bind(effectiveAccountId, lineUserId).all()
+    if (results && results.length > 0) {
+      modeSession = results[0] as Record<string, unknown>
+    }
+  } catch { /* table may not exist */ }
+
+  // 2. pending_clarification
+  let pendingClarification: Record<string, unknown> | null = null
+  try {
+    const { results } = await c.env.DB.prepare(`
+      SELECT id, current_field, missing_fields, status, ask_count, expires_at, created_at, original_message
+      FROM pending_clarifications
+      WHERE user_account_id = ?1 AND status = 'asking'
+      ORDER BY created_at DESC LIMIT 1
+    `).bind(userAccount.id).all()
+    if (results && results.length > 0) {
+      pendingClarification = results[0] as Record<string, unknown>
+    }
+  } catch { /* table may not exist */ }
+
+  // 3. pending image_intake_results (applied_flag=0)
+  let pendingImageResult: Record<string, unknown> | null = null
+  try {
+    const { results } = await c.env.DB.prepare(`
+      SELECT id, image_category, applied_flag, created_at,
+             substr(proposed_action_json, 1, 300) as proposed_action_preview
+      FROM image_intake_results
+      WHERE user_account_id = ?1 AND applied_flag = 0
+      ORDER BY created_at DESC LIMIT 1
+    `).bind(userAccount.id).all()
+    if (results && results.length > 0) {
+      pendingImageResult = results[0] as Record<string, unknown>
+    }
+  } catch { /* ignore */ }
+
+  // 4. last 5 conversation messages (for context)
+  let recentMessages: Array<Record<string, unknown>> = []
+  try {
+    const { results } = await c.env.DB.prepare(`
+      SELECT cm.sender_type, cm.message_type, cm.mode_at_send,
+             substr(cm.raw_text, 1, 100) as text_preview,
+             cm.sent_at
+      FROM conversation_messages cm
+      JOIN conversation_threads ct ON cm.thread_id = ct.id
+      WHERE ct.line_user_id = ?1
+      ORDER BY cm.sent_at DESC LIMIT 5
+    `).bind(lineUserId).all()
+    recentMessages = (results ?? []) as Array<Record<string, unknown>>
+  } catch { /* ignore */ }
+
+  // 5. user_service_statuses
+  let serviceStatus: Record<string, unknown> | null = null
+  try {
+    const ss = await findUserServiceStatus(c.env.DB, effectiveAccountId, lineUserId)
+    if (ss) {
+      serviceStatus = {
+        botEnabled: ss.bot_enabled,
+        recordEnabled: ss.record_enabled,
+        consultEnabled: ss.consult_enabled,
+        intakeCompleted: ss.intake_completed,
+      }
+    }
+  } catch { /* ignore */ }
+
+  return ok(c, {
+    lineUserId,
+    userAccountId: userAccount.id,
+    clientAccountId: effectiveAccountId,
+    modeSession: modeSession ? {
+      currentMode: modeSession.current_mode,
+      currentStep: modeSession.current_step,
+      sessionData: modeSession.session_data,
+      turnCount: modeSession.turn_count,
+      expiresAt: modeSession.expires_at,
+      updatedAt: modeSession.updated_at,
+    } : null,
+    pendingImageConfirm: modeSession?.current_step === 'pending_image_confirm',
+    pendingClarification: pendingClarification ? {
+      id: pendingClarification.id,
+      currentField: pendingClarification.current_field,
+      missingFields: pendingClarification.missing_fields,
+      askCount: pendingClarification.ask_count,
+      originalMessage: pendingClarification.original_message,
+    } : null,
+    pendingImageResult: pendingImageResult ? {
+      id: pendingImageResult.id,
+      imageCategory: pendingImageResult.image_category,
+      proposedActionPreview: pendingImageResult.proposed_action_preview,
+      createdAt: pendingImageResult.created_at,
+    } : null,
+    serviceStatus,
+    recentMessages: recentMessages.reverse(),
+  })
+})
+
 export default usersRouter

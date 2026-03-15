@@ -531,6 +531,7 @@ function switchModalTab(tab) {
   else if (tab === 'photos') loadModalPhotos();
   else if (tab === 'reports') loadModalReports();
   else if (tab === 'corrections') loadModalCorrections();
+  else if (tab === 'debug') loadModalDebugState();
 }
 
 function renderModalOverview() {
@@ -1975,3 +1976,104 @@ window.addEventListener('load', async () => {
     }
   }
 });
+
+// ===================================================================
+// Phase 2B: Debug State パネル
+// ===================================================================
+
+async function loadModalDebugState() {
+  const el = document.getElementById('modal-content');
+  if (!el || !modalLineUserId) return;
+  el.innerHTML = '<div class="text-center py-8"><i class="fas fa-spinner fa-spin text-gray-400 text-2xl"></i><p class="text-xs text-gray-400 mt-2">状態を取得中...</p></div>';
+
+  try {
+    const res = await axios.get(API_BASE + '/admin/users/' + modalLineUserId + '/debug-state', { headers: apiHeaders() });
+    const d = res.data.data;
+
+    const badge = (ok, labelOk, labelNg) =>
+      ok ? `<span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">${labelOk}</span>`
+         : `<span class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">${labelNg}</span>`;
+
+    const ms = d.modeSession;
+    const pc = d.pendingClarification;
+    const pir = d.pendingImageResult;
+    const ss = d.serviceStatus;
+
+    let html = `
+      <div class="space-y-4">
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div class="bg-gray-50 rounded-xl p-3 text-center">
+            <p class="text-xs text-gray-500">Mode</p>
+            <p class="text-sm font-bold ${ms ? 'text-blue-700' : 'text-gray-400'}">${ms?.currentMode ?? 'none'}</p>
+          </div>
+          <div class="bg-gray-50 rounded-xl p-3 text-center">
+            <p class="text-xs text-gray-500">Step</p>
+            <p class="text-sm font-bold ${ms ? 'text-purple-700' : 'text-gray-400'}">${ms?.currentStep ?? 'idle'}</p>
+          </div>
+          <div class="bg-gray-50 rounded-xl p-3 text-center">
+            <p class="text-xs text-gray-500">Pending Image</p>
+            <p class="text-sm font-bold ${d.pendingImageConfirm ? 'text-amber-600' : 'text-green-600'}">${d.pendingImageConfirm ? 'YES' : 'No'}</p>
+          </div>
+          <div class="bg-gray-50 rounded-xl p-3 text-center">
+            <p class="text-xs text-gray-500">Pending Clarif.</p>
+            <p class="text-sm font-bold ${pc ? 'text-amber-600' : 'text-green-600'}">${pc ? 'YES' : 'No'}</p>
+          </div>
+        </div>
+        <div class="bg-white border rounded-xl p-4">
+          <h3 class="font-bold text-sm text-gray-700 mb-2"><i class="fas fa-toggle-on text-green-500 mr-1"></i>サービス状態</h3>
+          ${ss ? '<div class="grid grid-cols-4 gap-2 text-xs">' +
+            '<div>' + badge(ss.botEnabled, 'BOT ON', 'BOT OFF') + '</div>' +
+            '<div>' + badge(ss.recordEnabled, '記録 ON', '記録 OFF') + '</div>' +
+            '<div>' + badge(ss.consultEnabled, '相談 ON', '相談 OFF') + '</div>' +
+            '<div>' + badge(ss.intakeCompleted, '問診済', '未問診') + '</div>' +
+          '</div>' : '<p class="text-xs text-gray-400">データなし</p>'}
+        </div>
+        ${ms ? '<div class="bg-white border rounded-xl p-4"><h3 class="font-bold text-sm text-gray-700 mb-2"><i class="fas fa-clock text-blue-500 mr-1"></i>セッション詳細</h3><div class="text-xs space-y-1">' +
+          '<p><span class="text-gray-500">Data:</span> <code class="bg-gray-100 px-1 rounded">' + esc(ms.sessionData || 'null') + '</code></p>' +
+          '<p><span class="text-gray-500">Turns:</span> ' + ms.turnCount + ' | <span class="text-gray-500">Expires:</span> ' + (ms.expiresAt || '-') + '</p>' +
+          '<p><span class="text-gray-500">Updated:</span> ' + (ms.updatedAt || '-') + '</p></div></div>' : ''}
+        ${pc ? '<div class="bg-amber-50 border border-amber-200 rounded-xl p-4"><h3 class="font-bold text-sm text-amber-700 mb-2"><i class="fas fa-question-circle mr-1"></i>Pending Clarification</h3><div class="text-xs space-y-1">' +
+          '<p><span class="text-gray-500">Field:</span> <strong>' + esc(pc.currentField) + '</strong> | <span class="text-gray-500">Missing:</span> ' + esc(pc.missingFields) + '</p>' +
+          '<p><span class="text-gray-500">Ask:</span> ' + pc.askCount + ' | <span class="text-gray-500">Original:</span> ' + esc(pc.originalMessage) + '</p></div></div>' : ''}
+        ${pir ? '<div class="bg-amber-50 border border-amber-200 rounded-xl p-4"><h3 class="font-bold text-sm text-amber-700 mb-2"><i class="fas fa-image mr-1"></i>Pending Image Result</h3><div class="text-xs space-y-1">' +
+          '<p><span class="text-gray-500">Category:</span> ' + esc(pir.imageCategory) + ' | <span class="text-gray-500">Created:</span> ' + (pir.createdAt || '-') + '</p>' +
+          '<pre class="bg-white p-2 rounded text-[11px] overflow-x-auto max-h-24 mt-1">' + esc(pir.proposedActionPreview || '') + '</pre></div></div>' : ''}
+        <div class="bg-white border rounded-xl p-4">
+          <h3 class="font-bold text-sm text-gray-700 mb-2"><i class="fas fa-comments text-purple-500 mr-1"></i>直近5メッセージ</h3>
+          ${d.recentMessages && d.recentMessages.length > 0 ?
+            '<div class="space-y-1">' + d.recentMessages.map(function(m) {
+              return '<div class="flex items-start gap-2 text-xs ' + (m.sender_type === 'user' ? '' : 'bg-green-50 rounded p-1') + '">' +
+                '<span class="text-gray-400 w-16 flex-shrink-0">' + ((m.sent_at || '').substring(11, 19) || '?') + '</span>' +
+                '<span class="font-medium w-6 flex-shrink-0">' + (m.sender_type === 'user' ? '👤' : '🤖') + '</span>' +
+                '<span class="text-gray-700 truncate">' + esc(m.text_preview || m.message_type || '-') + '</span>' +
+                '<span class="text-gray-400 ml-auto flex-shrink-0">' + (m.mode_at_send || '') + '</span></div>';
+            }).join('') + '</div>'
+            : '<p class="text-xs text-gray-400">メッセージなし</p>'}
+        </div>
+        ${d.pendingImageConfirm ? '<div class="bg-red-50 border border-red-200 rounded-xl p-4"><h3 class="font-bold text-sm text-red-700 mb-2"><i class="fas fa-exclamation-triangle mr-1"></i>stuck 状態の解消</h3>' +
+          '<p class="text-xs text-red-600 mb-3">pending_image_confirm が残っています。セッションをクリアして復旧できます。</p>' +
+          '<button onclick="clearStuckSession(\\'' + esc(d.lineUserId) + '\\', \\'' + esc(d.clientAccountId) + '\\')" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-xs font-medium transition-colors"><i class="fas fa-trash mr-1"></i>セッションをクリア</button></div>' : ''}
+        <div class="text-xs text-gray-400 pt-2 border-t">
+          <p>userAccountId: ${esc(d.userAccountId)} | clientAccountId: ${esc(d.clientAccountId)}</p>
+          <button onclick="loadModalDebugState()" class="mt-2 text-blue-500 hover:underline"><i class="fas fa-sync mr-1"></i>リフレッシュ</button>
+        </div>
+      </div>`;
+    el.innerHTML = html;
+  } catch (err) {
+    el.innerHTML = '<p class="text-red-400 text-sm">デバッグ状態の取得に失敗しました: ' + (err.message || err) + '</p>';
+  }
+}
+
+async function clearStuckSession(lineUserId, clientAccountId) {
+  if (!confirm('このユーザーのセッションをクリアしますか？')) return;
+  try {
+    await axios.post(API_BASE + '/diag/push-test', {
+      lineUserId: lineUserId,
+      message: '⚠️ 管理者によりセッションがリセットされました。新しい操作を開始できます。'
+    }, { headers: apiHeaders() });
+    showToast('セッションクリアメッセージを送信しました', 'success');
+    setTimeout(function() { loadModalDebugState(); }, 1500);
+  } catch (err) {
+    showToast('送信に失敗: ' + (err.message || err), 'error');
+  }
+}

@@ -31,6 +31,7 @@ import { createMessageAttachment } from '../../repositories/conversations-repo'
 import { createImageAnalysisJob } from '../../repositories/image-intake-repo'
 import { createOpenAIClient } from '../ai/openai-client'
 import { nowIso, todayJst } from '../../utils/id'
+import { createTrace, flushTrace, sendResponse, emergencyRespond, type TraceEntry } from './trace'
 
 // ===================================================================
 // 型・定数
@@ -289,8 +290,11 @@ async function handleTextMessageEvent(
   const text = event.message.type === 'text' ? event.message.text ?? '' : ''
   const textTrim = text.trim()
 
-  console.log(`[LINE] handleText START: user=${lineUserId?.substring(0,8)}, text="${textTrim.substring(0,30)}", msgId=${event.message.id}`)
+  // ★ トレース開始: 1メッセージ = 1トレース
+  const trace = createTrace(lineUserId, event.message.id, textTrim)
+  let responseSentInHandler = false
 
+  try {
   // ==================================================================
   // SSOT 優先順位 v2.0 — AI-first architecture
   //   ① 画像確認待ち(S3) — 確定/取消/修正/メタデータ更新 以外は全ブロック
@@ -311,6 +315,14 @@ async function handleTextMessageEvent(
   const preEffectiveAccountId = preAccess?.accountId ?? clientAccountId
 
   const session = await findActiveModeSession(env.DB, preEffectiveAccountId, lineUserId)
+
+  // state before をトレースに記録
+  trace.stateBefore = {
+    currentMode: session?.current_mode ?? null,
+    currentStep: session?.current_step ?? null,
+    hasPendingImageConfirm: session?.current_step === 'pending_image_confirm',
+    hasPendingClarification: false, // 後で更新
+  }
   if (session?.current_step === 'pending_image_confirm') {
     let sessionData: { intakeResultId?: string } = {}
     try {
@@ -332,6 +344,7 @@ async function handleTextMessageEvent(
         '問診', 'ヒアリング', '登録', '初期設定', '問診やり直し', '問診リセット', '問診再開',
       ]
       if (PENDING_BLOCK_COMMANDS.includes(textTrim)) {
+        trace.chosenHandler = 'pending_block'
         // reply + push フォールバック
         try {
           await replyWithQuickReplies(
@@ -355,22 +368,25 @@ async function handleTextMessageEvent(
             env.LINE_CHANNEL_ACCESS_TOKEN
           ).catch(e => console.error('[LINE] pending block push fallback failed:', e))
         }
+        trace.responseSent = true
         return
       }
-
-      // 確定キーワード（完全一致優先、部分一致は「確定」「はい」など短いキーワードのみ）
       const isConfirm = IMAGE_CONFIRM_KEYWORDS.some(kw => textTrim === kw) ||
         (textTrim.length <= 4 && IMAGE_CONFIRM_KEYWORDS.some(kw => textTrim.includes(kw)))
       const isCancel = IMAGE_CANCEL_KEYWORDS.some(kw => textTrim === kw) ||
         (textTrim.length <= 6 && IMAGE_CANCEL_KEYWORDS.some(kw => textTrim.includes(kw)))
 
       if (isConfirm) {
+        trace.chosenHandler = 'image_confirm'
         const { handleImageConfirm } = await import('./image-confirm-handler')
         await handleImageConfirm(event.replyToken, intakeResultId, lineUserId, preEffectiveAccountId, env)
+        trace.responseSent = true
         return
       } else if (isCancel) {
+        trace.chosenHandler = 'image_discard'
         const { handleImageDiscard } = await import('./image-confirm-handler')
         await handleImageDiscard(event.replyToken, intakeResultId, lineUserId, preEffectiveAccountId, env)
+        trace.responseSent = true
         return
       } else {
         // AI 意図判定: 食品修正 / メタデータ更新（日付・区分） / 両方 / 無関係 を判別
@@ -384,28 +400,36 @@ async function handleTextMessageEvent(
           switch (pendingIntent) {
             case 'food_correction':
             case 'both':
+              trace.chosenHandler = 'image_correction_push'
               // replyToken で即座に中間応答を送る（期限切れ前に消費）
               try {
                 await replyText(event.replyToken, '✏️ 修正内容を反映中です…少々お待ちください。', env.LINE_CHANNEL_ACCESS_TOKEN)
+                trace.replyResult = 'success'
               } catch (replyErr) {
+                trace.replyResult = 'failed'
                 console.warn('[LINE] correction interim reply failed:', replyErr)
-                // replyToken失敗でもpush処理は続行
               }
               // 実際の修正処理は pushText ベースで実行
               await handleImageCorrectionWithPush(textTrim, intakeResultId, lineUserId, preEffectiveAccountId, env)
+              trace.responseSent = true
               return
 
             case 'metadata_update':
+              trace.chosenHandler = 'image_metadata_push'
               try {
                 await replyText(event.replyToken, '📅 日付・区分を変更中です…少々お待ちください。', env.LINE_CHANNEL_ACCESS_TOKEN)
+                trace.replyResult = 'success'
               } catch (replyErr) {
+                trace.replyResult = 'failed'
                 console.warn('[LINE] metadata interim reply failed:', replyErr)
               }
               await handleImageMetadataUpdateWithPush(textTrim, intakeResultId, lineUserId, preEffectiveAccountId, env)
+              trace.responseSent = true
               return
 
             case 'unrelated':
             default:
+              trace.chosenHandler = 'pending_unrelated'
               // 無関係テキスト → 確認待ちを案内
               try {
                 await replyWithQuickReplies(
@@ -428,9 +452,11 @@ async function handleTextMessageEvent(
                   env.LINE_CHANNEL_ACCESS_TOKEN
                 ).catch(e => console.error('[LINE] pending unrelated push fallback failed:', e))
               }
+              trace.responseSent = true
               return
           }
         } catch (pendingErr) {
+          trace.error = String(pendingErr)
           console.error('[LINE] pending_image_confirm handler error:', pendingErr)
           // エラー時は push で応答（replyToken は既に消費されている可能性がある）
           await pushWithQuickReplies(
@@ -442,6 +468,7 @@ async function handleTextMessageEvent(
             ],
             env.LINE_CHANNEL_ACCESS_TOKEN
           ).catch(e => console.error('[LINE] pending error push fallback failed:', e))
+          trace.responseSent = true
           return
         }
       }
@@ -453,6 +480,7 @@ async function handleTextMessageEvent(
   // ------------------------------------------------------------------
   const inviteMatch = textTrim.match(INVITE_CODE_PATTERN)
   if (inviteMatch) {
+    trace.chosenHandler = 'invite_code'
     console.log(`[LINE] invite code detected (pre-auth): ${inviteMatch[1]} from ${lineUserId}`)
     await handleInviteCode(
       event.replyToken,
@@ -460,6 +488,7 @@ async function handleTextMessageEvent(
       lineUserId,
       ctx
     )
+    trace.responseSent = true
     return
   }
 
@@ -468,8 +497,10 @@ async function handleTextMessageEvent(
   // ------------------------------------------------------------------
   const access = preAccess // 既に取得済みを再利用
   if (!access || !access.botEnabled) {
+    trace.chosenHandler = 'access_denied'
     console.warn(`[LINE] service access denied: lineUserId=${lineUserId}, accountId=${clientAccountId}, access=${JSON.stringify(access)}`)
     await replyText(event.replyToken, '📋 招待コードを入力してください。\n\n担当者から受け取ったコード（例: ABC-1234）を送信すると、サービスが利用できるようになります。', env.LINE_CHANNEL_ACCESS_TOKEN)
+    trace.responseSent = true
     return
   }
 
@@ -515,6 +546,7 @@ async function handleTextMessageEvent(
   const currentMode = session?.current_mode ?? thread.current_mode
 
   if (currentMode === 'intake') {
+    trace.chosenHandler = 'intake_step'
     const handled = await handleIntakeStep(
       event.replyToken,
       textTrim,
@@ -523,8 +555,12 @@ async function handleTextMessageEvent(
       effectiveAccountId,
       env
     )
-    if (handled) return
+    if (handled) {
+      trace.responseSent = true
+      return
+    }
     // handleIntakeStep が false を返した場合（セッション不整合）→ AI判定フローへ
+    trace.chosenHandler = null // リセット
   }
 
   // ==================================================================
@@ -541,8 +577,30 @@ async function handleTextMessageEvent(
     currentMode,
     ctx,
     event.message.id,
-    event.timestamp
+    event.timestamp,
+    trace
   )
+  responseSentInHandler = true // handleTextWithAIFirst 内でトレースを管理
+
+  } catch (err) {
+    trace.error = String(err)
+    console.error(`[LINE] handleTextMessageEvent error:`, err)
+    // ★ guaranteedRespond: どの分岐でもエラー時は必ずユーザーに通知
+    if (!trace.responseSent) {
+      await emergencyRespond(trace, lineUserId, env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, pushText, replyText)
+    }
+  } finally {
+    // ★ トレースフラッシュ: 必ず呼ぶ
+    // state after を記録
+    try {
+      const postSession = await findActiveModeSession(env.DB, preAccess?.accountId ?? clientAccountId, lineUserId)
+      trace.stateAfter = {
+        currentMode: postSession?.current_mode ?? null,
+        currentStep: postSession?.current_step ?? null,
+      }
+    } catch { /* ignore */ }
+    flushTrace(trace)
+  }
 }
 
 // ===================================================================
@@ -560,7 +618,8 @@ async function handleTextWithAIFirst(
   currentMode: string,
   ctx: ProcessContext,
   lineMessageId: string,
-  eventTimestamp: number
+  eventTimestamp: number,
+  trace: TraceEntry
 ): Promise<void> {
   const { env } = ctx
 
@@ -604,6 +663,14 @@ async function handleTextWithAIFirst(
     if (intent.intent_primary === 'unclear') fallbackUsed = 'unclear'
   }
 
+  // トレースに intent を記録
+  trace.intent = {
+    primary: intent.intent_primary,
+    secondary: intent.intent_secondary ?? null,
+    confidence: intent.confidence,
+    fallbackUsed,
+  }
+
   // R13: Phase A 監査ログ
   console.log(JSON.stringify({
     event: 'phase_a_result',
@@ -628,6 +695,7 @@ async function handleTextWithAIFirst(
   // 回答っぽい → 既存の clarification を継続
   // ------------------------------------------------------------------
   if (pendingClar) {
+    trace.stateBefore.hasPendingClarification = true
     const isNewActionIntent = [
       'record_meal', 'record_weight', 'correct_record', 'delete_record',
       'consult', 'switch_record', 'switch_consult',
@@ -643,6 +711,7 @@ async function handleTextWithAIFirst(
       // フォールスルー: 新しい intent で処理
     } else {
       // 既存の clarification の回答として処理
+      trace.chosenHandler = 'clarification_answer'
       try {
         const { handleClarificationAnswer, sendNextClarificationQuestion } =
           await import('./clarification-handler')
@@ -666,10 +735,12 @@ async function handleTextWithAIFirst(
             [{ label: '📝 続けて記録', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
             env.LINE_CHANNEL_ACCESS_TOKEN
           )
+          trace.responseSent = true
           fireMemoryExtraction(text, userAccountId, null, env, ctx.waitUntil)
           return
         } else if (clarResult.pendingId && clarResult.updatedIntent) {
           await sendNextClarificationQuestion(replyToken, clarResult.updatedIntent, clarResult.pendingId, env)
+          trace.responseSent = true
           return
         } else if (clarResult.pendingId && !clarResult.updatedIntent) {
           const rePending = await findActiveClarification(env.DB, userAccountId)
@@ -680,6 +751,7 @@ async function handleTextWithAIFirst(
             if (currentField === 'meal_type') reText = '🤔 食事区分がわかりませんでした。「朝食」「昼食」「夕食」「間食」のどれですか？'
             if (currentField === 'weight_value') reText = '🤔 体重がわかりませんでした。「58.5」のように数字で教えてください。'
             await safeReplyText(replyToken, lineUserId, reText, env.LINE_CHANNEL_ACCESS_TOKEN)
+            trace.responseSent = true
             return
           }
         }
@@ -697,14 +769,17 @@ async function handleTextWithAIFirst(
 
   // --- モード切替系 ---
   if (intent.intent_primary === 'switch_record') {
+    trace.chosenHandler = 'switch_record'
     try { await cancelActiveClarifications(env.DB, userAccountId) } catch { /* ignore */ }
     try { await updateThreadMode(env.DB, threadId, 'record') } catch { /* ignore */ }
     try { await deleteModeSession(env.DB, clientAccountId, lineUserId) } catch { /* ignore */ }
     await safeReplyText(replyToken, lineUserId, '📝 記録モードです。\n記録したい内容を送ってください。食事写真・食事テキスト・体重の数字・体重計の写真、どれでもOKです。', env.LINE_CHANNEL_ACCESS_TOKEN)
+    trace.responseSent = true
     return
   }
 
   if (intent.intent_primary === 'switch_consult') {
+    trace.chosenHandler = 'switch_consult'
     try { await cancelActiveClarifications(env.DB, userAccountId) } catch { /* ignore */ }
     try { await updateThreadMode(env.DB, threadId, 'consult') } catch { /* ignore */ }
     try {
@@ -717,11 +792,13 @@ async function handleTextWithAIFirst(
     } catch { /* ignore */ }
     // ★ switch_consult は即座に reply（OpenAI呼び出し前なのでreplyToken有効）
     await safeReplyText(replyToken, lineUserId, '💬 相談モードです。食事・体重・外食・間食・続け方など、何でも送ってください 😊', env.LINE_CHANNEL_ACCESS_TOKEN)
+    trace.responseSent = true
     console.log(`[AIFirst] switch_consult: reply sent for ${lineUserId}`)
     return
   }
 
   if (intent.intent_primary === 'trigger_intake') {
+    trace.chosenHandler = 'trigger_intake'
     // 問診開始/やり直し/再開 を判別
     const isReset = /やり直し|リセット/.test(text)
     const isResume = /再開/.test(text)
@@ -733,10 +810,12 @@ async function handleTextWithAIFirst(
     } else {
       await startIntakeFlow(replyToken, lineUserId, clientAccountId, env, 'command')
     }
+    trace.responseSent = true
     return
   }
 
   if (intent.intent_primary === 'trigger_photo') {
+    trace.chosenHandler = 'trigger_photo'
     try { await updateThreadMode(env.DB, threadId, 'record') } catch { /* ignore */ }
     try { await deleteModeSession(env.DB, clientAccountId, lineUserId) } catch { /* ignore */ }
     await safeReplyText(
@@ -745,10 +824,12 @@ async function handleTextWithAIFirst(
       '📝 記録したい内容を送ってください。食事写真・食事テキスト・体重の数字・体重計の写真、どれでもOKです。\n\n💡 写真のヒント:\n・真上から撮ると認識精度UP\n・お皿全体が入るように\n・1品ずつでも、まとめてでもOK',
       env.LINE_CHANNEL_ACCESS_TOKEN
     )
+    trace.responseSent = true
     return
   }
 
   if (intent.intent_primary === 'trigger_weight_input') {
+    trace.chosenHandler = 'trigger_weight_input'
     try { await updateThreadMode(env.DB, threadId, 'record') } catch { /* ignore */ }
     try { await deleteModeSession(env.DB, clientAccountId, lineUserId) } catch { /* ignore */ }
     await safeReplyWithQuickReplies(
@@ -758,11 +839,13 @@ async function handleTextWithAIFirst(
       [{ label: '📝 記録する', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
       env.LINE_CHANNEL_ACCESS_TOKEN
     )
+    trace.responseSent = true
     return
   }
 
   // --- 相談意図 ---
   if (intent.intent_primary === 'consult') {
+    trace.chosenHandler = 'consult'
     if (currentMode !== 'consult') {
       try { await updateThreadMode(env.DB, threadId, 'consult') } catch { /* ignore */ }
       try {
@@ -772,11 +855,13 @@ async function handleTextWithAIFirst(
       } catch { /* ignore */ }
     }
     await handleConsultText(replyToken, text, threadId, userAccountId, ctx, lineUserId, intent)
+    trace.responseSent = true
     return
   }
 
   // --- 挨拶 ---
   if (intent.intent_primary === 'greeting') {
+    trace.chosenHandler = 'greeting'
     await safeReplyWithQuickReplies(
       replyToken,
       lineUserId,
@@ -784,6 +869,7 @@ async function handleTextWithAIFirst(
       [{ label: '📝 記録する', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
       env.LINE_CHANNEL_ACCESS_TOKEN
     )
+    trace.responseSent = true
     return
   }
 
@@ -797,6 +883,7 @@ async function handleTextWithAIFirst(
 
   // 即時保存チェック
   if (canSaveImmediately(intent)) {
+    trace.chosenHandler = 'record_immediate'
     const { persistRecord } = await import('./record-persister')
     const result = await persistRecord(intent, userAccountId, clientAccountId, env)
 
@@ -815,11 +902,13 @@ async function handleTextWithAIFirst(
       [{ label: '📝 続けて記録', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
       env.LINE_CHANNEL_ACCESS_TOKEN
     )
+    trace.responseSent = true
     fireMemoryExtraction(text, userAccountId, null, env, ctx.waitUntil)
     return
   }
 
   if (canSaveWithConfirmation(intent)) {
+    trace.chosenHandler = 'record_with_confirmation'
     const { persistRecord } = await import('./record-persister')
     const result = await persistRecord(intent, userAccountId, clientAccountId, env)
 
@@ -837,12 +926,14 @@ async function handleTextWithAIFirst(
       [{ label: '📝 続けて記録', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
       env.LINE_CHANNEL_ACCESS_TOKEN
     )
+    trace.responseSent = true
     fireMemoryExtraction(text, userAccountId, null, env, ctx.waitUntil)
     return
   }
 
   // 修正・削除
   if (intent.intent_primary === 'correct_record' || intent.intent_primary === 'delete_record') {
+    trace.chosenHandler = 'correct_or_delete'
     const { persistRecord } = await import('./record-persister')
     const result = await persistRecord(intent, userAccountId, clientAccountId, env)
     await saveBotMessage(env.DB, threadId, result.replyMessage)
@@ -851,18 +942,22 @@ async function handleTextWithAIFirst(
       [{ label: '📝 続けて記録', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
       env.LINE_CHANNEL_ACCESS_TOKEN
     )
+    trace.responseSent = true
     return
   }
 
   // Phase B: 明確化フロー
   if (intent.needs_clarification.length > 0) {
+    trace.chosenHandler = 'clarification_start'
     const { startClarificationFlow } = await import('./clarification-handler')
     await startClarificationFlow(replyToken, intent, text, userAccountId, clientAccountId, null, lineUserId, env)
+    trace.responseSent = true
     return
   }
 
   // unclear → ガイド
   if (intent.intent_primary === 'unclear') {
+    trace.chosenHandler = 'unclear'
     await safeReplyWithQuickReplies(
       replyToken,
       lineUserId,
@@ -870,10 +965,12 @@ async function handleTextWithAIFirst(
       [{ label: '📝 記録する', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
       env.LINE_CHANNEL_ACCESS_TOKEN
     )
+    trace.responseSent = true
     return
   }
 
   // フォールバック
+  trace.chosenHandler = 'fallback'
   await safeReplyWithQuickReplies(
     replyToken,
     lineUserId,
@@ -881,22 +978,14 @@ async function handleTextWithAIFirst(
     [{ label: '📝 記録する', text: '記録モード' }, { label: '💬 相談する', text: '相談モード' }],
     env.LINE_CHANNEL_ACCESS_TOKEN
   )
+  trace.responseSent = true
 
   } catch (topLevelErr) {
     // ★ handleTextWithAIFirst トップレベルのエラーキャッチ
-    // ここに到達 = 内部のどこかで未キャッチの例外が発生
-    // 絶対に無応答にしない
+    trace.error = String(topLevelErr)
     console.error(`[AIFirst] CRITICAL top-level error for "${text}":`, topLevelErr)
-    try {
-      await pushText(
-        lineUserId,
-        '⚠️ 一時的な処理エラーが発生しました。もう一度送り直してください。',
-        env.LINE_CHANNEL_ACCESS_TOKEN
-      )
-    } catch (pushErr) {
-      console.error('[AIFirst] even push fallback failed:', pushErr)
-      // 最後の手段: replyToken を試す
-      await replyText(replyToken, '⚠️ 一時的なエラーです。もう一度お試しください。', env.LINE_CHANNEL_ACCESS_TOKEN).catch(() => {})
+    if (!trace.responseSent) {
+      await emergencyRespond(trace, lineUserId, env.LINE_CHANNEL_ACCESS_TOKEN, replyToken, pushText, replyText)
     }
   }
 }
